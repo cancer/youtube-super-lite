@@ -1,4 +1,5 @@
 export type YouTubePlayer = YT.Player;
+export type YouTubePlayerEvent = YT.PlayerEvent;
 
 type InitPlayer = (params: { domId: string } & YT.PlayerOptions) => Promise<YouTubePlayer>;
 export const initPlayer: InitPlayer = (params) => {
