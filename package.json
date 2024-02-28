@@ -4,7 +4,8 @@
   "scripts": {
     "dev": "vinxi dev",
     "build": "vinxi build",
-    "start": "vinxi start"
+    "start": "bunx wrangler pages dev dist/",
+    "deploy": "bunx wrangler pages deploy dist/"
   },
   "dependencies": {
     "@solidjs/router": "^0.12.4",
