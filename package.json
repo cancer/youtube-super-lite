@@ -1,0 +1,23 @@
+{
+  "name": "example-with-unocss",
+  "type": "module",
+  "scripts": {
+    "dev": "vinxi dev",
+    "build": "vinxi build",
+    "start": "vinxi start"
+  },
+  "dependencies": {
+    "@solidjs/router": "^0.12.4",
+    "@solidjs/start": "^0.6.0",
+    "@unocss/reset": "^0.58.3",
+    "solid-js": "^1.8.15",
+    "unocss": "^0.58.3"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/youtube": "^0.0.50",
+    "vinxi": "^0.3.4"
+  }
+}
