@@ -1,4 +1,8 @@
-import { Subscription } from "~/libs/api/youtube/types";
+import type {
+  Channel,
+  SearchResult,
+  Subscription,
+} from "~/libs/api/youtube/types";
 
 export type YouTubeApiClient = {
   request: <T = unknown>(args: {
@@ -46,7 +50,7 @@ export const listMyChannels =
   (client: YouTubeApiClient) =>
   ({
     part,
-    maxResults
+    maxResults,
   }: SubscriptionsRequest["GET"]): Promise<SubscriptionsResponse["GET"]> => {
     const params = {
       maxResults,
@@ -61,8 +65,54 @@ export const listMyChannels =
   };
 
 export type ChannelRequest = {
-  GET: { id: string; part: string[]; }
+  GET: { id: string; part: string[] };
 };
 export type ChannelResponse = {
-  GET: {  }
-}
+  GET: Channel;
+};
+export const getChannel =
+  (client: YouTubeApiClient) =>
+  async ({
+    id,
+    part,
+  }: ChannelRequest["GET"]): Promise<ChannelResponse["GET"]> => {
+    const params = {
+      id,
+      part: part.join(","),
+    };
+    const result = await client.request<{ items: Channel[] }>({
+      uri: "/channels",
+      method: "GET",
+      params,
+    });
+
+    return result.items[0];
+  };
+
+export type VideosRequest = {
+  GET: { channelId: string; maxResults: number; order: string; part: string[] };
+};
+export type VideosResponse = {
+  GET: PageInfo & { items: SearchResult[] };
+};
+export const listVideos =
+  (client: YouTubeApiClient) =>
+  async ({
+    channelId,
+    maxResults,
+    order,
+    part,
+  }: VideosRequest["GET"]): Promise<VideosResponse["GET"]> => {
+    const params = {
+      channelId,
+      maxResults,
+      order,
+      part: part.join(","),
+      type: "video",
+    };
+    return client.request({
+      uri: "/search",
+      method: "GET",
+      params,
+    });
+  };
