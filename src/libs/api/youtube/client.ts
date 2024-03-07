@@ -3,6 +3,14 @@ import type {
   SearchResult,
   Subscription,
 } from "~/libs/api/youtube/types";
+import { AuthTokens, getAuthTokens } from "~/libs/session";
+
+export class TokenExpiredError extends Error {
+  name = "TokenExpiredError";
+  constructor() {
+    super("Token has expired.");
+  }
+}
 
 export type YouTubeApiClient = {
   request: <T = unknown>(args: {
@@ -13,9 +21,20 @@ export type YouTubeApiClient = {
   }) => Promise<T>;
 };
 export const createYouTubeApiClient: (args: {
-  accessToken: string;
-}) => YouTubeApiClient = ({ accessToken }) => ({
+  getAuthTokens: () => Promise<AuthTokens | null>;
+}) => YouTubeApiClient = ({ getAuthTokens }) => ({
   request: async ({ uri, method, params, body }) => {
+    "use server";
+    let tokens;
+    try {
+      tokens = await getAuthTokens();
+    } catch (e) {
+      console.log(e);
+      throw new TokenExpiredError();
+    }
+    if (tokens === null || Date.now() > tokens.expiresAt)
+      throw new TokenExpiredError();
+
     const url = new URL(`https://youtube.googleapis.com/youtube/v3${uri}`);
     Object.entries(params ?? {}).forEach(([key, value]) =>
       url.searchParams.set(key, String(value)),
@@ -24,7 +43,7 @@ export const createYouTubeApiClient: (args: {
       method,
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${tokens.accessToken}`,
         Accept: "application/json",
       },
       body: body ? JSON.stringify(body) : undefined,
@@ -38,10 +57,10 @@ export const createYouTubeApiClient: (args: {
 
 type PageInfo = { pageInfo: { totalResults: number; resultsPerPage: number } };
 
-export type SubscriptionsRequest = {
+export type MyChannelsRequest = {
   GET: { part: string[]; maxResults: number };
 };
-type SubscriptionsResponse = {
+export type MyChannelsResponse = {
   GET: PageInfo & {
     items: Subscription[];
   };
@@ -51,7 +70,7 @@ export const listMyChannels =
   ({
     part,
     maxResults,
-  }: SubscriptionsRequest["GET"]): Promise<SubscriptionsResponse["GET"]> => {
+  }: MyChannelsRequest["GET"]): Promise<MyChannelsResponse["GET"]> => {
     const params = {
       maxResults,
       part: part.join(","),

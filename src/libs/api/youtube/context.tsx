@@ -3,13 +3,16 @@ import {
   createYouTubeApiClient,
   type YouTubeApiClient,
 } from "~/libs/api/youtube/client";
+import { AuthTokens } from "~/libs/session";
 
 export const youTubeApiContext = createContext<YouTubeApiClient | null>(null);
 
-type Props = { accessToken: string };
+type Props = {
+  getAuthTokens: () => Promise<AuthTokens | null>;
+};
 export const YouTubeApiProvider: FlowComponent<Props> = (props) => (
   <youTubeApiContext.Provider
-    value={createYouTubeApiClient({ accessToken: props.accessToken })}
+    value={createYouTubeApiClient({ getAuthTokens: props.getAuthTokens })}
   >
     {props.children}
   </youTubeApiContext.Provider>

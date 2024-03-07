@@ -5,21 +5,27 @@ import "./global.css";
 // @refresh reload
 import { Router } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start";
-import { Suspense } from "solid-js";
-import { getCookie } from "vinxi/http";
+import { ErrorBoundary, Suspense } from "solid-js";
 import { YouTubeApiProvider } from "~/libs/api/youtube/context";
-
-const getYouTubeApiAccessToken = () => {
-  "use server";
-  return getCookie("ytp_tokens") ?? "";
-};
+import { getAuthTokens } from "~/libs/session";
 
 export default function App() {
   return (
-    <YouTubeApiProvider accessToken={getYouTubeApiAccessToken()}>
-      <Router root={(props) => <Suspense>{props.children}</Suspense>}>
-        <FileRoutes />
-      </Router>
-    </YouTubeApiProvider>
+    <ErrorBoundary
+      fallback={(err) => {
+        console.log(err);
+        return <div>Error: {err.message}</div>;
+      }}
+    >
+      <YouTubeApiProvider
+        getAuthTokens={() =>
+          getAuthTokens({ secret: process.env.SESSION_SECRET! })
+        }
+      >
+        <Router root={(props) => <Suspense>{props.children}</Suspense>}>
+          <FileRoutes />
+        </Router>
+      </YouTubeApiProvider>
+    </ErrorBoundary>
   );
 }
