@@ -38,7 +38,7 @@ export const GET = async ({ request }: APIEvent) => {
         console.error(e),
       );
       await clearAuthTokens(sessionSecret);
-      return redirect("/login");
+      return redirect(`/login${url.search}`);
     }
 
     try {
@@ -58,7 +58,7 @@ export const GET = async ({ request }: APIEvent) => {
       });
     }
 
-    return redirect("/", { status: 302 });
+    return redirect(url.searchParams.get("redirect_to") ?? "/");
   }
 
   // for callback

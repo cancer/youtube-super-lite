@@ -10,7 +10,12 @@
     "allowJs": true,
     "noEmit": true,
     "strict": true,
-    "types": ["vinxi/client", "@cloudflare/workers-types", "@types/youtube"],
+    "types": [
+      "vinxi/client",
+      "@cloudflare/workers-types",
+      "@types/youtube",
+      "unplugin-icons/types/solid"
+    ],
     "isolatedModules": true,
     "paths": {
       "~/*": ["./src/*"]

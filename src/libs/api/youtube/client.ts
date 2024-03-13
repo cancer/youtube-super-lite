@@ -5,12 +5,17 @@ import type {
 } from "~/libs/api/youtube/types";
 import { AuthTokens, getAuthTokens } from "~/libs/session";
 
-export class TokenExpiredError extends Error {
+class TokenExpiredError extends Error {
   name = "TokenExpiredError";
   constructor() {
     super("Token has expired.");
   }
 }
+export const isTokenExpired = (err: unknown): err is TokenExpiredError => {
+  if (!err) return false;
+  if (!(err instanceof TokenExpiredError)) return false;
+  return true;
+};
 
 export type YouTubeApiClient = {
   request: <T = unknown>(args: {
@@ -28,12 +33,14 @@ export const createYouTubeApiClient: (args: {
     let tokens;
     try {
       tokens = await getAuthTokens();
-    } catch (e) {
-      console.log(e);
+    } catch (err) {
+      console.error("Failed to load tokens from session.", err);
       throw new TokenExpiredError();
     }
-    if (tokens === null || Date.now() > tokens.expiresAt)
+    if (tokens === null || Date.now() > tokens.expiresAt) {
+      console.error("Retrieved tokens have expired.");
       throw new TokenExpiredError();
+    }
 
     const url = new URL(`https://youtube.googleapis.com/youtube/v3${uri}`);
     Object.entries(params ?? {}).forEach(([key, value]) =>
