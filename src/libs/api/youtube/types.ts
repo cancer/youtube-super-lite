@@ -146,3 +146,12 @@ export type SearchResult = {
     "liveBroadcastContent": string
   }
 };
+
+export type VideoGetRatingResponse = {
+  kind: "youtube#videoGetRatingResponse";
+  etag: string;
+  items: {
+    videoId: string;
+    rating: string;
+  }[];
+};

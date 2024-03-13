@@ -2,10 +2,11 @@ import type {
   Channel,
   SearchResult,
   Subscription,
+  VideoGetRatingResponse,
 } from "~/libs/api/youtube/types";
-import { AuthTokens, getAuthTokens } from "~/libs/session";
+import { type AuthTokens } from "~/libs/session";
 
-class TokenExpiredError extends Error {
+export class TokenExpiredError extends Error {
   name = "TokenExpiredError";
   constructor() {
     super("Token has expired.");
@@ -141,4 +142,30 @@ export const listVideos =
       method: "GET",
       params,
     });
+  };
+
+export type VideoRatingRequest = {
+  GET: { id: string };
+};
+export type VideoRatingResponse = {
+  GET: { rating: string };
+};
+export const getVideoRating =
+  (client: YouTubeApiClient) =>
+  async ({
+    id,
+  }: VideoRatingRequest["GET"]): Promise<VideoRatingResponse["GET"]> => {
+    const params = {
+      id,
+    };
+    return client
+      .request<VideoGetRatingResponse>({
+        uri: "/videos/getRating",
+        method: "GET",
+        params,
+      })
+      .then((res) => {
+        if (res.items.length === 0) return { rating: "" };
+        return { rating: res.items[0].rating  };
+      });
   };
