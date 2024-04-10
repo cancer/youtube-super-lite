@@ -65,7 +65,7 @@ export const GET = async ({ request }: APIEvent) => {
   if (url.searchParams.has("state")) {
     if (url.searchParams.get("state") !== getCookie(stateKey))
       return redirect("/error", { status: 400 });
-
+    
     if (!url.searchParams.has("code"))
       return redirect("/error", { status: 400 });
 
