@@ -4,7 +4,7 @@ import type {
   Subscription,
   VideoGetRatingResponse,
 } from "~/libs/api/youtube/types";
-import { type AuthTokens } from "~/libs/session";
+import { type AuthTokens, getAuthTokens } from "~/libs/session";
 
 export class TokenExpiredError extends Error {
   name = "TokenExpiredError";
@@ -15,6 +15,7 @@ export class TokenExpiredError extends Error {
 export const isTokenExpired = (err: unknown): err is TokenExpiredError => {
   if (!err) return false;
   if (!(err instanceof TokenExpiredError)) return false;
+  if (err.name !== "TokenExpiredError") return false;
   return true;
 };
 
@@ -28,41 +29,9 @@ export type YouTubeApiClient = {
 };
 export const createYouTubeApiClient: (args: {
   getAuthTokens: () => Promise<AuthTokens | null>;
-}) => YouTubeApiClient = ({ getAuthTokens }) => {
-  return {
-    request: async ({ uri, method, params, body }) => {
-      let tokens;
-      try {
-        tokens = await getAuthTokens();
-      } catch (err) {
-        console.error("Failed to load tokens from session.", err);
-        throw new TokenExpiredError();
-      }
-      if (tokens === null || Date.now() > tokens.expiresAt) {
-        console.error("Retrieved tokens have expired.");
-        throw new TokenExpiredError();
-      }
-
-      const url = new URL(`https://youtube.googleapis.com/youtube/v3${uri}`);
-      Object.entries(params ?? {}).forEach(([key, value]) =>
-        url.searchParams.set(key, String(value)),
-      );
-      const res = await fetch(url, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${tokens.accessToken}`,
-          Accept: "application/json",
-        },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-
-      if (!res.ok) throw new Error(await res.text());
-
-      return res.json();
-    },
-  };
-};
+}) => YouTubeApiClient = ({ getAuthTokens }) => ({
+  request: request(getAuthTokens),
+});
 
 type PageInfo = { pageInfo: { totalResults: number; resultsPerPage: number } };
 
@@ -74,24 +43,24 @@ export type MyChannelsResponse = {
     items: Subscription[];
   };
 };
-export const listMyChannels = (client: YouTubeApiClient) => {
-  "use server";
-  return ({
+export const listMyChannels = ({
     part,
     maxResults,
   }: MyChannelsRequest["GET"]): Promise<MyChannelsResponse["GET"]> => {
+    "use server";
     const params = {
       maxResults,
       part: part.join(","),
       mine: true,
     };
-    return client.request({
+    return request(() =>
+      getAuthTokens({ secret: process.env.SESSION_SECRET! }),
+    )({
       uri: "/subscriptions",
       method: "GET",
       params,
     });
   };
-};
 
 export type ChannelRequest = {
   GET: { id: string; part: string[] };
@@ -152,22 +121,57 @@ export type VideoRatingRequest = {
 export type VideoRatingResponse = {
   GET: { rating: string };
 };
-export const getVideoRating =
-  (client: YouTubeApiClient) =>
-  async ({
+export const getVideoRating = async ({
+  id,
+}: VideoRatingRequest["GET"]): Promise<VideoRatingResponse["GET"]> => {
+  "use server";
+  const params = {
     id,
-  }: VideoRatingRequest["GET"]): Promise<VideoRatingResponse["GET"]> => {
-    const params = {
-      id,
-    };
-    return client
-      .request<VideoGetRatingResponse>({
-        uri: "/videos/getRating",
-        method: "GET",
-        params,
-      })
-      .then((res) => {
-        if (res.items.length === 0) return { rating: "" };
-        return { rating: res.items[0].rating };
-      });
   };
+  return request(() =>
+    getAuthTokens({ secret: process.env.SESSION_SECRET! }),
+  )<VideoGetRatingResponse>({
+    uri: "/videos/getRating",
+    method: "GET",
+    params,
+  }).then((res) => {
+    if (res.items.length === 0) return { rating: "" };
+    return { rating: res.items[0].rating };
+  });
+};
+
+const request = (
+  getAuthTokens: () => Promise<AuthTokens | null>,
+): YouTubeApiClient["request"] => {
+  return async ({ uri, method, params, body }) => {
+    let tokens;
+    try {
+      tokens = await getAuthTokens();
+    } catch (err) {
+      console.error("Failed to load tokens from session.", err);
+      throw new TokenExpiredError();
+    }
+    if (tokens === null || Date.now() > tokens.expiresAt) {
+      console.error("Retrieved tokens have expired.");
+      throw new TokenExpiredError();
+    }
+
+    const url = new URL(`https://youtube.googleapis.com/youtube/v3${uri}`);
+    Object.entries(params ?? {}).forEach(([key, value]) =>
+      url.searchParams.set(key, String(value)),
+    );
+    const res = await fetch(url, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${tokens.accessToken}`,
+        Accept: "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (!res.ok) throw new Error(await res.text());
+
+    return res.json();
+  };
+};

@@ -1,24 +1,20 @@
-import { cache, createAsync, type RouteDefinition } from "@solidjs/router";
-import { createSignal, For, Show } from "solid-js";
 import {
-  listMyChannels,
-  type MyChannelsRequest,
-  useYouTubeApiClient,
-  type YouTubeApiClient,
-} from "~/libs/api/youtube";
+  cache,
+  createAsync,
+  type RouteDefinition,
+  useNavigate,
+} from "@solidjs/router";
+import { For, Show } from "solid-js";
+import { listMyChannels, type MyChannelsRequest } from "~/libs/api/youtube";
 
-const fetchChannels = cache(
-  async (client: YouTubeApiClient, params: MyChannelsRequest["GET"]) => {
-    "use server";
-    return listMyChannels(client)(params);
-  },
-  "channels",
-);
+const fetchChannels = cache(async (params: MyChannelsRequest["GET"]) => {
+  "use server";
+  return listMyChannels(params);
+}, "channels");
 
 export const route = {
   load: () => {
-    const apiClient = useYouTubeApiClient();
-    return fetchChannels(apiClient, {
+    return fetchChannels({
       part: ["snippet"],
       maxResults: 50,
     });
@@ -26,10 +22,9 @@ export const route = {
 } satisfies RouteDefinition;
 
 const Index = () => {
-  const apiClient = useYouTubeApiClient();
-  const [videoId, setVideoId] = createSignal("");
+  const navigate = useNavigate();
   const channels = createAsync(
-    () => fetchChannels(apiClient, { part: ["snippet"], maxResults: 50 }),
+    () => fetchChannels({ part: ["snippet"], maxResults: 50 }),
     { deferStream: true },
   );
 
@@ -43,9 +38,10 @@ const Index = () => {
               const url = new URL(
                 (ev.currentTarget as HTMLFormElement).url.value,
               );
-              setVideoId(url.searchParams.get("v") ?? "");
+              navigate(`/watch/${url.searchParams.get("v") ?? ""}`);
             }}
           >
+            From YT URL:{" "}
             <input class="w-2xl h-10 text-xl" type="text" name="url" />
             <button type="submit">Watch</button>
           </form>

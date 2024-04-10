@@ -23,7 +23,7 @@ export default function App() {
       <BareLayout>
         <ErrorBoundary
           fallback={(err) => {
-            console.log(err);
+            console.error(err);
             return (
               <Switch>
                 <Match when={isServer && isTokenExpired(err)}>
