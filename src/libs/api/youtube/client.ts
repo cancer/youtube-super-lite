@@ -28,40 +28,41 @@ export type YouTubeApiClient = {
 };
 export const createYouTubeApiClient: (args: {
   getAuthTokens: () => Promise<AuthTokens | null>;
-}) => YouTubeApiClient = ({ getAuthTokens }) => ({
-  request: async ({ uri, method, params, body }) => {
-    "use server";
-    let tokens;
-    try {
-      tokens = await getAuthTokens();
-    } catch (err) {
-      console.error("Failed to load tokens from session.", err);
-      throw new TokenExpiredError();
-    }
-    if (tokens === null || Date.now() > tokens.expiresAt) {
-      console.error("Retrieved tokens have expired.");
-      throw new TokenExpiredError();
-    }
+}) => YouTubeApiClient = ({ getAuthTokens }) => {
+  return {
+    request: async ({ uri, method, params, body }) => {
+      let tokens;
+      try {
+        tokens = await getAuthTokens();
+      } catch (err) {
+        console.error("Failed to load tokens from session.", err);
+        throw new TokenExpiredError();
+      }
+      if (tokens === null || Date.now() > tokens.expiresAt) {
+        console.error("Retrieved tokens have expired.");
+        throw new TokenExpiredError();
+      }
 
-    const url = new URL(`https://youtube.googleapis.com/youtube/v3${uri}`);
-    Object.entries(params ?? {}).forEach(([key, value]) =>
-      url.searchParams.set(key, String(value)),
-    );
-    const res = await fetch(url, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${tokens.accessToken}`,
-        Accept: "application/json",
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+      const url = new URL(`https://youtube.googleapis.com/youtube/v3${uri}`);
+      Object.entries(params ?? {}).forEach(([key, value]) =>
+        url.searchParams.set(key, String(value)),
+      );
+      const res = await fetch(url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${tokens.accessToken}`,
+          Accept: "application/json",
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
 
-    if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await res.text());
 
-    return res.json();
-  },
-});
+      return res.json();
+    },
+  };
+};
 
 type PageInfo = { pageInfo: { totalResults: number; resultsPerPage: number } };
 
@@ -73,9 +74,9 @@ export type MyChannelsResponse = {
     items: Subscription[];
   };
 };
-export const listMyChannels =
-  (client: YouTubeApiClient) =>
-  ({
+export const listMyChannels = (client: YouTubeApiClient) => {
+  "use server";
+  return ({
     part,
     maxResults,
   }: MyChannelsRequest["GET"]): Promise<MyChannelsResponse["GET"]> => {
@@ -90,6 +91,7 @@ export const listMyChannels =
       params,
     });
   };
+};
 
 export type ChannelRequest = {
   GET: { id: string; part: string[] };
@@ -166,6 +168,6 @@ export const getVideoRating =
       })
       .then((res) => {
         if (res.items.length === 0) return { rating: "" };
-        return { rating: res.items[0].rating  };
+        return { rating: res.items[0].rating };
       });
   };
