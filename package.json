@@ -8,21 +8,21 @@
     "deploy": "bunx wrangler pages deploy dist/"
   },
   "dependencies": {
-    "@iconify-json/icon-park-outline": "^1.1.15",
-    "@iconify-json/icon-park-solid": "^1.1.14",
-    "@solidjs/router": "^0.12.4",
-    "@solidjs/start": "^0.6.0",
-    "@unocss/reset": "^0.58.3",
-    "solid-js": "^1.8.15",
-    "unocss": "^0.58.3",
-    "unplugin-icons": "^0.18.5"
+    "@iconify-json/icon-park-outline": "1.1.15",
+    "@iconify-json/icon-park-solid": "1.1.14",
+    "@solidjs/router": "0.13.1",
+    "@solidjs/start": "1.0.0-rc.0",
+    "@unocss/reset": "0.59.0",
+    "solid-js": "1.8.16",
+    "unocss": "0.59.0",
+    "unplugin-icons": "0.18.5"
   },
   "engines": {
     "node": ">=18"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240222.0",
-    "@types/youtube": "^0.0.50",
-    "vinxi": "^0.3.4"
+    "@cloudflare/workers-types": "4.20240405.0",
+    "@types/youtube": "0.0.50",
+    "vinxi": "0.3.11"
   }
 }
