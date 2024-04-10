@@ -4,7 +4,8 @@ import "./global.css";
 
 // @refresh reload
 import { Router } from "@solidjs/router";
-import { FileRoutes, HttpHeader, HttpStatusCode } from "@solidjs/start";
+import { HttpHeader, HttpStatusCode } from "@solidjs/start";
+import { FileRoutes } from "@solidjs/start/router";
 import { ErrorBoundary, Match, Suspense, Switch } from "solid-js";
 import { getRequestEvent, isServer } from "solid-js/web";
 import { isTokenExpired } from "~/libs/api/youtube";
