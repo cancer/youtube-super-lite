@@ -1,10 +1,5 @@
 import { useSession } from "vinxi/http";
-
-export type AuthTokens = {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number;
-};
+import { type AuthTokens } from "~/libs/auth-tokens/types";
 
 export const getAuthTokens = async (args: { secret: string }) => {
   "use server";

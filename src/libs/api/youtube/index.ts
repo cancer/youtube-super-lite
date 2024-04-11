@@ -2,7 +2,8 @@ import type {
   Subscription,
   VideoGetRatingResponse,
 } from "~/libs/api/youtube/types";
-import { type AuthTokens, getAuthTokens } from "~/libs/session";
+import { type AuthTokens } from "~/libs/auth-tokens/types";
+import { getAuthTokens } from "~/libs/session";
 
 export class TokenExpiredError extends Error {
   name = "TokenExpiredError";
