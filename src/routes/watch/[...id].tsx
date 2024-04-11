@@ -23,7 +23,14 @@ type Params = { id: string };
 export const routes = {
   load: () => {
     const { id: videoId } = useParams<Params>();
-    return fetchRating({ id: videoId });
+    return (
+      fetchRating({ id: videoId })
+        // https://github.com/solidjs/solid-router/issues/399
+        .catch((err) => {
+          console.error(err);
+          return null;
+        })
+    );
   },
 } satisfies RouteDefinition;
 

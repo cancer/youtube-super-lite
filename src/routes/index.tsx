@@ -14,10 +14,17 @@ const fetchChannels = cache(async (params: MyChannelsRequest["GET"]) => {
 
 export const route = {
   load: () => {
-    return fetchChannels({
-      part: ["snippet"],
-      maxResults: 50,
-    });
+    return (
+      fetchChannels({
+        part: ["snippet"],
+        maxResults: 50,
+      })
+        // https://github.com/solidjs/solid-router/issues/399
+        .catch((err) => {
+          console.error(err);
+          return null;
+        })
+    );
   },
 } satisfies RouteDefinition;
 
@@ -29,22 +36,19 @@ const Index = () => {
   );
 
   return (
-    <Show when={channels()}>
-      {(data) => (
-        <>
-          <form
-            onSubmit={(ev) => {
-              ev.preventDefault();
-              const url = new URL(
-                (ev.currentTarget as HTMLFormElement).url.value,
-              );
-              navigate(`/watch/${url.searchParams.get("v") ?? ""}`);
-            }}
-          >
-            From YT URL:{" "}
-            <input class="w-2xl h-10 text-xl" type="text" name="url" />
-            <button type="submit">Watch</button>
-          </form>
+    <>
+      <form
+        onSubmit={(ev) => {
+          ev.preventDefault();
+          const url = new URL((ev.currentTarget as HTMLFormElement).url.value);
+          navigate(`/watch/${url.searchParams.get("v") ?? ""}`);
+        }}
+      >
+        From YT URL: <input class="w-2xl h-10 text-xl" type="text" name="url" />
+        <button type="submit">Watch</button>
+      </form>
+      <Show when={channels()}>
+        {(data) => (
           <ul class="flex list-none">
             <For each={data().items}>
               {(channel) => (
@@ -60,9 +64,9 @@ const Index = () => {
               )}
             </For>
           </ul>
-        </>
-      )}
-    </Show>
+        )}
+      </Show>
+    </>
   );
 };
 export default Index;
