@@ -3,6 +3,7 @@ type ApiClient = {
     url: string;
     body?: Record<string, unknown>;
     params?: Record<string, unknown>;
+    headers?: Record<string, string>;
   }) => Promise<any>;
 };
 type AuthApi<T> = (client: ApiClient) => T;
@@ -19,21 +20,40 @@ export const createAuthClient: (credentials: {
 }) => ApiClient = ({ clientId, clientSecret }) => {
   "use server";
   return {
-    request: async ({ url, body, params }) => {
+    request: async ({ url, body: _body, params, headers }) => {
       const _url = new URL(url);
       for (const [key, value] of Object.entries(params ?? {})) {
         _url.searchParams.set(key, String(value));
       }
+
+      let body;
+      switch (headers?.["Content-Type"]) {
+        case "application/x-www-form-urlencoded": {
+          body = new FormData();
+          body.append("client_id", clientId);
+          body.append("client_secret", clientSecret);
+          for (const [key, value] of Object.entries(_body ?? {})) {
+            body.append(key, String(value));
+          }
+        }
+        case "application/json":
+        default: {
+          body = JSON.stringify({
+            ...(_body ?? {}),
+            client_id: clientId,
+            client_secret: clientSecret,
+          });
+          break;
+        }
+      }
+
       const res = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...headers,
         },
-        body: JSON.stringify({
-          ...(body ?? {}),
-          client_id: clientId,
-          client_secret: clientSecret,
-        }),
+        body,
       });
 
       if (!res.ok) throw new Error(await res.text());
@@ -106,14 +126,15 @@ const adaptTokensIfValid = (json: unknown): Tokens => {
   if (json === null) throw new Error("Invalid response");
   if (!("access_token" in json) || typeof json.access_token !== "string")
     throw new Error("Invalid response. access_token does not exist.");
-  if (!("refresh_token" in json) || typeof json.refresh_token !== "string")
-    throw new Error("Invalid response. refresh_token does not exist.");
   if (!("expires_in" in json) || typeof json.expires_in !== "number")
     throw new Error("Invalid response. expires_in does not exist.");
 
   return {
     accessToken: json.access_token,
-    refreshToken: json.refresh_token,
+    refreshToken:
+      "refresh_token" in json && typeof json.refresh_token === "string"
+        ? json.refresh_token
+        : "",
     expiresIn: json.expires_in,
   };
 };
