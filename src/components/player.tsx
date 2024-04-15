@@ -6,9 +6,10 @@ type Props = {
 };
 export const Player: VoidComponent<Props> = (props) => {
   let container: HTMLDivElement;
+  let destroy: () => void;
   onMount(async () => {
     const { width } = container.getBoundingClientRect();
-    const player = await initPlayer({
+    const { player, destroy: _destroy } = await initPlayer({
       domId: "player",
       width,
       height: width * 0.5625, // 16:9
@@ -18,6 +19,7 @@ export const Player: VoidComponent<Props> = (props) => {
         },
       },
     });
+    destroy = _destroy;
 
     window.addEventListener(
       "resize",
@@ -27,9 +29,8 @@ export const Player: VoidComponent<Props> = (props) => {
       },
       true,
     );
-
-    onCleanup(() => player.destroy());
   });
+  onCleanup(() => destroy?.());
 
   return (
     <div ref={container!}>
