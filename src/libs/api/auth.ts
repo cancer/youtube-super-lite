@@ -20,21 +20,20 @@ export const createAuthClient: (credentials: {
 }) => ApiClient = ({ clientId, clientSecret }) => {
   "use server";
   return {
-    request: async ({ url, body: _body, params, headers }) => {
-      const _url = new URL(url);
+    request: async ({ url: _url, body: _body, params, headers }) => {
+      const url = new URL(_url);
       for (const [key, value] of Object.entries(params ?? {})) {
-        _url.searchParams.set(key, String(value));
+        url.searchParams.set(key, String(value));
       }
 
       let body;
       switch (headers?.["Content-Type"]) {
         case "application/x-www-form-urlencoded": {
-          body = new FormData();
-          body.append("client_id", clientId);
-          body.append("client_secret", clientSecret);
+          body = new URLSearchParams();
           for (const [key, value] of Object.entries(_body ?? {})) {
             body.append(key, String(value));
           }
+          break;
         }
         case "application/json":
         default: {
@@ -51,7 +50,7 @@ export const createAuthClient: (credentials: {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...headers,
+          ...(headers ?? {}),
         },
         body,
       });
@@ -114,7 +113,10 @@ export const revokeToken: RevokeToken = (client) => {
     "use server";
     await client.request({
       url: "https://oauth2.googleapis.com/revoke",
-      params: { token },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: { token },
     });
 
     return null;
