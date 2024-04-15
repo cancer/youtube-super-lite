@@ -8,7 +8,8 @@ import { HttpHeader, HttpStatusCode } from "@solidjs/start";
 import { FileRoutes } from "@solidjs/start/router";
 import { ErrorBoundary, Match, Suspense, Switch } from "solid-js";
 import { getRequestEvent, isServer } from "solid-js/web";
-import { isTokenExpired } from "~/libs/api/youtube";
+
+import { isTokenExpired } from "~/libs/api/youtube/errors";
 import { BareLayout } from "./layouts/bare";
 
 export default function App() {

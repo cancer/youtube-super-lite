@@ -1,3 +1,5 @@
+export type PageInfo = { pageInfo: { totalResults: number; resultsPerPage: number } };
+
 export type Subscription = {
   kind: "youtube#subscription";
   string: string;
