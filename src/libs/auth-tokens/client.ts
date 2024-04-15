@@ -3,6 +3,7 @@ import { type Session } from "~/libs/session";
 
 export type AuthTokensClient = {
   get: () => Promise<AuthTokens | null>;
+  clear: () => Promise<null>;
 };
 export const createAuthTokensClient = (
   getSession: () => Promise<Session>,
@@ -13,6 +14,11 @@ export const createAuthTokensClient = (
       const session = await getSession();
       if (!("accessToken" in session.data)) return null;
       return session.data as AuthTokens;
+    },
+    clear: async () => {
+      const session = await getSession();
+      await session.clear();
+      return null;
     },
   };
 };

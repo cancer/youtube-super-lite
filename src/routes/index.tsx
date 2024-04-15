@@ -1,16 +1,38 @@
 import {
+  action,
   cache,
-  createAsync,
+  createAsync, redirect,
   type RouteDefinition,
+  useAction,
   useNavigate,
 } from "@solidjs/router";
 import { For, Show } from "solid-js";
+import { createAuthClient, revokeToken } from "~/libs/api/auth";
 import { listMyChannels, type MyChannelsRequest } from "~/libs/api/youtube";
+import { createAuthTokensClient } from "~/libs/auth-tokens/client";
+import { getSession } from "~/libs/session";
 
 const fetchChannels = cache(async (params: MyChannelsRequest["GET"]) => {
   "use server";
   return listMyChannels(params);
 }, "channels");
+
+const logoutAction = action(async () => {
+  "use server";
+  const authClient = createAuthClient({
+    clientId: process.env.GAUTH_CLIENT_ID!,
+    clientSecret: process.env.GAUTH_CLIENT_SECRET!,
+  });
+  const authTokensClient = createAuthTokensClient(() =>
+    getSession(process.env.SESSION_SECRET!),
+  );
+  
+  const tokens = await authTokensClient.get();
+  if (tokens !== null) await revokeToken(authClient)(tokens.accessToken);
+  
+  await authTokensClient.clear();
+  throw redirect("/");
+});
 
 export const route = {
   load: () => {
@@ -35,6 +57,8 @@ const Index = () => {
     { deferStream: true },
   );
 
+  const logout = useAction(logoutAction);
+
   return (
     <>
       <form
@@ -47,6 +71,7 @@ const Index = () => {
         From YT URL: <input class="w-2xl h-10 text-xl" type="text" name="url" />
         <button type="submit">Watch</button>
       </form>
+      <button onClick={logout}>Logout</button>
       <Show when={channels()}>
         {(data) => (
           <ul class="flex list-none">
