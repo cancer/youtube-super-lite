@@ -1,4 +1,5 @@
 import {
+  A,
   action,
   cache,
   createAsync,
@@ -6,9 +7,8 @@ import {
   type RouteDefinition,
   useAction,
   useNavigate,
-  A,
 } from "@solidjs/router";
-import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js";
+import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { createAuthClient, revokeToken } from "~/libs/api/auth";
 import {
   LatestVideoListRequestGet,
@@ -18,7 +18,12 @@ import {
   type MyChannelsRequest,
 } from "~/libs/api/youtube";
 import { createAuthTokensClient } from "~/libs/auth-tokens/client";
-import { startOfDay, subtractDays } from "~/libs/date";
+import {
+  formatDurationTime,
+  getHourDiff,
+  startOfDay,
+  subtractDays,
+} from "~/libs/datetime";
 import { getSession } from "~/libs/session";
 
 const fetchChannels = cache(async (params: MyChannelsRequest["GET"]) => {
@@ -90,7 +95,7 @@ export const route = {
 const Index = () => {
   const navigate = useNavigate();
   const channels = createAsync(
-    () => fetchChannels({ part: ["snippet"], maxResults: 50 }).catch((e) => console.error(e)),
+    () => fetchChannels({ part: ["snippet"], maxResults: 50 }),
     { deferStream: true },
   );
   const thumbnailsMap = createMemo(() => {
@@ -109,36 +114,41 @@ const Index = () => {
       fetchLatestLiveStreaming({
         maxResults: 50,
         publishedAfter: startOfDay(subtractDays(new Date(), 1)),
-      }).catch((e) => console.error(e)),
+      }),
     { deferStream: true },
   );
 
   const logout = useAction(logoutAction);
 
   return (
-    <>
-      <form
-        onSubmit={(ev) => {
-          ev.preventDefault();
-          const url = new URL((ev.currentTarget as HTMLFormElement).url.value);
-          navigate(`/watch/${url.searchParams.get("v") ?? ""}`);
-        }}
-      >
-        From YT URL: <input class="w-2xl h-10 text-xl" type="text" name="url" />
-        <button type="submit">Watch</button>
-      </form>
-      <button onClick={logout}>Logout</button>
+    <div class="grid grid-cols-[min-content_auto] gap-8">
+      <div class="col-span-full flex justify-between">
+        <form
+          onSubmit={(ev) => {
+            ev.preventDefault();
+            const url = new URL(
+              (ev.currentTarget as HTMLFormElement).url.value,
+            );
+            navigate(`/watch/${url.searchParams.get("v") ?? ""}`);
+          }}
+        >
+          From YT URL:{" "}
+          <input class="w-2xl h-10 text-xl" type="text" name="url" />
+          <button type="submit">Watch</button>
+        </form>
+        <button onClick={logout}>Logout</button>
+      </div>
       <Show when={channels()}>
         {(data) => (
-          <ul class="flex list-none">
+          <ul class="flex flex-col gap-2 list-none w-8 p-0">
             <For each={data().items}>
               {(channel) => (
-                <li>
+                <li class="w-full aspect-square">
                   <a href={`/channels/${channel.snippet.resourceId.channelId}`}>
                     <img
                       src={channel.snippet.thumbnails.default.url}
                       alt={channel.snippet.title}
-                      class="w-10"
+                      class="w-full rounded-full"
                     />
                   </a>
                 </li>
@@ -149,22 +159,35 @@ const Index = () => {
       </Show>
       <Show when={latestVideos()}>
         {(data) => (
-          <ul class="w-full flex flex-wrap gap-xl overflow-x-hidden list-none">
+          <ul class="w-full flex flex-wrap gap-4 overflow-x-hidden list-none p-0">
             <For each={data()}>
-              {({ id, snippet, liveStreamingDetails }) => (
+              {({ id, snippet, liveStreamingDetails, contentDetails }) => (
                 <li class="w-min object-contain grid gap-2">
-                  <A href={`/watch/${id}`} class="hover-opacity-80">
-                    <img
-                      src={snippet.thumbnails.medium.url}
-                      alt={snippet.title}
-                      width={snippet.thumbnails.medium.width}
-                      classList={{
-                        "border-red": snippet.liveBroadcastContent === "live",
-                        "border-4": snippet.liveBroadcastContent === "live",
-                        "border-solid": snippet.liveBroadcastContent === "live",
-                      }}
-                    />
-                  </A>
+                  <div class="grid grid-cols-[auto_min-content_0.2rem] grid-rows-[auto_min-content_0.2rem]">
+                    <A
+                      href={`/watch/${id}`}
+                      class="hover-opacity-80 col-span-full row-span-full"
+                    >
+                      <img
+                        src={snippet.thumbnails.medium.url}
+                        alt={snippet.title}
+                        width={snippet.thumbnails.medium.width}
+                        classList={{
+                          "border-red": snippet.liveBroadcastContent === "live",
+                          "border-4": snippet.liveBroadcastContent === "live",
+                          "border-solid":
+                            snippet.liveBroadcastContent === "live",
+                        }}
+                      />
+                    </A>
+                    <span class="min-h-4 col-start-2 row-start-2 z-1">
+                      <Show when={snippet.liveBroadcastContent === "none"}>
+                        <span class="bg-black rounded p-1 text-xs">
+                          {formatDurationTime(contentDetails.duration)}
+                        </span>
+                      </Show>
+                    </span>
+                  </div>
                   <A
                     href={`/watch/${id}`}
                     class="flex gap-xs items-center color-white decoration-none hover-decoration-underline"
@@ -177,7 +200,9 @@ const Index = () => {
                     <span class="m0 line-clamp-2">{snippet.title}</span>
                   </A>
                   <p class="flex justify-between m0 text-xs">
-                    <span class="text-stone-400 line-clamp-1">{snippet.channelTitle}</span>
+                    <span class="text-stone-400 line-clamp-1">
+                      {snippet.channelTitle}
+                    </span>
                     <Switch>
                       <Match when={snippet.liveBroadcastContent === "live"}>
                         <span class="bg-red rounded w-min pl-2 pr-2">Live</span>
@@ -191,8 +216,17 @@ const Index = () => {
                             minute: "numeric",
                           }).format(
                             new Date(liveStreamingDetails.scheduledStartTime),
-                          )} start
+                          )} 〜
                         </span>
+                      </Match>
+                      <Match when={snippet.liveBroadcastContent === "none"}>
+                        {new Intl.RelativeTimeFormat("ja-JP").format(
+                          getHourDiff(
+                            new Date(liveStreamingDetails.actualEndTime),
+                            new Date(),
+                          ),
+                          "hour",
+                        )}に配信済み
                       </Match>
                     </Switch>
                   </p>
@@ -202,7 +236,7 @@ const Index = () => {
           </ul>
         )}
       </Show>
-    </>
+    </div>
   );
 };
 export default Index;
