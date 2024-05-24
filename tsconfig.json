@@ -11,7 +11,7 @@
     "noEmit": true,
     "strict": true,
     "types": [
-      "vinxi/client",
+      "vinxi/types/client",
       "@cloudflare/workers-types",
       "@types/youtube",
       "unplugin-icons/types/solid"
