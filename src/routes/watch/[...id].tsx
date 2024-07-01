@@ -6,15 +6,15 @@ import {
 } from "@solidjs/router";
 import { clientOnly } from "@solidjs/start";
 import { Show } from "solid-js";
-import { LikeButton } from "~/components/like-button";
 import {
   getVideoRating,
-  VideoRatingRequest,
-  VideoRatingResponse,
+  type VideoRatingRequest,
+  type VideoRatingResponse,
 } from "~/libs/api/youtube";
+import { LikeButton } from "./like-button";
 
 const Player = clientOnly(() =>
-  import("~/components/player").then(({ Player }) => ({ default: Player })),
+  import("./player").then(({ Player }) => ({ default: Player })),
 );
 
 const fetchRating = cache(async (params: VideoRatingRequest["GET"]) => {
