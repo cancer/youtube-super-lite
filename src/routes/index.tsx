@@ -55,13 +55,13 @@ const Index = () => {
   );
 
   return (
-    <div class="grid grid-cols-[min-content_auto] gap-8">
+    <div class="grid grid-cols-[min-content_auto] gap-8 w-full overflow-x-auto">
       <Show when={channels()}>
         {(data) => (
-          <ul class="flex flex-col gap-2 list-none w-8 p-0">
+          <ul class="flex gap-2 list-none p-0">
             <For each={data().items}>
               {(channel) => (
-                <li class="w-full aspect-square">
+                <li class="w-8 aspect-square">
                   <a href={`/channels/${channel.snippet.resourceId.channelId}`}>
                     <img
                       src={channel.snippet.thumbnails.default.url}
