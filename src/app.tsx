@@ -4,12 +4,9 @@ import "./global.css";
 
 // @refresh reload
 import { Router } from "@solidjs/router";
-import { HttpHeader, HttpStatusCode } from "@solidjs/start";
 import { FileRoutes } from "@solidjs/start/router";
-import { ErrorBoundary, Match, Suspense, Switch } from "solid-js";
-import { getRequestEvent, isServer } from "solid-js/web";
+import { ErrorBoundary, Suspense } from "solid-js";
 import { BaseLayout } from "~/layouts/base";
-import { isTokenExpired } from "~/libs/api/youtube/errors";
 import { BareLayout } from "./layouts/bare";
 
 export default function App() {
@@ -19,28 +16,7 @@ export default function App() {
         console.error(err);
         return (
           <BareLayout>
-            <Switch>
-              <Match when={isServer && isTokenExpired(err)}>
-                {(_) => {
-                  const event = getRequestEvent();
-                  const redirectTo = event
-                    ? new URL(event.request.url).pathname
-                    : "/";
-                  return (
-                    <>
-                      <HttpStatusCode code={302} />
-                      <HttpHeader
-                        name="Location"
-                        value={`/login?redirect_to=${redirectTo}`}
-                      />
-                    </>
-                  );
-                }}
-              </Match>
-              <Match when={err}>
-                <div>Error: {err.message}</div>
-              </Match>
-            </Switch>
+            <div>Error: {err.message}</div>
           </BareLayout>
         );
       }}

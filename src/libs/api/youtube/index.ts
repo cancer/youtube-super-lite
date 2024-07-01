@@ -82,7 +82,7 @@ const client = () => {
 export type MyChannelsRequest = {
   GET: { part: string[]; maxResults: number };
 };
-type MyChannelsResponse = {
+export type MyChannelsResponse = {
   GET: PageInfo & {
     items: Subscription[];
   };
@@ -199,10 +199,10 @@ export const listLatestVideos = async ({
   });
 };
 
-type VideoRatingRequest = {
+export type VideoRatingRequest = {
   GET: { id: string };
 };
-type VideoRatingResponse = {
+export type VideoRatingResponse = {
   GET: { rating: string };
 };
 export const getVideoRating = async ({

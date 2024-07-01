@@ -1,10 +1,32 @@
-import { cache, createAsync, type RouteDefinition } from "@solidjs/router";
+import {
+  cache,
+  createAsync,
+  redirect,
+  type RouteDefinition,
+} from "@solidjs/router";
 import { For, Show } from "solid-js";
-import { listMyChannels, type MyChannelsRequest } from "~/libs/api/youtube";
+import { getRequestEvent } from "solid-js/web";
+import {
+  listMyChannels,
+  type MyChannelsRequest,
+  type MyChannelsResponse,
+} from "~/libs/api/youtube";
+import { isTokenExpired } from "~/libs/api/youtube/errors";
 
 const fetchChannels = cache(async (params: MyChannelsRequest["GET"]) => {
   "use server";
-  return listMyChannels(params);
+  let channels: MyChannelsResponse["GET"];
+  try {
+    channels = await listMyChannels(params);
+  } catch (err) {
+    if (isTokenExpired(err)) {
+      const event = getRequestEvent();
+      const redirectTo = event ? new URL(event.request.url).pathname : "/";
+      throw redirect(`/login?redirect_to=${redirectTo}`);
+    }
+    throw err;
+  }
+  return channels;
 }, "channels");
 
 export const route = {

@@ -7,15 +7,25 @@ import {
 import { clientOnly } from "@solidjs/start";
 import { Show } from "solid-js";
 import { LikeButton } from "~/components/like-button";
-import { getVideoRating } from "~/libs/api/youtube";
+import {
+  getVideoRating,
+  VideoRatingRequest,
+  VideoRatingResponse,
+} from "~/libs/api/youtube";
 
 const Player = clientOnly(() =>
   import("~/components/player").then(({ Player }) => ({ default: Player })),
 );
 
-const fetchRating = cache((params) => {
+const fetchRating = cache(async (params: VideoRatingRequest["GET"]) => {
   "use server";
-  return getVideoRating(params);
+  let rating: VideoRatingResponse["GET"];
+  try {
+    rating = await getVideoRating(params);
+  } catch {
+    return null;
+  }
+  return rating;
 }, "rating");
 
 type Params = { id: string };
@@ -36,7 +46,7 @@ export const routes = {
 
 const Watch = () => {
   const params = useParams<Params>();
-  const rating = createAsync(async () => fetchRating({ id: params.id }), {
+  const ratingData = createAsync(async () => fetchRating({ id: params.id }), {
     deferStream: true,
   });
 
@@ -47,10 +57,14 @@ const Watch = () => {
       {(videoId) => (
         <div class="w-full">
           <Player videoId={videoId} />
-          <LikeButton
-            liked={rating()?.rating === "like"}
-            onClick={() => like(videoId)}
-          />
+          <Show when={ratingData()}>
+            {(data) => (
+              <LikeButton
+                liked={data().rating === "like"}
+                onClick={() => like(videoId)}
+              />
+            )}
+          </Show>
         </div>
       )}
     </Show>
