@@ -1,4 +1,4 @@
-import { onCleanup, onMount, type VoidComponent } from "solid-js";
+import { createEffect, onCleanup, onMount, type VoidComponent } from "solid-js";
 import { initPlayer } from "~/libs/youtube-player";
 
 type Props = {

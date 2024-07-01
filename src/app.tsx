@@ -8,17 +8,17 @@ import { HttpHeader, HttpStatusCode } from "@solidjs/start";
 import { FileRoutes } from "@solidjs/start/router";
 import { ErrorBoundary, Match, Suspense, Switch } from "solid-js";
 import { getRequestEvent, isServer } from "solid-js/web";
-
+import { BaseLayout } from "~/layouts/base";
 import { isTokenExpired } from "~/libs/api/youtube/errors";
 import { BareLayout } from "./layouts/bare";
 
 export default function App() {
   return (
-    <BareLayout>
-      <ErrorBoundary
-        fallback={(err) => {
-          console.error(err);
-          return (
+    <ErrorBoundary
+      fallback={(err) => {
+        console.error(err);
+        return (
+          <BareLayout>
             <Switch>
               <Match when={isServer && isTokenExpired(err)}>
                 {(_) => {
@@ -41,13 +41,19 @@ export default function App() {
                 <div>Error: {err.message}</div>
               </Match>
             </Switch>
-          );
-        }}
+          </BareLayout>
+        );
+      }}
+    >
+      <Router
+        root={(props) => (
+          <BaseLayout>
+            <Suspense>{props.children}</Suspense>
+          </BaseLayout>
+        )}
       >
-        <Router root={(props) => <Suspense> {props.children} </Suspense>}>
-          <FileRoutes />
-        </Router>
-      </ErrorBoundary>
-    </BareLayout>
+        <FileRoutes />
+      </Router>
+    </ErrorBoundary>
   );
 }

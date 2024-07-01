@@ -35,22 +35,24 @@ export const routes = {
 } satisfies RouteDefinition;
 
 const Watch = () => {
-  const { id: videoId } = useParams<Params>();
-  const rating = createAsync(async () => fetchRating({ id: videoId }), {
+  const params = useParams<Params>();
+  const rating = createAsync(async () => fetchRating({ id: params.id }), {
     deferStream: true,
   });
 
-  const like = () => console.log("liked", videoId);
+  const like = (videoId: string) => console.log("liked", videoId);
 
   return (
-    <Show when={videoId !== ""} fallback="Need videoId.">
-      <div class="w-full">
-        <Player videoId={videoId} />
-        <LikeButton
-          liked={rating()?.rating === "like"}
-          onClick={() => like()}
-        />
-      </div>
+    <Show when={params.id} fallback="Need videoId." keyed>
+      {(videoId) => (
+        <div class="w-full">
+          <Player videoId={videoId} />
+          <LikeButton
+            liked={rating()?.rating === "like"}
+            onClick={() => like(videoId)}
+          />
+        </div>
+      )}
     </Show>
   );
 };
