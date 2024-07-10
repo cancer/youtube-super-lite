@@ -9,6 +9,7 @@ import type {
   VideoGetRatingResponse,
 } from "~/libs/api/youtube/types";
 import { createAuthTokensClient } from "~/libs/auth-tokens/client";
+import { getCloudflareEnv } from "~/libs/cloudflare";
 import { getSession } from "~/libs/session";
 
 // XXX: ほんとはこんなところでやりたくないが、コンポーネント経由で渡そうとするとシリアライズの問題が出るのでできない
@@ -16,7 +17,9 @@ let memo: ApiClient | null = null;
 const client = () => {
   if (memo !== null) return memo;
   memo = createApiClient(
-    createAuthTokensClient(() => getSession(process.env.SESSION_SECRET!)),
+    createAuthTokensClient(() =>
+      getCloudflareEnv().then((env) => getSession(env.SESSION_SECRET!)),
+    ),
   );
   return memo;
 };

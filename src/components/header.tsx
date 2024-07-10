@@ -2,16 +2,19 @@ import { action, redirect, useAction, useNavigate } from "@solidjs/router";
 import { type VoidComponent } from "solid-js";
 import { createAuthClient, revokeToken } from "~/libs/api/auth";
 import { createAuthTokensClient } from "~/libs/auth-tokens/client";
+import { getCloudflareEnv } from "~/libs/cloudflare";
 import { getSession } from "~/libs/session";
 
 const logoutAction = action(async () => {
   "use server";
-  const authClient = createAuthClient({
-    clientId: process.env.GAUTH_CLIENT_ID!,
-    clientSecret: process.env.GAUTH_CLIENT_SECRET!,
-  });
+  const authClient = await getCloudflareEnv().then((env) =>
+    createAuthClient({
+      clientId: env.GAUTH_CLIENT_ID,
+      clientSecret: env.GAUTH_CLIENT_SECRET,
+    }),
+  );
   const authTokensClient = createAuthTokensClient(() =>
-    getSession(process.env.SESSION_SECRET!),
+    getCloudflareEnv().then((env) => getSession(env.SESSION_SECRET)),
   );
 
   const tokens = await authTokensClient.get();

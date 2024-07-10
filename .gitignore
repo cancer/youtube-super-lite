@@ -9,7 +9,7 @@ netlify
 .wrangler
 
 # Environment
-.env
+.dev.vars
 .env*.local
 
 # dependencies
