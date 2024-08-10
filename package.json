@@ -24,6 +24,6 @@
   "devDependencies": {
     "@cloudflare/workers-types": "4.20240605.0",
     "@types/youtube": "0.0.50",
-    "wrangler": "^3.60.2"
+    "wrangler": "3.60.2"
   }
 }
