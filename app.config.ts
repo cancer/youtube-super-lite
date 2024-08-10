@@ -9,6 +9,7 @@ export default defineConfig({
       external: ["__STATIC_CONTENT_MANIFEST", "node:async_hooks"],
     },
   },
+  middleware: "./src/middlewares/index.ts",
   vite: {
     plugins: [UnoCSS(), Icons({ compiler: "solid" })],
   },

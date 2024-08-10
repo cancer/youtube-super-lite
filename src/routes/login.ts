@@ -10,21 +10,20 @@ import {
 import { serialize } from "~/libs/cookie";
 import { clearAuthTokens, getAuthTokens, setAuthTokens } from "~/libs/session";
 
-const sessionSecret = { secret: process.env.SESSION_SECRET! };
 const stateKey = "ytp_state";
-export const GET = async ({ request }: APIEvent) => {
+export const GET = async ({ request, locals: { env } }: APIEvent) => {
   "use server";
 
   const authClient = createAuthClient({
-    clientId: process.env.GAUTH_CLIENT_ID!,
-    clientSecret: process.env.GAUTH_CLIENT_SECRET!,
+    clientId: env.GAUTH_CLIENT_ID!,
+    clientSecret: env.GAUTH_CLIENT_SECRET!,
   });
   const url = new URL(request.url);
 
   // for refresh
   let tokens;
   try {
-    tokens = await getAuthTokens(sessionSecret);
+    tokens = await getAuthTokens({ secret: env.SESSION_SECRET });
   } catch {}
   if (tokens) {
     console.log(`Tokens retrieved. ${JSON.stringify(tokens)}`);
@@ -38,7 +37,7 @@ export const GET = async ({ request }: APIEvent) => {
       await revokeToken(authClient)(tokens.refreshToken).catch((e) =>
         console.error("Failed to revoke tokens: ", e),
       );
-      await clearAuthTokens(sessionSecret).catch((e) =>
+      await clearAuthTokens({ secret: env.SESSION_SECRET }).catch((e) =>
         console.error("Failed to clear session: ", e),
       );
       return redirect(`/login${url.search}`);
@@ -51,7 +50,7 @@ export const GET = async ({ request }: APIEvent) => {
           refreshToken: refreshed.refreshToken,
           expiresAt: Date.now() + refreshed.expiresIn * 1000,
         },
-        sessionSecret,
+        { secret: env.SESSION_SECRET },
       );
     } catch (err) {
       console.error("Failed to set tokens to session: ", err);
@@ -107,7 +106,7 @@ export const GET = async ({ request }: APIEvent) => {
           refreshToken: tokens!.refreshToken,
           expiresAt: Date.now() + tokens!.expiresIn * 1000,
         },
-        sessionSecret,
+        { secret: env.SESSION_SECRET },
       );
     } catch (err) {
       console.error("Failed to set tokens to session: ", err);
@@ -127,7 +126,7 @@ export const GET = async ({ request }: APIEvent) => {
 
   params.append("redirect_uri", `${url.origin}/login`);
   params.append("state", state);
-  params.append("client_id", process.env.GAUTH_CLIENT_ID!);
+  params.append("client_id", env.GAUTH_CLIENT_ID!);
   params.append("response_type", "code");
   params.append(
     "scope",

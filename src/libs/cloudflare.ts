@@ -1,5 +1,3 @@
-"use server";
-
 import { getRequestEvent } from "solid-js/web";
 import { getPlatformProxy } from "wrangler";
 
