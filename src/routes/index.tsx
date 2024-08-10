@@ -1,32 +1,21 @@
-import {
-  cache,
-  createAsync,
-  redirect,
-  type RouteDefinition,
-} from "@solidjs/router";
+import { cache, createAsync, type RouteDefinition } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
-import {
-  listMyChannels,
-  type MyChannelsRequest,
-  type MyChannelsResponse,
-} from "~/libs/api/youtube";
-import { isTokenExpired } from "~/libs/api/youtube/errors";
+import { listMyChannels, type MyChannelsRequest } from "~/libs/api/youtube";
+import { Subscription } from "~/libs/api/youtube/types";
+import { createAuthTokensClient } from "~/libs/auth-tokens/client";
+import { getSession } from "~/libs/session";
 
 const fetchChannels = cache(async (params: MyChannelsRequest["GET"]) => {
   "use server";
-  let channels: MyChannelsResponse["GET"];
+  let channels: Subscription[] = [];
   try {
-    channels = await listMyChannels(params);
+    const { items } = await listMyChannels(params);
+    return items;
   } catch (err) {
-    if (isTokenExpired(err)) {
-      const event = getRequestEvent();
-      const redirectTo = event ? new URL(event.request.url).pathname : "/";
-      throw redirect(`/login?redirect_to=${redirectTo}`);
-    }
-    throw err;
+    console.debug(err);
+    return [];
   }
-  return channels;
 }, "channels");
 
 export const route = {
@@ -38,8 +27,8 @@ export const route = {
       })
         // https://github.com/solidjs/solid-router/issues/399
         .catch((err) => {
-          console.error(err);
-          return null;
+          console.debug(err);
+          return [];
         })
     );
   },
@@ -59,7 +48,7 @@ const Index = () => {
       <Show when={channels()}>
         {(data) => (
           <ul class="flex gap-2 list-none p-0">
-            <For each={data().items}>
+            <For each={data()}>
               {(channel) => (
                 <li class="w-8 aspect-square">
                   <a href={`/channels/${channel.snippet.resourceId.channelId}`}>
