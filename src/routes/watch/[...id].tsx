@@ -11,7 +11,6 @@ import {
   type VideoRatingRequest,
   type VideoRatingResponse,
 } from "~/libs/api/youtube";
-import { LikeButton } from "./like-button";
 
 const Player = clientOnly(() =>
   import("./player").then(({ Player }) => ({ default: Player })),
@@ -56,15 +55,11 @@ const Watch = () => {
     <Show when={params.id} fallback="Need videoId." keyed>
       {(videoId) => (
         <div class="w-full">
-          <Player videoId={videoId} />
-          <Show when={ratingData()}>
-            {(data) => (
-              <LikeButton
-                liked={data().rating === "like"}
-                onClick={() => like(videoId)}
-              />
-            )}
-          </Show>
+          <Player
+            videoId={videoId}
+            rating={ratingData()?.rating ?? null}
+            onClickLike={() => like(videoId)}
+          />
         </div>
       )}
     </Show>
