@@ -45,7 +45,7 @@ export const Player: VoidComponent<Props> = (props) => {
   onCleanup(() => destroy?.());
 
   return (
-    <div class="grid grid-cols-2 grid-rows-2">
+    <div class="grid grid-cols-2 grid-rows-2 gap-2">
       <div ref={container!} class="col-span-full grid-row-1">
         <div id="player" />
       </div>
@@ -58,7 +58,7 @@ export const Player: VoidComponent<Props> = (props) => {
       </Show>
       <Show when={player()}>
         {(_player) => (
-          <div class="grid-row-2 flex justify-end items-start gap-2">
+          <div class="grid-row-2 flex justify-end items-start gap-2 pt-2">
             <button onClick={() => _player().setPlaybackRate(1)}>x1.0</button>
             <button onClick={() => _player().setPlaybackRate(1.5)}>x1.5</button>
             <button onClick={() => _player().setPlaybackRate(2)}>x2.0</button>

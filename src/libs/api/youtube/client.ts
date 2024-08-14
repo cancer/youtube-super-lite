@@ -10,10 +10,12 @@ export type ApiClient = {
   }) => Promise<T>;
 };
 
-export const createApiClient = (authTokensClient: AuthTokensClient): ApiClient => {
+export const createApiClient = (
+  authTokensClient: AuthTokensClient,
+): ApiClient => {
   "use server";
   return {
-    request: async ({ uri, method, params, body }) => {
+    async request({ uri, method, params, body }) {
       let tokens;
       try {
         tokens = await authTokensClient.get();
@@ -25,8 +27,8 @@ export const createApiClient = (authTokensClient: AuthTokensClient): ApiClient =
         console.error("Retrieved tokens have expired.");
         throw new TokenExpiredError();
       }
-      
-      const url = new URL(`https://youtube.googleapis.com/youtube/v3${ uri }`);
+
+      const url = new URL(`https://youtube.googleapis.com/youtube/v3${uri}`);
       Object.entries(params ?? {}).forEach(([key, value]) =>
         url.searchParams.set(key, String(value)),
       );
@@ -34,25 +36,30 @@ export const createApiClient = (authTokensClient: AuthTokensClient): ApiClient =
         method,
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${ tokens.accessToken }`,
+          Authorization: `Bearer ${tokens.accessToken}`,
           Accept: "application/json",
         },
         body: body ? JSON.stringify(body) : undefined,
       });
-      
+
       if (!res.ok) {
-        const json = (await res.json()) as any;
-        if (
-          res.status === 401 &&
-          json.error.errors.some((e: any) => e.reason === "authError")
-        ) {
-          await authTokensClient.clear();
-          throw new TokenExpiredError();
+        if (res.headers.get("Content-Type") === "application/json") {
+          const json = (await res.json()) as any;
+          if (
+            res.status === 401 &&
+            json.error.errors.some((e: any) => e.reason === "authError")
+          ) {
+            await authTokensClient.clear();
+            throw new TokenExpiredError();
+          }
+          throw new Error(JSON.stringify(json));
         }
-        throw new Error(JSON.stringify(json));
+
+        throw new Error(`Fetch failed. Status: ${res.status}`);
       }
-      
-      return res.json();
+
+      if (res.status === 200) return res.json();
+      return {} as any;
     },
   };
 };

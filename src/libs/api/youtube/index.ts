@@ -146,9 +146,11 @@ export const listLatestVideos = async ({
 
 export type VideoRatingRequest = {
   GET: { id: string };
+  POST: { id: string; rating: "like" };
 };
 export type VideoRatingResponse = {
   GET: { rating: string };
+  POST: unknown;
 };
 export const getVideoRating = async ({
   id,
@@ -167,4 +169,15 @@ export const getVideoRating = async ({
       if (res.items.length === 0) return { rating: "" };
       return { rating: res.items[0].rating };
     });
+};
+export const postVideoRating = async (
+  params: VideoRatingRequest["POST"],
+): Promise<VideoRatingResponse["POST"]> => {
+  "use server";
+
+  return client().request<unknown>({
+    uri: "/videos/rate",
+    method: "POST",
+    params,
+  });
 };
