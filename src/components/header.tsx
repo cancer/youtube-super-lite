@@ -7,7 +7,13 @@ import {
   useAction,
   useNavigate,
 } from "@solidjs/router";
-import { Show, type VoidComponent } from "solid-js";
+import {
+  createEffect,
+  Match,
+  Show,
+  Switch,
+  type VoidComponent,
+} from "solid-js";
 import { getRequestEvent } from "solid-js/web";
 import { createAuthClient, revokeToken } from "~/libs/api/auth";
 import { createAuthTokensClient } from "~/libs/auth-tokens/client";
@@ -60,14 +66,14 @@ export const Header: VoidComponent = () => {
           <input class="w-2xl h-10 text-xl" type="text" name="url" />
           <button type="submit">Watch</button>
         </form>
-        <Show
-          when={isLoggedIn()}
-          fallback={
+        <Switch fallback={<div />}>
+          <Match when={isLoggedIn() === true}>
+            <button onClick={logout}>Logout</button>
+          </Match>
+          <Match when={isLoggedIn() === false}>
             <button onClick={() => location.assign("/login")}>Login</button>
-          }
-        >
-          <button onClick={logout}>Logout</button>
-        </Show>
+          </Match>
+        </Switch>
       </div>
     </div>
   );

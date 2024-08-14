@@ -13,14 +13,21 @@ import { getCloudflareEnv } from "~/libs/cloudflare";
 import { getSession } from "~/libs/session";
 
 // XXX: ほんとはこんなところでやりたくないが、コンポーネント経由で渡そうとするとシリアライズの問題が出るのでできない
+// TODO: middlewareでやる
 let memo: ApiClient | null = null;
 const client = () => {
   if (memo !== null) return memo;
-  memo = createApiClient(
-    createAuthTokensClient(() =>
-      getCloudflareEnv().then((env) => getSession(env.SESSION_SECRET!)),
-    ),
+  const authTokensClient = createAuthTokensClient(() =>
+    getCloudflareEnv().then((env) => getSession(env.SESSION_SECRET!)),
   );
+  memo = createApiClient({
+    getTokens() {
+      return authTokensClient.get();
+    },
+    async revokeTokens() {
+      await authTokensClient.clear();
+    },
+  });
   return memo;
 };
 
