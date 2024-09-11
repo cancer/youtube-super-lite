@@ -1,3 +1,4 @@
+import { getRequestEvent } from "solid-js/web";
 import { type ApiClient, createApiClient } from "~/libs/api/youtube/client";
 import type {
   Channel,
@@ -9,7 +10,6 @@ import type {
   VideoGetRatingResponse,
 } from "~/libs/api/youtube/types";
 import { createAuthTokensClient } from "~/libs/auth-tokens/client";
-import { getCloudflareEnv } from "~/libs/cloudflare";
 import { getSession } from "~/libs/session";
 
 // XXX: ほんとはこんなところでやりたくないが、コンポーネント経由で渡そうとするとシリアライズの問題が出るのでできない
@@ -17,8 +17,9 @@ import { getSession } from "~/libs/session";
 let memo: ApiClient | null = null;
 const client = () => {
   if (memo !== null) return memo;
+  const ev = getRequestEvent()!;
   const authTokensClient = createAuthTokensClient(() =>
-    getCloudflareEnv().then((env) => getSession(env.SESSION_SECRET!)),
+    getSession(ev.locals.env.SESSION_SECRET!),
   );
   memo = createApiClient({
     getTokens() {

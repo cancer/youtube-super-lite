@@ -10,13 +10,13 @@
   "dependencies": {
     "@iconify-json/icon-park-outline": "1.1.15",
     "@iconify-json/icon-park-solid": "1.1.14",
-    "@solidjs/router": "0.13.1",
-    "@solidjs/start": "1.0.0",
+    "@solidjs/router": "^0.14.3",
+    "@solidjs/start": "^1.0.6",
     "@unocss/reset": "0.59.0",
     "solid-js": "1.8.17",
     "unocss": "0.59.0",
     "unplugin-icons": "0.18.5",
-    "vinxi": "0.3.11"
+    "vinxi": "^0.4.2"
   },
   "engines": {
     "node": ">=18"
@@ -24,6 +24,6 @@
   "devDependencies": {
     "@cloudflare/workers-types": "4.20240605.0",
     "@types/youtube": "0.0.50",
-    "wrangler": "3.60.2"
+    "wrangler": "^3.76.0"
   }
 }
