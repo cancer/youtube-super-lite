@@ -47,8 +47,8 @@ const Index = () => {
   return (
     <>
       <Header
-        MovieOpener={<MovieOpener />}
-        Login={
+        LeftSide={<MovieOpener />}
+        RightSide={
           <Show when={isLoggedIn()} fallback={<LoginButton />}>
             <LogoutButton />
           </Show>
