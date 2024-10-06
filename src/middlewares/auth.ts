@@ -1,9 +1,9 @@
-import { type RequestMiddleware } from "@solidjs/start/middleware";
+import type { RequestMiddleware } from "@solidjs/start/middleware";
+import { useSession } from "vinxi/http";
 import {
   type AuthSessionsClient,
   createAuthSessionsClient,
 } from "~/libs/auth-sessions/client";
-import { getSession } from "~/libs/session";
 
 declare global {
   interface RequestEventLocals {
@@ -13,6 +13,9 @@ declare global {
 
 export const auth: () => RequestMiddleware = () => async (event) => {
   (event.locals as RequestEventLocals).auth = createAuthSessionsClient(() =>
-    getSession(event.locals.env.SESSION_SECRET),
+    useSession({
+      name: "ytp_session",
+      password: event.locals.env.SESSION_SECRET,
+    }),
   );
 };

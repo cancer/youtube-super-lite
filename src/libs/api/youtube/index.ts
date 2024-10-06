@@ -1,4 +1,4 @@
-import { type ApiClient } from "~/libs/api/youtube/client";
+import type { ApiClient } from "~/libs/api/youtube/client";
 import type {
   PageInfo,
   Subscription,

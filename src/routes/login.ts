@@ -1,5 +1,5 @@
 import { redirect } from "@solidjs/router";
-import { type APIEvent } from "@solidjs/start/server";
+import type { APIEvent } from "@solidjs/start/server";
 import { getCookie } from "vinxi/http";
 import {
   createAuthApiClient,
@@ -8,13 +8,12 @@ import {
   revokeToken,
 } from "~/libs/api/auth";
 import { serialize } from "~/libs/cookie";
-import { clearAuthTokens, getAuthTokens, setAuthTokens } from "~/libs/session";
 
 const stateKey = "ytp_state";
-export const GET = async ({ request, locals: { env } }: APIEvent) => {
+export const GET = async ({ request, locals: { env, auth } }: APIEvent) => {
   "use server";
 
-  const authClient = createAuthApiClient({
+  const authApiClient = createAuthApiClient({
     clientId: env.GAUTH_CLIENT_ID!,
     clientSecret: env.GAUTH_CLIENT_SECRET!,
   });
@@ -23,35 +22,32 @@ export const GET = async ({ request, locals: { env } }: APIEvent) => {
   // for refresh
   let tokens;
   try {
-    tokens = await getAuthTokens({ secret: env.SESSION_SECRET });
+    tokens = await auth.get();
   } catch {}
   if (tokens) {
     console.log(`Tokens retrieved. ${JSON.stringify(tokens)}`);
 
     let refreshed;
     try {
-      refreshed = await refreshAccessToken(authClient)(tokens.refreshToken);
+      refreshed = await refreshAccessToken(authApiClient)(tokens.refreshToken);
     } catch (err) {
       console.error("Failed to refresh access token: ", err);
 
-      await revokeToken(authClient)(tokens.refreshToken).catch((e) =>
+      await revokeToken(authApiClient)(tokens.refreshToken).catch((e) =>
         console.error("Failed to revoke tokens: ", e),
       );
-      await clearAuthTokens({ secret: env.SESSION_SECRET }).catch((e) =>
-        console.error("Failed to clear session: ", e),
-      );
+      await auth
+        .clear()
+        .catch((e: Error) => console.error("Failed to clear session: ", e));
       return redirect(`/login${url.search}`);
     }
 
     try {
-      await setAuthTokens(
-        {
-          accessToken: refreshed.accessToken,
-          refreshToken: refreshed.refreshToken,
-          expiresAt: Date.now() + refreshed.expiresIn * 1000,
-        },
-        { secret: env.SESSION_SECRET },
-      );
+      await auth.set({
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken,
+        expiresAt: Date.now() + refreshed.expiresIn * 1000,
+      });
     } catch (err) {
       console.error("Failed to set tokens to session: ", err);
       return redirect("/error", {
@@ -79,7 +75,7 @@ export const GET = async ({ request, locals: { env } }: APIEvent) => {
 
     let tokens;
     try {
-      tokens = await exchangeTokens(authClient)({
+      tokens = await exchangeTokens(authApiClient)({
         code: url.searchParams.get("code")!,
         redirectUri: `${url.origin}/login`,
       });
@@ -93,21 +89,18 @@ export const GET = async ({ request, locals: { env } }: APIEvent) => {
 
     // revoke tokens and re-login if refresh_token is missing
     if (tokens.refreshToken === "") {
-      await revokeToken(authClient)(tokens.accessToken).catch((e) =>
+      await revokeToken(authApiClient)(tokens.accessToken).catch((e) =>
         console.error("Failed to revoke tokens: ", e),
       );
       return redirect(`/login${url.search}`);
     }
 
     try {
-      await setAuthTokens(
-        {
-          accessToken: tokens!.accessToken,
-          refreshToken: tokens!.refreshToken,
-          expiresAt: Date.now() + tokens!.expiresIn * 1000,
-        },
-        { secret: env.SESSION_SECRET },
-      );
+      await auth.set({
+        accessToken: tokens!.accessToken,
+        refreshToken: tokens!.refreshToken,
+        expiresAt: Date.now() + tokens!.expiresIn * 1000,
+      });
     } catch (err) {
       console.error("Failed to set tokens to session: ", err);
       return redirect("/error", {

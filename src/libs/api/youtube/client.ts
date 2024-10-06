@@ -1,5 +1,5 @@
 import { TokenExpiredError } from "~/libs/api/youtube/errors";
-import { type AuthSessions } from "~/libs/auth-sessions/client";
+import type { AuthSession } from "~/libs/auth-sessions/client";
 
 export type ApiClient = {
   request: <T = unknown>(args: {
@@ -14,7 +14,7 @@ export const createApiClient = ({
   getTokens,
   revokeTokens,
 }: {
-  getTokens: () => Promise<AuthSessions | null>;
+  getTokens: () => Promise<AuthSession | null>;
   revokeTokens: () => Promise<void>;
 }): ApiClient => {
   "use server";
