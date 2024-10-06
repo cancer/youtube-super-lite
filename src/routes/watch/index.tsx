@@ -8,7 +8,7 @@ import {
   useSearchParams,
 } from "@solidjs/router";
 import { clientOnly } from "@solidjs/start";
-import { createEffect, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
 import {
   getVideoRating,
@@ -85,12 +85,30 @@ const Watch = () => {
     deferStream: true,
   });
 
+  const divisions = createMemo(() => Math.ceil(Math.sqrt(videoIds().length)));
+
   createEffect(() => {
     if (videoIds().length === 0) return;
+    // 変化がないのにsearchParamsを更新すると、`/`にリダイレクトされてしまう
+    if (videoIds().join(",") === searchParams.videoIds) return;
     setSearchParams({ videoIds: videoIds().join(",") });
   });
 
   const like = useAction(likeAction);
+
+  // Tailwind的なCSSは、動的にclass文字列を作って使うことができないらしい
+  const gridColumns = new Map([
+    [1, "grid-cols-1"],
+    [2, "grid-cols-2"],
+    [3, "grid-cols-3"],
+    [4, "grid-cols-4"],
+  ]);
+  const gridRows = new Map([
+    [1, "grid-rows-1"],
+    [2, "grid-rows-2"],
+    [3, "grid-rows-3"],
+    [4, "grid-rows-4"],
+  ]);
 
   return (
     <>
@@ -109,9 +127,11 @@ const Watch = () => {
                 if (
                   (ev.submitter as HTMLButtonElement).name === "openCurrentPage"
                 ) {
+                  if (videoIds().length === 16)
+                    return console.warn("Maximum number of videos reached.");
                   setVideoIds((prev) => [...prev, videoId]);
                 } else {
-                  const params = new URLSearchParams({ videoId });
+                  const params = new URLSearchParams({ videoIds: videoId });
                   navigate(`/watch/?${params.toString()}`);
                 }
                 ev.currentTarget.url.value = "";
@@ -144,6 +164,8 @@ const Watch = () => {
                 ev.preventDefault();
 
                 if (ev.currentTarget.url.value === "") return;
+                if (videoIds().length === 16)
+                  return console.warn("Maximum number of videos reached.");
 
                 const videoId =
                   new URL(ev.currentTarget.url.value).searchParams.get("v") ??
@@ -158,7 +180,9 @@ const Watch = () => {
         keyed
       >
         {(data) => (
-          <div class="grid">
+          <div
+            class={`grid ${gridColumns.get(divisions())} ${gridRows.get(divisions())}`}
+          >
             {data.map((videoId) => (
               <Player
                 videoId={videoId}
