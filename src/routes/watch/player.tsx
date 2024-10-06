@@ -14,29 +14,35 @@ type Props = {
   onClickLike: () => void;
 };
 export const Player: VoidComponent<Props> = (props) => {
-  const [player, setPlayer] = createSignal<YT.Player | null>(null);
-
   // YouTubeプレーヤー自体の読み込み
   onMount(() => loadPlayer());
 
   // 読み込まれたプレーヤーを使って動画再生
+  let player: YT.Player;
   let containerEl: HTMLDivElement;
   let playerEl: HTMLDivElement;
   onMount(async () => {
     const { width } = containerEl.getBoundingClientRect();
-    setPlayer(
-      await initPlayer(playerEl, {
-        width,
-        height: width * 0.5625, // 16:9
-        events: {
-          onReady: ({ target }) => {
-            target.loadVideoById(props.videoId, 0, "hd1080");
-          },
+    player = await initPlayer(playerEl, {
+      width,
+      height: width * 0.5625, // 16:9
+      events: {
+        onReady: ({ target }) => {
+          target.loadVideoById(props.videoId, 0, "hd1080");
         },
-      }),
+      },
+    });
+
+    window.addEventListener(
+      "resize",
+      () => {
+        const { width } = containerEl.getBoundingClientRect();
+        player.setSize(width, width * 0.5625);
+      },
+      true,
     );
   });
-  onCleanup(() => player()?.destroy?.());
+  onCleanup(() => player.destroy?.());
 
   return (
     <div class="grid grid-cols-2 grid-rows-2 gap-2 w-full">
@@ -50,15 +56,11 @@ export const Player: VoidComponent<Props> = (props) => {
           </div>
         )}
       </Show>
-      <Show when={player()}>
-        {(_player) => (
-          <div class="grid-row-2 flex justify-end items-start gap-2 pt-2">
-            <button onClick={() => _player().setPlaybackRate(1)}>x1.0</button>
-            <button onClick={() => _player().setPlaybackRate(1.5)}>x1.5</button>
-            <button onClick={() => _player().setPlaybackRate(2)}>x2.0</button>
-          </div>
-        )}
-      </Show>
+      <div class="grid-row-2 flex justify-end items-start gap-2 pt-2">
+        <button onClick={() => player.setPlaybackRate(1)}>x1.0</button>
+        <button onClick={() => player.setPlaybackRate(1.5)}>x1.5</button>
+        <button onClick={() => player.setPlaybackRate(2)}>x2.0</button>
+      </div>
     </div>
   );
 };
