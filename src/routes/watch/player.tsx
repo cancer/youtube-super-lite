@@ -32,7 +32,10 @@ export const Player: VoidComponent<Props> = (props) => {
         },
       },
     });
+  });
 
+  // イベントハンドリング
+  onMount(() => {
     window.addEventListener(
       "resize",
       () => {
@@ -42,7 +45,6 @@ export const Player: VoidComponent<Props> = (props) => {
       true,
     );
   });
-
   onMount(() => {
     window.addEventListener(
       "keypress",
@@ -57,6 +59,7 @@ export const Player: VoidComponent<Props> = (props) => {
       true,
     );
   });
+
   onCleanup(() => player.destroy?.());
 
   return (
