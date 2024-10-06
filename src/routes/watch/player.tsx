@@ -45,7 +45,7 @@ export const Player: VoidComponent<Props> = (props) => {
   onCleanup(() => destroy?.());
 
   return (
-    <div class="grid grid-cols-2 grid-rows-2 gap-2">
+    <div class="grid grid-cols-2 grid-rows-2 gap-2 w-full">
       <div ref={container!} class="col-span-full grid-row-1">
         <div id="player" />
       </div>

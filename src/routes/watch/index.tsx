@@ -4,7 +4,7 @@ import {
   createAsync,
   type RouteDefinition,
   useAction,
-  useParams,
+  useNavigate,
   useSearchParams,
 } from "@solidjs/router";
 import { clientOnly } from "@solidjs/start";
@@ -63,6 +63,9 @@ export const routes = {
 
 const Watch = () => {
   const [params] = useSearchParams<Params>();
+  const navigate = useNavigate();
+
+  const [liked, setLiked] = createSignal(false);
   const isLoggedIn = createAsync(() => getLoginStatus(), { deferStream: true });
   const ratingData = createAsync(
     async () => (params.videoId ? fetchRating({ id: params.videoId }) : null),
@@ -70,35 +73,43 @@ const Watch = () => {
       deferStream: true,
     },
   );
+
   const like = useAction(likeAction);
-  const [liked, setLiked] = createSignal(false);
 
   return (
     <>
       <Header
-        LeftSide={<MovieOpener />}
+        LeftSide={null}
         RightSide={
           <Show when={isLoggedIn()} fallback={<LoginButton />}>
             <LogoutButton />
           </Show>
         }
       />
-      <Show when={params.videoId} fallback="Need videoId." keyed>
-        {(videoId) => (
-          <div class="w-full">
-            <Player
-              videoId={videoId}
-              rating={liked() ? "like" : (ratingData()?.rating ?? null)}
-              onClickLike={async () => {
-                setLiked(true);
-                try {
-                  await like(videoId);
-                } catch {
-                  return setLiked(false);
-                }
-              }}
+      <Show
+        when={params.videoId}
+        fallback={
+          <div class="grid justify-center items-center w-full aspect-ratio-video ">
+            <MovieOpener
+              openVideo={(videoId) => navigate(`/watch/?videoId=${videoId}`)}
             />
           </div>
+        }
+        keyed
+      >
+        {(videoId) => (
+          <Player
+            videoId={videoId}
+            rating={liked() ? "like" : (ratingData()?.rating ?? null)}
+            onClickLike={async () => {
+              setLiked(true);
+              try {
+                await like(videoId);
+              } catch {
+                return setLiked(false);
+              }
+            }}
+          />
         )}
       </Show>
     </>

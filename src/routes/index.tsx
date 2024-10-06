@@ -1,4 +1,9 @@
-import { cache, createAsync, type RouteDefinition } from "@solidjs/router";
+import {
+  cache,
+  createAsync,
+  type RouteDefinition,
+  useNavigate,
+} from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
 import { listMyChannels, type MyChannelsRequest } from "~/libs/api/youtube";
@@ -38,6 +43,8 @@ export const route = {
 // !!! TODO: サブリクエストが50超えてしまっているのでなんとかしないといけない !!!
 //
 const Index = () => {
+  const navigate = useNavigate();
+
   const isLoggedIn = createAsync(() => getLoginStatus(), { deferStream: true });
   const channels = createAsync(
     () => fetchChannels({ part: ["snippet"], maxResults: 50 }),
@@ -47,7 +54,11 @@ const Index = () => {
   return (
     <>
       <Header
-        LeftSide={<MovieOpener />}
+        LeftSide={
+          <MovieOpener
+            openVideo={(videoId) => navigate(`/watch/?videoId=${videoId}`)}
+          />
+        }
         RightSide={
           <Show when={isLoggedIn()} fallback={<LoginButton />}>
             <LogoutButton />

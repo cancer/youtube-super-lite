@@ -6,11 +6,9 @@ type Props = {
 };
 export const Header: VoidComponent<Props> = (props) => {
   return (
-    <div class="grid">
-      <div class="col-span-full flex justify-between">
-        <div>{props.LeftSide}</div>
-        <div>{props.RightSide}</div>
-      </div>
+    <div class="col-span-full flex justify-between items-center">
+      <div>{props.LeftSide}</div>
+      <div>{props.RightSide}</div>
     </div>
   );
 };
