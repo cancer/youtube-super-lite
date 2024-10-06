@@ -9,8 +9,8 @@ import {
 import { clientOnly } from "@solidjs/start";
 import { createSignal, Show } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
-import { Header } from "~/components/header";
-import { getLoginStatus, LoginButton, LogoutButton } from "~/components/login-button";
+import { Header } from "~/uis/header";
+import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
 import {
   getVideoRating,
   postVideoRating,

@@ -1,12 +1,12 @@
 import { cache, createAsync, type RouteDefinition } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
-import { Header } from "~/components/header";
+import { Header } from "~/uis/header";
 import {
   getLoginStatus,
   LoginButton,
   LogoutButton,
-} from "~/components/login-button";
+} from "~/uis/login-button";
 import { listMyChannels, type MyChannelsRequest } from "~/libs/api/youtube";
 
 const fetchChannels = cache(async (params: MyChannelsRequest["GET"]) => {
