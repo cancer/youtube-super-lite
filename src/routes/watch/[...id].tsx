@@ -9,14 +9,15 @@ import {
 import { clientOnly } from "@solidjs/start";
 import { createSignal, Show } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
-import { Header } from "~/uis/header";
-import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
 import {
   getVideoRating,
   postVideoRating,
   type VideoRatingRequest,
   type VideoRatingResponse,
 } from "~/libs/api/youtube";
+import { Header } from "~/uis/header";
+import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
+import { MovieOpener } from "~/uis/movie-opener";
 
 const Player = clientOnly(() =>
   import("./player").then(({ Player }) => ({ default: Player })),
@@ -69,6 +70,7 @@ const Watch = () => {
   return (
     <>
       <Header
+        MovieOpener={<MovieOpener />}
         Login={
           <Show when={isLoggedIn()} fallback={<LoginButton />}>
             <LogoutButton />

@@ -1,13 +1,10 @@
 import { cache, createAsync, type RouteDefinition } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
-import { Header } from "~/uis/header";
-import {
-  getLoginStatus,
-  LoginButton,
-  LogoutButton,
-} from "~/uis/login-button";
 import { listMyChannels, type MyChannelsRequest } from "~/libs/api/youtube";
+import { Header } from "~/uis/header";
+import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
+import { MovieOpener } from "~/uis/movie-opener";
 
 const fetchChannels = cache(async (params: MyChannelsRequest["GET"]) => {
   "use server";
@@ -50,6 +47,7 @@ const Index = () => {
   return (
     <>
       <Header
+        MovieOpener={<MovieOpener />}
         Login={
           <Show when={isLoggedIn()} fallback={<LoginButton />}>
             <LogoutButton />
