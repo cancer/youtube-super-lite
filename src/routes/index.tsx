@@ -61,7 +61,7 @@ const Index = () => {
 
               const videoId =
                 new URL(ev.currentTarget.url.value).searchParams.get("v") ?? "";
-              const params = new URLSearchParams({ videoId });
+              const params = new URLSearchParams({ videoIds: videoId });
 
               navigate(`/watch/?${params.toString()}`);
               ev.currentTarget.url.value = "";
