@@ -43,15 +43,15 @@ const likeAction = action(async (id: string) => {
   return null;
 });
 
-type Params = { videoId: string };
+type Params = { videoIds: string };
 
 export const routes = {
   load: () => {
-    const [{ videoId }] = useSearchParams<Params>();
-    if (!videoId) return null;
+    const [{ videoIds }] = useSearchParams<Params>();
+    if (!videoIds) return null;
 
     return (
-      fetchRating({ id: videoId })
+      fetchRating({ id: videoIds })
         // https://github.com/solidjs/solid-router/issues/399
         .catch((err) => {
           console.error(err);
@@ -65,21 +65,22 @@ const Watch = () => {
   const [searchParams, setSearchParams] = useSearchParams<Params>();
   const navigate = useNavigate();
 
-  const [videoId, setVideoId] = createSignal(searchParams.videoId);
+  const [videoIds, setVideoIds] = createSignal<string[]>(
+    searchParams.videoIds?.split(",") ?? [],
+  );
   const [liked, setLiked] = createSignal(false);
   const isLoggedIn = createAsync(() => getLoginStatus(), { deferStream: true });
   const ratingData = createAsync(
     async () =>
-      searchParams.videoId ? fetchRating({ id: searchParams.videoId }) : null,
+      searchParams.videoIds ? fetchRating({ id: searchParams.videoIds }) : null,
     {
       deferStream: true,
     },
   );
 
   createEffect(() => {
-    if (videoId() === undefined) return;
-    if (videoId() === searchParams.videoId) return;
-    setSearchParams({ videoId: videoId() });
+    if (videoIds().length === 0) return;
+    setSearchParams({ videoIds: videoIds().join(",") });
   });
 
   const like = useAction(likeAction);
@@ -88,20 +89,21 @@ const Watch = () => {
     <>
       <Header
         LeftSide={
-          <Show when={videoId()}>
+          <Show when={videoIds().length > 0}>
             <WatchVideoFromYouTube
               onSubmit={(ev) => {
                 ev.preventDefault();
-                
+
+                if (ev.currentTarget.url.value === "") return;
+
                 const videoId =
                   new URL(ev.currentTarget.url.value).searchParams.get("v") ??
                   "";
-                
                 if (
                   (ev.submitter as HTMLButtonElement).name === "openCurrentPage"
-                )
-                  setVideoId(videoId);
-                else {
+                ) {
+                  setVideoIds((prev) => [...prev, videoId]);
+                } else {
                   const params = new URLSearchParams({ videoId });
                   navigate(`/watch/?${params.toString()}`);
                 }
@@ -127,18 +129,19 @@ const Watch = () => {
         }
       />
       <Show
-        when={videoId()}
+        when={videoIds().length > 0 && videoIds()}
         fallback={
           <div class="grid justify-center items-center w-full aspect-ratio-video ">
             <WatchVideoFromYouTube
               onSubmit={(ev) => {
                 ev.preventDefault();
-                
+
+                if (ev.currentTarget.url.value === "") return;
+
                 const videoId =
                   new URL(ev.currentTarget.url.value).searchParams.get("v") ??
                   "";
-                
-                setVideoId(videoId);
+                setVideoIds((prev) => [...prev, videoId]);
                 ev.currentTarget.url.value = "";
               }}
               Action={<button type="submit">Watch</button>}
@@ -147,19 +150,23 @@ const Watch = () => {
         }
         keyed
       >
-        {(videoId) => (
-          <Player
-            videoId={videoId}
-            rating={liked() ? "like" : (ratingData()?.rating ?? null)}
-            onClickLike={async () => {
-              setLiked(true);
-              try {
-                await like(videoId);
-              } catch {
-                return setLiked(false);
-              }
-            }}
-          />
+        {(data) => (
+          <div class="grid">
+            {data.map((videoId) => (
+              <Player
+                videoId={videoId}
+                rating={liked() ? "like" : (ratingData()?.rating ?? null)}
+                onClickLike={async () => {
+                  setLiked(true);
+                  try {
+                    await like(videoId);
+                  } catch {
+                    return setLiked(false);
+                  }
+                }}
+              />
+            ))}
+          </div>
         )}
       </Show>
     </>
