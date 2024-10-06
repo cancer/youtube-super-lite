@@ -14,7 +14,7 @@ type Tokens = {
   expiresIn: number;
 };
 
-export const createAuthClient: (credentials: {
+export const createAuthApiClient: (credentials: {
   clientId: string;
   clientSecret: string;
 }) => ApiClient = ({ clientId, clientSecret }) => {

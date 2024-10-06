@@ -1,19 +1,24 @@
-import { type AuthTokens } from "~/libs/auth-tokens/types";
 import { type Session } from "~/libs/session";
 
-export type AuthTokensClient = {
-  get: () => Promise<AuthTokens | null>;
+export type AuthSessions = {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+};
+
+export type AuthSessionsClient = {
+  get: () => Promise<AuthSessions | null>;
   clear: () => Promise<null>;
 };
-export const createAuthTokensClient = (
+export const createAuthSessionsClient = (
   getSession: () => Promise<Session>,
-): AuthTokensClient => {
+): AuthSessionsClient => {
   "use server";
   return {
     get: async () => {
       const session = await getSession();
       if (!("accessToken" in session.data)) return null;
-      return session.data as AuthTokens;
+      return session.data as AuthSessions;
     },
     clear: async () => {
       const session = await getSession();

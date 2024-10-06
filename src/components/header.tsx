@@ -8,7 +8,7 @@ import {
 } from "@solidjs/router";
 import { Match, Switch, type VoidComponent } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
-import { createAuthClient, revokeToken } from "~/libs/api/auth";
+import { createAuthApiClient, revokeToken } from "~/libs/api/auth";
 
 const getLoginStatus = cache(async () => {
   "use server";
@@ -19,7 +19,7 @@ const getLoginStatus = cache(async () => {
 const logoutAction = action(async () => {
   "use server";
   const ev = getRequestEvent()!;
-  const authClient = createAuthClient({
+  const authClient = createAuthApiClient({
     clientId: ev.locals.env.GAUTH_CLIENT_ID,
     clientSecret: ev.locals.env.GAUTH_CLIENT_SECRET,
   });

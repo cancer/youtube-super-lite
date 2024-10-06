@@ -1,26 +1,26 @@
 import { useSession } from "vinxi/http";
-import { type AuthTokens } from "~/libs/auth-tokens/types";
+import { type AuthSessions } from "~/libs/auth-sessions/client";
 
 // @deprecated use AuthTokenClient.get()
 export const getAuthTokens = async (args: { secret: string }) => {
   "use server";
-  const session = await _getSession<AuthTokens>(args);
+  const session = await _getSession<AuthSessions>(args);
   if (!("accessToken" in session.data)) return null;
   return session.data;
 };
 
 export const setAuthTokens = async (
-  tokens: AuthTokens,
+  tokens: AuthSessions,
   args: { secret: string },
 ) => {
   "use server";
-  const session = await _getSession<AuthTokens>(args);
+  const session = await _getSession<AuthSessions>(args);
   await session.update(() => ({ ...tokens }));
 };
 
 export const clearAuthTokens = async (args: { secret: string }) => {
   "use server";
-  const session = await _getSession<AuthTokens>(args);
+  const session = await _getSession<AuthSessions>(args);
   await session.clear();
 };
 

@@ -2,7 +2,7 @@ import { redirect } from "@solidjs/router";
 import { type APIEvent } from "@solidjs/start/server";
 import { getCookie } from "vinxi/http";
 import {
-  createAuthClient,
+  createAuthApiClient,
   exchangeTokens,
   refreshAccessToken,
   revokeToken,
@@ -14,7 +14,7 @@ const stateKey = "ytp_state";
 export const GET = async ({ request, locals: { env } }: APIEvent) => {
   "use server";
 
-  const authClient = createAuthClient({
+  const authClient = createAuthApiClient({
     clientId: env.GAUTH_CLIENT_ID!,
     clientSecret: env.GAUTH_CLIENT_SECRET!,
   });
