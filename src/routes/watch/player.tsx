@@ -42,6 +42,21 @@ export const Player: VoidComponent<Props> = (props) => {
       true,
     );
   });
+
+  onMount(() => {
+    window.addEventListener(
+      "keypress",
+      (ev) => {
+        if (ev.key !== " ") return;
+        ev.preventDefault();
+
+        if (player.getPlayerState() === YT.PlayerState.PLAYING)
+          player.pauseVideo();
+        else player.playVideo();
+      },
+      true,
+    );
+  });
   onCleanup(() => player.destroy?.());
 
   return (
