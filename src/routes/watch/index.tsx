@@ -13,7 +13,6 @@ import { getRequestEvent } from "solid-js/web";
 import {
   getVideoRating,
   postVideoRating,
-  type VideoRatingRequest,
   type VideoRatingResponse,
 } from "~/libs/api/youtube";
 import { Header } from "~/uis/header";
@@ -24,17 +23,23 @@ const Player = clientOnly(() =>
   import("./player").then(({ Player }) => ({ default: Player })),
 );
 
-const fetchRating = cache(async (params: VideoRatingRequest["GET"]) => {
+const fetchRatings = cache(async (params: { ids: string[] }) => {
   "use server";
   const { youtubeApi } = getRequestEvent()!.locals;
-  let rating: VideoRatingResponse["GET"];
+  let ratings: Map<string, VideoRatingResponse["GET"]>;
   try {
-    rating = await getVideoRating(youtubeApi)(params);
+    ratings = new Map(
+      await Promise.all(
+        params.ids.map((id) =>
+          getVideoRating(youtubeApi)({ id }).then((res) => [id, res] as const),
+        ),
+      ),
+    );
   } catch {
     return null;
   }
-  return rating;
-}, "rating");
+  return ratings;
+}, "ratings");
 
 const likeAction = action(async (id: string) => {
   "use server";
@@ -46,18 +51,24 @@ const likeAction = action(async (id: string) => {
 type Params = { videoIds: string };
 
 export const routes = {
-  load: () => {
+  load: async () => {
+    const { youtubeApi } = getRequestEvent()!.locals;
     const [{ videoIds }] = useSearchParams<Params>();
     if (!videoIds) return null;
 
-    return (
-      fetchRating({ id: videoIds })
-        // https://github.com/solidjs/solid-router/issues/399
-        .catch((err) => {
-          console.error(err);
-          return null;
-        })
-    );
+    const ratings = await Promise.all(
+      videoIds
+        .split(",")
+        .map((id) =>
+          getVideoRating(youtubeApi)({ id }).then((res) => [id, res] as const),
+        ),
+    ).catch(() => {
+      // https://github.com/solidjs/solid-router/issues/399
+      return null;
+    });
+    if (!ratings) return null;
+
+    return new Map(ratings);
   },
 } satisfies RouteDefinition;
 
@@ -70,13 +81,9 @@ const Watch = () => {
   );
   const [liked, setLiked] = createSignal(false);
   const isLoggedIn = createAsync(() => getLoginStatus(), { deferStream: true });
-  const ratingData = createAsync(
-    async () =>
-      searchParams.videoIds ? fetchRating({ id: searchParams.videoIds }) : null,
-    {
-      deferStream: true,
-    },
-  );
+  const ratings = createAsync(async () => fetchRatings({ ids: videoIds() }), {
+    deferStream: true,
+  });
 
   createEffect(() => {
     if (videoIds().length === 0) return;
@@ -155,7 +162,9 @@ const Watch = () => {
             {data.map((videoId) => (
               <Player
                 videoId={videoId}
-                rating={liked() ? "like" : (ratingData()?.rating ?? null)}
+                rating={
+                  liked() ? "like" : (ratings()?.get(videoId)?.rating ?? null)
+                }
                 onClickLike={async () => {
                   setLiked(true);
                   try {
