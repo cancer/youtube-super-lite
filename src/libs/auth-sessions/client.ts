@@ -25,16 +25,19 @@ export const createAuthSessionsClient = (
   "use server";
   return {
     get: async () => {
+      "use server";
       const session = await getSession();
       if (!("accessToken" in session.data)) return null;
       return session.data as AuthSession;
     },
     set: async (values) => {
+      "use server";
       const session = await getSession();
       await session.update(() => ({ ...values }));
       return null;
     },
     clear: async () => {
+      "use server";
       const session = await getSession();
       await session.clear();
       return null;

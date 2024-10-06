@@ -1,5 +1,6 @@
 import { type RequestMiddleware } from "@solidjs/start/middleware";
 import { getRequestEvent } from "solid-js/web";
+import { refreshAccessToken } from "~/libs/api/auth";
 import { type ApiClient, createApiClient } from "~/libs/api/youtube/client";
 
 declare global {
@@ -9,13 +10,27 @@ declare global {
 }
 
 export const youtubeApi: () => RequestMiddleware = () => async (event) => {
-  const ev = getRequestEvent()!;
+  const { auth, authClient } = getRequestEvent()!.locals;
   event.locals.youtubeApi = createApiClient({
-    getTokens() {
-      return ev.locals.auth.get();
+    async getTokens() {
+      "use server";
+      return auth.get();
     },
-    async revokeTokens() {
-      await ev.locals.auth.clear();
+    async clearTokens() {
+      "use server";
+      await auth.clear();
+    },
+    async refreshTokens(_refreshToken) {
+      "use server";
+      const { accessToken, refreshToken, expiresIn } =
+        await refreshAccessToken(authClient)(_refreshToken);
+      const tokens = {
+        accessToken,
+        refreshToken,
+        expiresAt: Date.now() + expiresIn * 1000,
+      };
+      await auth.set(tokens);
+      return tokens;
     },
   });
 };

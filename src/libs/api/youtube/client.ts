@@ -12,30 +12,39 @@ export type ApiClient = {
 
 export const createApiClient = ({
   getTokens,
-  revokeTokens,
+  clearTokens,
+  refreshTokens,
 }: {
   getTokens: () => Promise<AuthSession | null>;
-  revokeTokens: () => Promise<void>;
+  clearTokens: () => Promise<void>;
+  refreshTokens: (refreshToken: string) => Promise<AuthSession>;
 }): ApiClient => {
-  "use server";
   return {
     async request({ uri, method, params, body }) {
+      "use server";
       let tokens;
       try {
         tokens = await getTokens();
       } catch (err) {
-        console.error("Failed to load tokens from session.", err);
-        await revokeTokens().catch(() =>
-          console.error("Failed to revoke tokens."),
-        );
+        console.error("Failed to load tokens.", err);
         throw new TokenExpiredError();
       }
-      if (tokens === null || Date.now() > tokens.expiresAt) {
-        console.error("Retrieved tokens have expired.");
-        await revokeTokens().catch(() =>
-          console.error("Failed to revoke tokens."),
-        );
+      if (tokens === null) {
+        console.error("Could not retrieve tokens.");
         throw new TokenExpiredError();
+      }
+      if (Date.now() > tokens.expiresAt) {
+        console.error("Retrieved tokens have expired.");
+
+        try {
+          tokens = await refreshTokens(tokens.refreshToken);
+        } catch (err) {
+          console.error("Failed to refresh tokens.", err);
+          await clearTokens().catch(() =>
+            console.error("Failed to revoke tokens."),
+          );
+          throw new TokenExpiredError();
+        }
       }
 
       const url = new URL(`https://youtube.googleapis.com/youtube/v3${uri}`);
@@ -59,9 +68,7 @@ export const createApiClient = ({
             res.status === 401 &&
             json.error.errors.some((e: any) => e.reason === "authError")
           ) {
-            await revokeTokens().catch(() =>
-              console.error("Failed to revoke tokens."),
-            );
+            console.error("Failed to authenticate request.", json);
             throw new TokenExpiredError();
           }
           throw new Error(JSON.stringify(json));
