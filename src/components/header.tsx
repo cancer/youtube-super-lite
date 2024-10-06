@@ -1,5 +1,4 @@
 import {
-  A,
   action,
   cache,
   createAsync,
@@ -7,25 +6,14 @@ import {
   useAction,
   useNavigate,
 } from "@solidjs/router";
-import {
-  createEffect,
-  Match,
-  Show,
-  Switch,
-  type VoidComponent,
-} from "solid-js";
+import { Match, Switch, type VoidComponent } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
 import { createAuthClient, revokeToken } from "~/libs/api/auth";
-import { createAuthTokensClient } from "~/libs/auth-tokens/client";
-import { getSession } from "~/libs/session";
 
 const getLoginStatus = cache(async () => {
   "use server";
   const ev = getRequestEvent()!;
-  const authTokensClient = createAuthTokensClient(() =>
-    getSession(ev.locals.env.SESSION_SECRET),
-  );
-  return (await authTokensClient.get()) !== null;
+  return (await ev.locals.auth.get()) !== null;
 }, "loginStatus");
 
 const logoutAction = action(async () => {
@@ -35,14 +23,11 @@ const logoutAction = action(async () => {
     clientId: ev.locals.env.GAUTH_CLIENT_ID,
     clientSecret: ev.locals.env.GAUTH_CLIENT_SECRET,
   });
-  const authTokensClient = createAuthTokensClient(() =>
-    getSession(ev.locals.env.SESSION_SECRET),
-  );
 
-  const tokens = await authTokensClient.get();
+  const tokens = await ev.locals.auth.get();
   if (tokens !== null) await revokeToken(authClient)(tokens.accessToken);
 
-  await authTokensClient.clear();
+  await ev.locals.auth.clear();
   throw redirect("/");
 });
 

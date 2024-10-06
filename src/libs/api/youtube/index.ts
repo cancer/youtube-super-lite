@@ -9,8 +9,6 @@ import type {
   Video,
   VideoGetRatingResponse,
 } from "~/libs/api/youtube/types";
-import { createAuthTokensClient } from "~/libs/auth-tokens/client";
-import { getSession } from "~/libs/session";
 
 // XXX: ほんとはこんなところでやりたくないが、コンポーネント経由で渡そうとするとシリアライズの問題が出るのでできない
 // TODO: middlewareでやる
@@ -18,15 +16,12 @@ let memo: ApiClient | null = null;
 const client = () => {
   if (memo !== null) return memo;
   const ev = getRequestEvent()!;
-  const authTokensClient = createAuthTokensClient(() =>
-    getSession(ev.locals.env.SESSION_SECRET!),
-  );
   memo = createApiClient({
     getTokens() {
-      return authTokensClient.get();
+      return ev.locals.auth.get();
     },
     async revokeTokens() {
-      await authTokensClient.clear();
+      await ev.locals.auth.clear();
     },
   });
   return memo;
