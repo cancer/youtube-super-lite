@@ -5,6 +5,7 @@ import {
   type RouteDefinition,
   useAction,
   useParams,
+  useSearchParams,
 } from "@solidjs/router";
 import { clientOnly } from "@solidjs/start";
 import { createSignal, Show } from "solid-js";
@@ -42,11 +43,13 @@ const likeAction = action(async (id: string) => {
   return null;
 });
 
-type Params = { id: string };
+type Params = { videoId: string };
 
 export const routes = {
   load: () => {
-    const { id: videoId } = useParams<Params>();
+    const [{ videoId }] = useSearchParams<Params>();
+    if (!videoId) return null;
+
     return (
       fetchRating({ id: videoId })
         // https://github.com/solidjs/solid-router/issues/399
@@ -59,11 +62,14 @@ export const routes = {
 } satisfies RouteDefinition;
 
 const Watch = () => {
-  const params = useParams<Params>();
+  const [params] = useSearchParams<Params>();
   const isLoggedIn = createAsync(() => getLoginStatus(), { deferStream: true });
-  const ratingData = createAsync(async () => fetchRating({ id: params.id }), {
-    deferStream: true,
-  });
+  const ratingData = createAsync(
+    async () => (params.videoId ? fetchRating({ id: params.videoId }) : null),
+    {
+      deferStream: true,
+    },
+  );
   const like = useAction(likeAction);
   const [liked, setLiked] = createSignal(false);
 
@@ -77,7 +83,7 @@ const Watch = () => {
           </Show>
         }
       />
-      <Show when={params.id} fallback="Need videoId." keyed>
+      <Show when={params.videoId} fallback="Need videoId." keyed>
         {(videoId) => (
           <div class="w-full">
             <Player
