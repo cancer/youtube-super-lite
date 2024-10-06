@@ -8,6 +8,7 @@ import {
 } from "@solidjs/router";
 import { clientOnly } from "@solidjs/start";
 import { createSignal, Show } from "solid-js";
+import { getRequestEvent } from "solid-js/web";
 import {
   getVideoRating,
   postVideoRating,
@@ -21,9 +22,10 @@ const Player = clientOnly(() =>
 
 const fetchRating = cache(async (params: VideoRatingRequest["GET"]) => {
   "use server";
+  const { youtubeApi } = getRequestEvent()!.locals;
   let rating: VideoRatingResponse["GET"];
   try {
-    rating = await getVideoRating(params);
+    rating = await getVideoRating(youtubeApi)(params);
   } catch {
     return null;
   }
@@ -32,7 +34,8 @@ const fetchRating = cache(async (params: VideoRatingRequest["GET"]) => {
 
 const likeAction = action(async (id: string) => {
   "use server";
-  await postVideoRating({ id, rating: "like" });
+  const { youtubeApi } = getRequestEvent()!.locals;
+  await postVideoRating(youtubeApi)({ id, rating: "like" });
   return null;
 });
 

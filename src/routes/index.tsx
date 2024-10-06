@@ -1,11 +1,13 @@
 import { cache, createAsync, type RouteDefinition } from "@solidjs/router";
 import { For, Show } from "solid-js";
+import { getRequestEvent } from "solid-js/web";
 import { listMyChannels, type MyChannelsRequest } from "~/libs/api/youtube";
 
 const fetchChannels = cache(async (params: MyChannelsRequest["GET"]) => {
   "use server";
+  const { youtubeApi } = getRequestEvent()!.locals;
   try {
-    const { items } = await listMyChannels(params);
+    const { items } = await listMyChannels(youtubeApi)(params);
     return items;
   } catch (err) {
     console.debug(err);
