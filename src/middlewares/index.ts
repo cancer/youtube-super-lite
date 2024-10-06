@@ -1,10 +1,6 @@
 import { createMiddleware } from "@solidjs/start/middleware";
-import { getCloudflareProxy } from "~/libs/cloudflare";
+import { cloudflare } from "~/middlewares/cloudflare";
 
 export default createMiddleware({
-  async onRequest(event) {
-    const cloudflare = await getCloudflareProxy();
-    event.locals.env = cloudflare.env;
-    event.locals.ctx = cloudflare.ctx;
-  },
+  onRequest: [cloudflare()],
 });

@@ -6,12 +6,13 @@ type Env = {
   GAUTH_CLIENT_ID: string;
   GAUTH_CLIENT_SECRET: string;
 };
-export const getCloudflareProxy = async (): Promise<{
+export type CFProxy = {
   env: Env;
   ctx: PlatformProxy["ctx"];
-}> => {
+};
+export const getCloudflareProxy = async (): Promise<CFProxy> => {
   const proxy = getRequestEvent()?.nativeEvent.context.cloudflare ?? null;
-  
+
   // XXX: import.metaを直接見ないと、ビルド時にこのスコープが解析されてエラーになる
   if (import.meta.env.DEV) {
     // for remote
