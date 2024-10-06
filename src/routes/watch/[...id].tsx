@@ -9,6 +9,8 @@ import {
 import { clientOnly } from "@solidjs/start";
 import { createSignal, Show } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
+import { Header } from "~/components/header";
+import { getLoginStatus, LoginButton, LogoutButton } from "~/components/login-button";
 import {
   getVideoRating,
   postVideoRating,
@@ -57,6 +59,7 @@ export const routes = {
 
 const Watch = () => {
   const params = useParams<Params>();
+  const isLoggedIn = createAsync(() => getLoginStatus(), { deferStream: true });
   const ratingData = createAsync(async () => fetchRating({ id: params.id }), {
     deferStream: true,
   });
@@ -64,24 +67,33 @@ const Watch = () => {
   const [liked, setLiked] = createSignal(false);
 
   return (
-    <Show when={params.id} fallback="Need videoId." keyed>
-      {(videoId) => (
-        <div class="w-full">
-          <Player
-            videoId={videoId}
-            rating={liked() ? "like" : (ratingData()?.rating ?? null)}
-            onClickLike={async () => {
-              setLiked(true);
-              try {
-                await like(videoId);
-              } catch {
-                return setLiked(false);
-              }
-            }}
-          />
-        </div>
-      )}
-    </Show>
+    <>
+      <Header
+        Login={
+          <Show when={isLoggedIn()} fallback={<LoginButton />}>
+            <LogoutButton />
+          </Show>
+        }
+      />
+      <Show when={params.id} fallback="Need videoId." keyed>
+        {(videoId) => (
+          <div class="w-full">
+            <Player
+              videoId={videoId}
+              rating={liked() ? "like" : (ratingData()?.rating ?? null)}
+              onClickLike={async () => {
+                setLiked(true);
+                try {
+                  await like(videoId);
+                } catch {
+                  return setLiked(false);
+                }
+              }}
+            />
+          </div>
+        )}
+      </Show>
+    </>
   );
 };
 export default Watch;
