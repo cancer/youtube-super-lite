@@ -8,7 +8,7 @@ import {
   useSearchParams,
 } from "@solidjs/router";
 import { clientOnly } from "@solidjs/start";
-import { createSignal, Show } from "solid-js";
+import { createEffect, createSignal, Show } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
 import {
   getVideoRating,
@@ -18,7 +18,7 @@ import {
 } from "~/libs/api/youtube";
 import { Header } from "~/uis/header";
 import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
-import { MovieOpener } from "~/uis/movie-opener";
+import { WatchVideoFromYouTube } from "~/uis/watch-video-from-you-tube";
 
 const Player = clientOnly(() =>
   import("./player").then(({ Player }) => ({ default: Player })),
@@ -62,24 +62,64 @@ export const routes = {
 } satisfies RouteDefinition;
 
 const Watch = () => {
-  const [params] = useSearchParams<Params>();
+  const [searchParams, setSearchParams] = useSearchParams<Params>();
   const navigate = useNavigate();
 
+  const [videoId, setVideoId] = createSignal(searchParams.videoId);
   const [liked, setLiked] = createSignal(false);
   const isLoggedIn = createAsync(() => getLoginStatus(), { deferStream: true });
   const ratingData = createAsync(
-    async () => (params.videoId ? fetchRating({ id: params.videoId }) : null),
+    async () =>
+      searchParams.videoId ? fetchRating({ id: searchParams.videoId }) : null,
     {
       deferStream: true,
     },
   );
+
+  createEffect(() => {
+    if (videoId() === undefined) return;
+    if (videoId() === searchParams.videoId) return;
+    setSearchParams({ videoId: videoId() });
+  });
 
   const like = useAction(likeAction);
 
   return (
     <>
       <Header
-        LeftSide={null}
+        LeftSide={
+          <Show when={videoId()}>
+            <WatchVideoFromYouTube
+              onSubmit={(ev) => {
+                ev.preventDefault();
+                
+                const videoId =
+                  new URL(ev.currentTarget.url.value).searchParams.get("v") ??
+                  "";
+                
+                if (
+                  (ev.submitter as HTMLButtonElement).name === "openCurrentPage"
+                )
+                  setVideoId(videoId);
+                else {
+                  const params = new URLSearchParams({ videoId });
+                  navigate(`/watch/?${params.toString()}`);
+                }
+                ev.currentTarget.url.value = "";
+              }}
+              Action={
+                <>
+                  <button type="submit" name="openCurrentPage">
+                    👇 Add
+                  </button>
+                  <button type="submit" name="openNewPage">
+                    👉 Go
+                  </button>
+                </>
+              }
+            ></WatchVideoFromYouTube>
+          </Show>
+        }
         RightSide={
           <Show when={isLoggedIn()} fallback={<LoginButton />}>
             <LogoutButton />
@@ -87,12 +127,22 @@ const Watch = () => {
         }
       />
       <Show
-        when={params.videoId}
+        when={videoId()}
         fallback={
           <div class="grid justify-center items-center w-full aspect-ratio-video ">
-            <MovieOpener
-              openVideo={(videoId) => navigate(`/watch/?videoId=${videoId}`)}
-            />
+            <WatchVideoFromYouTube
+              onSubmit={(ev) => {
+                ev.preventDefault();
+                
+                const videoId =
+                  new URL(ev.currentTarget.url.value).searchParams.get("v") ??
+                  "";
+                
+                setVideoId(videoId);
+                ev.currentTarget.url.value = "";
+              }}
+              Action={<button type="submit">Watch</button>}
+            ></WatchVideoFromYouTube>
           </div>
         }
         keyed

@@ -9,7 +9,7 @@ import { getRequestEvent } from "solid-js/web";
 import { listMyChannels, type MyChannelsRequest } from "~/libs/api/youtube";
 import { Header } from "~/uis/header";
 import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
-import { MovieOpener } from "~/uis/movie-opener";
+import { WatchVideoFromYouTube } from "~/uis/watch-video-from-you-tube";
 
 const fetchChannels = cache(async (params: MyChannelsRequest["GET"]) => {
   "use server";
@@ -55,9 +55,19 @@ const Index = () => {
     <>
       <Header
         LeftSide={
-          <MovieOpener
-            openVideo={(videoId) => navigate(`/watch/?videoId=${videoId}`)}
-          />
+          <WatchVideoFromYouTube
+            onSubmit={(ev) => {
+              ev.preventDefault();
+
+              const videoId =
+                new URL(ev.currentTarget.url.value).searchParams.get("v") ?? "";
+              const params = new URLSearchParams({ videoId });
+
+              navigate(`/watch/?${params.toString()}`);
+              ev.currentTarget.url.value = "";
+            }}
+            Action={<button type="submit">Watch</button>}
+          ></WatchVideoFromYouTube>
         }
         RightSide={
           <Show when={isLoggedIn()} fallback={<LoginButton />}>
