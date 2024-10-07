@@ -27,6 +27,11 @@ export const GET = async ({ request, locals: { env, auth } }: APIEvent) => {
   if (tokens) {
     console.log(`Tokens retrieved. ${JSON.stringify(tokens)}`);
 
+    if (tokens.expiresAt > Date.now()) {
+      console.log("Access token is still valid.");
+      return redirect(url.searchParams.get("redirect_to") ?? "/");
+    }
+
     let refreshed;
     try {
       refreshed = await refreshAccessToken(authApiClient)(tokens.refreshToken);
