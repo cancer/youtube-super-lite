@@ -4,7 +4,6 @@ import {
   createAsync,
   type RouteDefinition,
   useAction,
-  useNavigate,
   useSearchParams,
 } from "@solidjs/router";
 import { clientOnly } from "@solidjs/start";
@@ -75,7 +74,6 @@ export const routes = {
 
 const Watch = () => {
   const [searchParams, setSearchParams] = useSearchParams<Params>();
-  const navigate = useNavigate();
 
   const [videoIds, setVideoIds] = createSignal<string[]>(
     searchParams.videoIds?.split(",") ?? [],
@@ -128,8 +126,7 @@ const Watch = () => {
                 if (
                   (ev.submitter as HTMLButtonElement).name === "openNewPage"
                 ) {
-                  const params = new URLSearchParams({ videoIds: parsed.id });
-                  navigate(`/watch/?${params.toString()}`);
+                  setVideoIds([parsed.id]);
                   ev.currentTarget.url.value = "";
                   return;
                 }
