@@ -16,10 +16,6 @@ export const youtubeApi: () => RequestMiddleware = () => async (event) => {
       "use server";
       return auth.get();
     },
-    async clearTokens() {
-      "use server";
-      await auth.clear();
-    },
     async refreshTokens(_refreshToken) {
       "use server";
       const { accessToken, refreshToken, expiresIn } =

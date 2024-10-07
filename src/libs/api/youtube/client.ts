@@ -12,11 +12,9 @@ export type ApiClient = {
 
 export const createApiClient = ({
   getTokens,
-  clearTokens,
   refreshTokens,
 }: {
   getTokens: () => Promise<AuthSession | null>;
-  clearTokens: () => Promise<void>;
   refreshTokens: (refreshToken: string) => Promise<AuthSession>;
 }): ApiClient => {
   return {
@@ -40,9 +38,6 @@ export const createApiClient = ({
           tokens = await refreshTokens(tokens.refreshToken);
         } catch (err) {
           console.error("Failed to refresh tokens.", err);
-          await clearTokens().catch(() =>
-            console.error("Failed to revoke tokens."),
-          );
           throw new TokenExpiredError();
         }
       }
