@@ -10,38 +10,16 @@ export type ApiClient = {
   }) => Promise<T>;
 };
 
-export const createApiClient = ({
-  getTokens,
-  refreshTokens,
+export const createApiClient = async ({
+  authenticate,
 }: {
-  getTokens: () => Promise<AuthSession | null>;
-  refreshTokens: (refreshToken: string) => Promise<AuthSession>;
-}): ApiClient => {
+  authenticate: () => Promise<AuthSession>;
+}): Promise<ApiClient> => {
   return {
     async request({ uri, method, params, body }) {
       "use server";
-      let tokens;
-      try {
-        tokens = await getTokens();
-      } catch (err) {
-        console.error("Failed to load tokens.", err);
-        throw new TokenExpiredError();
-      }
-      if (tokens === null) {
-        console.error("Could not retrieve tokens.");
-        throw new TokenExpiredError();
-      }
-      if (Date.now() > tokens.expiresAt) {
-        console.error("Retrieved tokens have expired.");
 
-        try {
-          tokens = await refreshTokens(tokens.refreshToken);
-        } catch (err) {
-          console.error("Failed to refresh tokens.", err);
-          throw new TokenExpiredError();
-        }
-      }
-
+      const tokens = await authenticate();
       const url = new URL(`https://youtube.googleapis.com/youtube/v3${uri}`);
       Object.entries(params ?? {}).forEach(([key, value]) =>
         url.searchParams.set(key, String(value)),
