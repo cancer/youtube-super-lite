@@ -96,17 +96,14 @@ const Watch = () => {
   const like = useAction(likeAction);
 
   // Tailwind的なCSSは、動的にclass文字列を作って使うことができないらしい
-  const gridColumns = new Map([
-    [1, "grid-cols-1"],
-    [2, "grid-cols-2"],
-    [3, "grid-cols-3"],
-    [4, "grid-cols-4"],
-  ]);
-  const gridRows = new Map([
-    [1, "grid-rows-1"],
-    [2, "grid-rows-2"],
-    [3, "grid-rows-3"],
-    [4, "grid-rows-4"],
+  // e.g.)
+  //   NG class={`grid grid-cols-${divisions()}`}
+  //   OK class={`grid ${gridCols.get(divisions())}`}
+  const squareDivisionsMap = new Map([
+    [1, "grid-cols-1 grid-rows-1"],
+    [2, "grid-cols-2 grid-rows-2"],
+    [3, "grid-cols-3 grid-rows-3"],
+    [4, "grid-cols-4 grid-rows-4"],
   ]);
 
   return (
@@ -182,9 +179,7 @@ const Watch = () => {
         keyed
       >
         {(data) => (
-          <div
-            class={`grid gap-2 ${gridColumns.get(divisions())} ${gridRows.get(divisions())}`}
-          >
+          <div class={`grid gap-2 ${squareDivisionsMap.get(divisions())}`}>
             {data.map((videoId) => (
               <Player
                 videoId={videoId}
