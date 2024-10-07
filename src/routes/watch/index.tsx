@@ -181,7 +181,7 @@ const Watch = () => {
       >
         {(data) => (
           <div
-            class={`grid ${gridColumns.get(divisions())} ${gridRows.get(divisions())}`}
+            class={`grid gap-2 ${gridColumns.get(divisions())} ${gridRows.get(divisions())}`}
           >
             {data.map((videoId) => (
               <Player

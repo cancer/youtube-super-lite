@@ -63,17 +63,17 @@ export const Player: VoidComponent<Props> = (props) => {
   onCleanup(() => player.destroy?.());
 
   return (
-    <div class="grid grid-cols-2 grid-rows-2 gap-2 w-full">
+    <div class="grid grid-cols-2 gap-2 w-full">
       <div ref={containerEl!} class="col-span-full grid-row-1">
         <div ref={playerEl!} />
       </div>
-      <Show when={props.rating}>
-        {(data) => (
-          <div class="grid-row-2">
+      <div class="grid-row-2">
+        <Show when={props.rating}>
+          {(data) => (
             <LikeButton liked={data() === "like"} onClick={props.onClickLike} />
-          </div>
-        )}
-      </Show>
+          )}
+        </Show>
+      </div>
       <div class="grid-row-2 flex justify-end items-start gap-2 pt-2">
         <button onClick={() => player.setPlaybackRate(1)}>x1.0</button>
         <button onClick={() => player.setPlaybackRate(1.5)}>x1.5</button>
