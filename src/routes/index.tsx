@@ -7,6 +7,7 @@ import {
 import { For, Show } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
 import { listMyChannels, type MyChannelsRequest } from "~/libs/api/youtube";
+import { parseYouTubeUrl } from "~/libs/url";
 import { Header } from "~/uis/header";
 import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
 import { WatchVideoFromYouTube } from "~/uis/watch-video-from-you-tube";
@@ -59,10 +60,10 @@ const Index = () => {
             onSubmit={(ev) => {
               ev.preventDefault();
 
-              const videoId =
-                new URL(ev.currentTarget.url.value).searchParams.get("v") ?? "";
-              const params = new URLSearchParams({ videoIds: videoId });
+              const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
+              if (parsed.type !== "video") return;
 
+              const params = new URLSearchParams({ videoIds: parsed.id });
               navigate(`/watch/?${params.toString()}`);
               ev.currentTarget.url.value = "";
             }}

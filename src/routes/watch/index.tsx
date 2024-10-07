@@ -15,6 +15,7 @@ import {
   postVideoRating,
   type VideoRatingResponse,
 } from "~/libs/api/youtube";
+import { parseYouTubeUrl } from "~/libs/url";
 import { Header } from "~/uis/header";
 import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
 import { WatchVideoFromYouTube } from "~/uis/watch-video-from-you-tube";
@@ -121,19 +122,22 @@ const Watch = () => {
 
                 if (ev.currentTarget.url.value === "") return;
 
-                const videoId =
-                  new URL(ev.currentTarget.url.value).searchParams.get("v") ??
-                  "";
+                const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
+                if (parsed.type !== "video") return;
+
                 if (
-                  (ev.submitter as HTMLButtonElement).name === "openCurrentPage"
+                  (ev.submitter as HTMLButtonElement).name === "openNewPage"
                 ) {
-                  if (videoIds().length === 16)
-                    return console.warn("Maximum number of videos reached.");
-                  setVideoIds((prev) => [...prev, videoId]);
-                } else {
-                  const params = new URLSearchParams({ videoIds: videoId });
+                  const params = new URLSearchParams({ videoIds: parsed.id });
                   navigate(`/watch/?${params.toString()}`);
+                  ev.currentTarget.url.value = "";
+                  return;
                 }
+
+                if (videoIds().length === 16)
+                  return console.warn("Maximum number of videos reached.");
+
+                setVideoIds((prev) => [...prev, parsed.id]);
                 ev.currentTarget.url.value = "";
               }}
               Action={
@@ -164,13 +168,14 @@ const Watch = () => {
                 ev.preventDefault();
 
                 if (ev.currentTarget.url.value === "") return;
+
                 if (videoIds().length === 16)
                   return console.warn("Maximum number of videos reached.");
 
-                const videoId =
-                  new URL(ev.currentTarget.url.value).searchParams.get("v") ??
-                  "";
-                setVideoIds((prev) => [...prev, videoId]);
+                const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
+                if (parsed.type !== "video") return;
+
+                setVideoIds((prev) => [...prev, parsed.id]);
                 ev.currentTarget.url.value = "";
               }}
               Action={<button type="submit">Watch</button>}
