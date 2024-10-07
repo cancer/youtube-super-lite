@@ -1,10 +1,4 @@
-import {
-  createSignal,
-  onCleanup,
-  onMount,
-  Show,
-  type VoidComponent,
-} from "solid-js";
+import { onCleanup, onMount, Show, type VoidComponent } from "solid-js";
 import { initPlayer, loadPlayer } from "~/libs/youtube-player";
 import { LikeButton } from "~/routes/watch/like-button";
 
@@ -39,6 +33,7 @@ export const Player: VoidComponent<Props> = (props) => {
     window.addEventListener(
       "resize",
       () => {
+        if (!player) return;
         const { width } = containerEl.getBoundingClientRect();
         player.setSize(width, width * 0.5625);
       },
@@ -50,6 +45,7 @@ export const Player: VoidComponent<Props> = (props) => {
       "keypress",
       (ev) => {
         if (ev.key !== " ") return;
+        if (!player) return;
         ev.preventDefault();
 
         if (player.getPlayerState() === YT.PlayerState.PLAYING)
@@ -60,7 +56,7 @@ export const Player: VoidComponent<Props> = (props) => {
     );
   });
 
-  onCleanup(() => player.destroy?.());
+  onCleanup(() => player?.destroy());
 
   return (
     <div class="grid grid-cols-2 gap-2 w-full">
