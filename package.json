@@ -1,5 +1,5 @@
 {
-  "name": "example-with-unocss",
+  "name": "youtube-super-lite",
   "type": "module",
   "scripts": {
     "dev": "vinxi dev",
