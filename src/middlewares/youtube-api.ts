@@ -1,5 +1,4 @@
 import { type RequestMiddleware } from "@solidjs/start/middleware";
-import { getRequestEvent } from "solid-js/web";
 import { createAuthApiClient, refreshAccessToken } from "~/libs/api/auth";
 import { type ApiClient, createApiClient } from "~/libs/api/youtube/client";
 import { TokenExpiredError } from "~/libs/api/youtube/errors";
@@ -20,7 +19,7 @@ export const youtubeApi: () => RequestMiddleware = () => async (event) => {
   event.locals.youtubeApi = await createApiClient({
     async authenticate() {
       "use server";
-      
+
       let tokens: AuthSession | null;
       try {
         tokens = await auth.get();

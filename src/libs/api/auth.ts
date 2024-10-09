@@ -18,7 +18,6 @@ export const createAuthApiClient: (credentials: {
   clientId: string;
   clientSecret: string;
 }) => ApiClient = ({ clientId, clientSecret }) => {
-  "use server";
   return {
     request: async ({ url: _url, body: _body, params, headers }) => {
       const url = new URL(_url);

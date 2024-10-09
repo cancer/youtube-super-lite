@@ -22,7 +22,6 @@ export type AuthSessionsClient = {
 export const createAuthSessionsClient = (
   getSession: () => Promise<Session>,
 ): AuthSessionsClient => {
-  "use server";
   return {
     get: async () => {
       "use server";
