@@ -20,30 +20,30 @@ export const youtubeApi: () => RequestMiddleware = () => async (event) => {
     async authenticate() {
       "use server";
 
-      let tokens: AuthSession | null;
+      let session: AuthSession | null;
       try {
-        tokens = await auth.get();
+        session = await auth.get();
       } catch (err) {
-        console.error("Failed to load tokens.", err);
+        console.error("Failed to load session.", err);
         throw new TokenExpiredError();
       }
-      if (tokens === null) {
-        console.error("Could not retrieve tokens.");
+      if (session === null) {
+        console.error("Session not found.");
         throw new TokenExpiredError();
       }
-      if (Date.now() > tokens.expiresAt) {
-        console.error("Retrieved tokens have expired.");
+      if (Date.now() > session.expiresAt) {
+        console.error("Session has expired.");
 
         try {
           const refreshed = await refreshAccessToken(authApiClient)(
-            tokens.refreshToken,
+            session.refreshToken,
           );
-          tokens = {
+          session = {
             accessToken: refreshed.accessToken,
-            refreshToken: tokens.refreshToken,
+            refreshToken: session.refreshToken,
             expiresAt: Date.now() + refreshed.expiresIn * 1000,
           };
-          await auth.set(tokens);
+          await auth.set(session);
         } catch (err) {
           console.error("Failed to refresh tokens.", err);
           await auth.clear();
@@ -51,7 +51,7 @@ export const youtubeApi: () => RequestMiddleware = () => async (event) => {
         }
       }
 
-      return tokens;
+      return session;
     },
   });
 };
