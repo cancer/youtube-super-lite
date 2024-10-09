@@ -19,24 +19,25 @@ export type AuthSessionsClient = {
   set: (values: AuthSession) => Promise<null>;
   clear: () => Promise<null>;
 };
-export const createAuthSessionsClient = (
-  getSession: () => Promise<Session>,
-): AuthSessionsClient => {
-  "use server";
+export const createAuthSessionsClient = ({
+  getSession,
+}: {
+  getSession: () => Promise<Session>;
+}): AuthSessionsClient => {
   return {
-    get: async () => {
+    async get() {
       "use server";
       const session = await getSession();
       if (!("accessToken" in session.data)) return null;
       return session.data as AuthSession;
     },
-    set: async (values) => {
+    async set(values) {
       "use server";
       const session = await getSession();
       await session.update(() => ({ ...values }));
       return null;
     },
-    clear: async () => {
+    async clear() {
       "use server";
       const session = await getSession();
       await session.clear();
