@@ -46,6 +46,7 @@ export const youtubeApi: () => RequestMiddleware = () => async (event) => {
           await auth.set(tokens);
         } catch (err) {
           console.error("Failed to refresh tokens.", err);
+          await auth.clear();
           throw new TokenExpiredError();
         }
       }

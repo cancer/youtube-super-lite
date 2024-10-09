@@ -12,10 +12,11 @@ declare global {
 }
 
 export const auth: () => RequestMiddleware = () => async (event) => {
-  (event.locals as RequestEventLocals).auth = createAuthSessionsClient(() =>
-    useSession({
-      name: "ytp_session",
-      password: event.locals.env.SESSION_SECRET,
-    }),
-  );
+  (event.locals as RequestEventLocals).auth = createAuthSessionsClient({
+    getSession: () =>
+      useSession({
+        name: "ytp_session",
+        password: event.locals.env.SESSION_SECRET,
+      }),
+  });
 };
