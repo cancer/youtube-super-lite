@@ -107,99 +107,109 @@ const Watch = () => {
   ]);
 
   return (
-    <>
-      <Header
-        LeftSide={
-          <Show when={videoIds().length > 0}>
-            <WatchVideoFromYouTube
-              onSubmit={(ev) => {
-                ev.preventDefault();
+    <div class="w-screen h-screen grid grid-rows-[max-content_1fr] justify-center">
+      <div class="w-screen h-max col-span-full">
+        <Header
+          LeftSide={
+            <Show when={videoIds().length > 0}>
+              <WatchVideoFromYouTube
+                onSubmit={(ev) => {
+                  ev.preventDefault();
 
-                if (ev.currentTarget.url.value === "") return;
+                  if (ev.currentTarget.url.value === "") return;
 
-                const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
-                if (parsed.type !== "video") return;
+                  const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
+                  if (parsed.type !== "video") return;
 
-                if (
-                  (ev.submitter as HTMLButtonElement).name === "openNewPage"
-                ) {
-                  setVideoIds([parsed.id]);
-                  ev.currentTarget.url.value = "";
-                  return;
-                }
-
-                if (videoIds().length === 16)
-                  return console.warn("Maximum number of videos reached.");
-
-                setVideoIds((prev) => [...prev, parsed.id]);
-                ev.currentTarget.url.value = "";
-              }}
-              Action={
-                <>
-                  <button type="submit" name="openCurrentPage">
-                    👇 Add
-                  </button>
-                  <button type="submit" name="openNewPage">
-                    👉 Go
-                  </button>
-                </>
-              }
-            ></WatchVideoFromYouTube>
-          </Show>
-        }
-        RightSide={
-          <Show when={isLoggedIn()} fallback={<LoginButton />}>
-            <LogoutButton />
-          </Show>
-        }
-      />
-      <Show
-        when={videoIds().length > 0 && videoIds()}
-        fallback={
-          <div class="grid justify-center items-center w-full aspect-ratio-video ">
-            <WatchVideoFromYouTube
-              onSubmit={(ev) => {
-                ev.preventDefault();
-
-                if (ev.currentTarget.url.value === "") return;
-
-                if (videoIds().length === 16)
-                  return console.warn("Maximum number of videos reached.");
-
-                const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
-                if (parsed.type !== "video") return;
-
-                setVideoIds((prev) => [...prev, parsed.id]);
-                ev.currentTarget.url.value = "";
-              }}
-              Action={<button type="submit">Watch</button>}
-            ></WatchVideoFromYouTube>
-          </div>
-        }
-        keyed
-      >
-        {(data) => (
-          <div class={`grid gap-2 ${squareDivisionsMap.get(divisions())}`}>
-            {data.map((videoId) => (
-              <Player
-                videoId={videoId}
-                rating={
-                  liked() ? "like" : (ratings()?.get(videoId)?.rating ?? null)
-                }
-                onClickLike={async () => {
-                  setLiked(true);
-                  try {
-                    await like(videoId);
-                  } catch {
-                    return setLiked(false);
+                  if (
+                    (ev.submitter as HTMLButtonElement).name === "openNewPage"
+                  ) {
+                    setVideoIds([parsed.id]);
+                    ev.currentTarget.url.value = "";
+                    return;
                   }
+
+                  if (videoIds().length === 16)
+                    return console.warn("Maximum number of videos reached.");
+
+                  setVideoIds((prev) => [...prev, parsed.id]);
+                  ev.currentTarget.url.value = "";
                 }}
-              />
-            ))}
-          </div>
-        )}
-      </Show>
-    </>
+                Action={
+                  <>
+                    <button type="submit" name="openCurrentPage">
+                      👇 Add
+                    </button>
+                    <button type="submit" name="openNewPage">
+                      👉 Go
+                    </button>
+                  </>
+                }
+              ></WatchVideoFromYouTube>
+            </Show>
+          }
+          RightSide={
+            <Show when={isLoggedIn()} fallback={<LoginButton />}>
+              <LogoutButton />
+            </Show>
+          }
+        />
+      </div>
+      <div class="grid justify-center">
+        <div class="grid justify-center items-center h-full">
+          <Show
+            when={videoIds().length > 0 && videoIds()}
+            fallback={
+              <div class="grid justify-center items-center w-max h-max">
+                <WatchVideoFromYouTube
+                  onSubmit={(ev) => {
+                    ev.preventDefault();
+
+                    if (ev.currentTarget.url.value === "") return;
+
+                    if (videoIds().length === 16)
+                      return console.warn("Maximum number of videos reached.");
+
+                    const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
+                    if (parsed.type !== "video") return;
+
+                    setVideoIds((prev) => [...prev, parsed.id]);
+                    ev.currentTarget.url.value = "";
+                  }}
+                  Action={<button type="submit">Watch</button>}
+                ></WatchVideoFromYouTube>
+              </div>
+            }
+            keyed
+          >
+            {(data) => (
+              <div
+                class={`grid gap-2 ${squareDivisionsMap.get(divisions())} justify-items-center w-full h-full aspect-ratio-video`}
+              >
+                {data.map((videoId) => (
+                  <Player
+                    videoId={videoId}
+                    rating={
+                      liked()
+                        ? "like"
+                        : (ratings()?.get(videoId)?.rating ?? null)
+                    }
+                    onClickLike={async () => {
+                      setLiked(true);
+                      try {
+                        await like(videoId);
+                      } catch {
+                        return setLiked(false);
+                      }
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </Show>
+        </div>
+      </div>
+    </div>
   );
 };
 export default Watch;
