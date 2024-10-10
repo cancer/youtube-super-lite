@@ -6,7 +6,7 @@ type Props = {
 };
 export const Header: VoidComponent<Props> = (props) => {
   return (
-    <div class="col-span-full flex justify-between items-center">
+    <div class="flex justify-between items-center">
       <div>{props.LeftSide}</div>
       <div>{props.RightSide}</div>
     </div>
