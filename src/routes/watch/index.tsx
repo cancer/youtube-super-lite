@@ -79,7 +79,7 @@ const Watch = () => {
     searchParams.videoIds?.split(",") ?? [],
   );
   const [liked, setLiked] = createSignal(false);
-  const isLoggedIn = createAsync(() => getLoginStatus(), { deferStream: true });
+  const isLoggedIn = createAsync(() => getLoginStatus());
   const ratings = createAsync(async () => fetchRatings({ ids: videoIds() }), {
     deferStream: true,
   });
