@@ -46,7 +46,7 @@ export const route = {
 const Index = () => {
   const navigate = useNavigate();
 
-  const isLoggedIn = createAsync(() => getLoginStatus(), { deferStream: true });
+  const isLoggedIn = createAsync(() => getLoginStatus());
   const channels = createAsync(
     () => fetchChannels({ part: ["snippet"], maxResults: 50 }),
     { deferStream: true },

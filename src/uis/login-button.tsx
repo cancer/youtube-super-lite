@@ -1,22 +1,17 @@
-import {
-  action,
-  cache,
-  redirect,
-  useAction,
-  useNavigate,
-} from "@solidjs/router";
+import { action, redirect, useAction } from "@solidjs/router";
 import { getRequestEvent } from "solid-js/web";
 import { createAuthApiClient, revokeToken } from "~/libs/api/auth";
 
-export const getLoginStatus = cache(async () => {
+export const getLoginStatus = async () => {
   "use server";
   const ev = getRequestEvent()!;
   return (await ev.locals.auth.get()) !== null;
-}, "loginStatus");
+};
 
 export const LoginButton = () => {
-  const navigate = useNavigate();
-  return <button onClick={() => navigate("/login")}>Login</button>;
+  return (
+    <button onClick={() => window.location.assign("/login")}>Login</button>
+  );
 };
 
 const logoutAction = action(async () => {
