@@ -2,7 +2,6 @@ import {
   action,
   cache,
   createAsync,
-  redirect,
   type RouteDefinition,
   useAction,
   useSearchParams,
@@ -15,6 +14,8 @@ import {
   postVideoRating,
   type VideoRatingResponse,
 } from "~/libs/api/youtube";
+import { isTokenExpired } from "~/libs/api/youtube/errors";
+import { failed, pending, type QueryResult, succeed } from "~/libs/query";
 import { parseYouTubeUrl } from "~/libs/url";
 import { Header } from "~/uis/header";
 import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
@@ -24,23 +25,33 @@ const Player = clientOnly(() =>
   import("./player").then(({ Player }) => ({ default: Player })),
 );
 
-const fetchRatings = cache(async (params: { ids: string[] }) => {
-  "use server";
-  const { youtubeApi } = getRequestEvent()!.locals;
-  let ratings: Map<string, VideoRatingResponse["GET"]>;
-  try {
-    ratings = new Map(
-      await Promise.all(
-        params.ids.map((id) =>
-          getVideoRating(youtubeApi)({ id }).then((res) => [id, res] as const),
+const fetchRatings = cache(
+  async (params: {
+    ids: string[];
+  }): Promise<
+    QueryResult<{ ratings: Map<string, VideoRatingResponse["GET"]> }>
+  > => {
+    "use server";
+    const event = getRequestEvent()!;
+    let ratings: Map<string, VideoRatingResponse["GET"]>;
+    try {
+      ratings = new Map(
+        await Promise.all(
+          params.ids.map((id) =>
+            getVideoRating(event.locals.youtubeApi)({ id }).then(
+              (res) => [id, res] as const,
+            ),
+          ),
         ),
-      ),
-    );
-  } catch (e) {
-    return redirect("/login");
-  }
-  return ratings;
-}, "ratings");
+      );
+    } catch (e) {
+      return failed(e);
+    }
+
+    return succeed({ ratings });
+  },
+  "ratings",
+);
 
 const likeAction = action(async (id: string) => {
   "use server";
@@ -53,23 +64,10 @@ type Params = { videoIds: string };
 
 export const routes = {
   load: async () => {
-    const { youtubeApi } = getRequestEvent()!.locals;
     const [{ videoIds }] = useSearchParams<Params>();
-    if (!videoIds) return null;
-
-    const ratings = await Promise.all(
-      videoIds
-        .split(",")
-        .map((id) =>
-          getVideoRating(youtubeApi)({ id }).then((res) => [id, res] as const),
-        ),
-    ).catch(() => {
-      // https://github.com/solidjs/solid-router/issues/399
-      return null;
-    });
-    if (!ratings) return null;
-
-    return new Map(ratings);
+    if (!videoIds)
+      return { done: true, success: true, data: { ratings: null } };
+    return fetchRatings({ ids: videoIds.split(",") });
   },
 } satisfies RouteDefinition;
 
@@ -80,18 +78,24 @@ const Watch = () => {
     searchParams.videoIds?.split(",") ?? [],
   );
   const [liked, setLiked] = createSignal(false);
+
   const isLoggedIn = createAsync(() => getLoginStatus());
-  const ratings = createAsync(async () => fetchRatings({ ids: videoIds() }), {
-    deferStream: true,
-  });
+  const ratingsQuery = createAsync(
+    async () => fetchRatings({ ids: videoIds() }),
+    {
+      deferStream: true,
+      initialValue: pending(),
+    },
+  );
 
   const divisions = createMemo(() => Math.ceil(Math.sqrt(videoIds().length)));
 
-  createEffect(() => {
-    if (videoIds().length === 0) return;
-    // 変化がないのにsearchParamsを更新すると、`/`にリダイレクトされてしまう
-    if (videoIds().join(",") === searchParams.videoIds) return;
-    setSearchParams({ videoIds: videoIds().join(",") });
+  const ratings = createMemo(() => {
+    const query = ratingsQuery()!;
+    if (!query.succeed) return new Map();
+    return new Map(
+      videoIds().map((id) => [id, query.data.ratings.get(id)?.rating ?? null]),
+    );
   });
 
   const like = useAction(likeAction);
@@ -106,6 +110,22 @@ const Watch = () => {
     [3, "grid-cols-3 grid-rows-3"],
     [4, "grid-cols-4 grid-rows-4"],
   ]);
+
+  createEffect(() => {
+    const query = ratingsQuery()!;
+    if (!query.done) return;
+    if (query.succeed) return;
+    if (!isTokenExpired(query.error)) return;
+
+    location.assign(`/login?redirect_to=${location.href}`);
+  });
+
+  createEffect(() => {
+    if (videoIds().length === 0) return;
+    // 変化がないのにsearchParamsを更新すると、`/`にリダイレクトされてしまう
+    if (videoIds().join(",") === searchParams.videoIds) return;
+    setSearchParams({ videoIds: videoIds().join(",") });
+  });
 
   return (
     <div class="w-screen h-screen grid grid-rows-[max-content_1fr] justify-center">
@@ -191,11 +211,7 @@ const Watch = () => {
                 {data.map((videoId) => (
                   <Player
                     videoId={videoId}
-                    rating={
-                      liked()
-                        ? "like"
-                        : (ratings()?.get(videoId)?.rating ?? null)
-                    }
+                    rating={liked() ? "like" : (ratings().get(videoId) ?? null)}
                     onClickLike={async () => {
                       setLiked(true);
                       try {

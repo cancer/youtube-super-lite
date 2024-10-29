@@ -1,4 +1,4 @@
-import { redirect } from "@solidjs/router";
+import { redirect, reload } from "@solidjs/router";
 import type { APIEvent } from "@solidjs/start/server";
 import { getCookie } from "vinxi/http";
 import {
@@ -9,7 +9,8 @@ import {
 } from "~/libs/api/auth";
 import { serialize } from "~/libs/cookie";
 
-const stateKey = "ytp_state";
+const stateCookieKey = "ytp_state";
+const redirectCookieKey = "ytp_redirect_to";
 export const GET = async ({ request, locals: { env, auth } }: APIEvent) => {
   "use server";
 
@@ -25,12 +26,14 @@ export const GET = async ({ request, locals: { env, auth } }: APIEvent) => {
     tokens = await auth.get();
   } catch {}
   if (tokens) {
-    console.log(`Tokens retrieved. ${JSON.stringify(tokens)}`);
+    console.log(`Session retrieved. ${JSON.stringify(tokens)}`);
 
     if (tokens.expiresAt > Date.now()) {
       console.log("Access token is still valid.");
-      return redirect(url.searchParams.get("redirect_to") ?? "/");
+      return redirect(getCookie(redirectCookieKey) ?? "/");
     }
+
+    console.log("Try to refresh access token.");
 
     let refreshed;
     try {
@@ -44,7 +47,7 @@ export const GET = async ({ request, locals: { env, auth } }: APIEvent) => {
       await auth
         .clear()
         .catch((e: Error) => console.error("Failed to clear session: ", e));
-      return redirect(`/login${url.search}`);
+      return reload();
     }
 
     try {
@@ -61,12 +64,14 @@ export const GET = async ({ request, locals: { env, auth } }: APIEvent) => {
       });
     }
 
-    return redirect(url.searchParams.get("redirect_to") ?? "/");
+    return redirect(getCookie(redirectCookieKey) ?? "/");
   }
 
   // for callback
   if (url.searchParams.has("state")) {
-    if (url.searchParams.get("state") !== getCookie(stateKey)) {
+    console.info("Attempt to exchange tokens.");
+
+    if (url.searchParams.get("state") !== getCookie(stateCookieKey)) {
       console.error("Invalid state");
       return redirect("/error", { status: 400 });
     }
@@ -75,8 +80,6 @@ export const GET = async ({ request, locals: { env, auth } }: APIEvent) => {
       console.error("Invalid code");
       return redirect("/error", { status: 400 });
     }
-
-    console.info("Attempt to exchange tokens.");
 
     let tokens;
     try {
@@ -114,7 +117,7 @@ export const GET = async ({ request, locals: { env, auth } }: APIEvent) => {
       });
     }
 
-    return redirect("/", { status: 302 });
+    return redirect(getCookie(redirectCookieKey) ?? "/", { status: 302 });
   }
 
   // for initial login
@@ -133,16 +136,29 @@ export const GET = async ({ request, locals: { env, auth } }: APIEvent) => {
   params.append("access_type", "offline");
   params.append("prompt", "select_account");
 
+  const headers = new Headers();
+  headers.append(
+    "Set-Cookie",
+    serialize(stateCookieKey, state, {
+      "Max-Age": 300,
+      HttpOnly: true,
+      Path: "/",
+      SameSite: "Lax",
+      Secure: true,
+    }),
+  );
+  headers.append(
+    "Set-Cookie",
+    serialize(redirectCookieKey, url.searchParams.get("redirect_to") ?? "/", {
+      "Max-Age": 300,
+      HttpOnly: true,
+      Path: "/",
+      SameSite: "Lax",
+      Secure: true,
+    }),
+  );
   return redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`, {
     status: 302,
-    headers: {
-      "Set-Cookie": serialize(stateKey, state, {
-        "Max-Age": 300,
-        HttpOnly: true,
-        Path: "/",
-        SameSite: "Lax",
-        Secure: true,
-      }),
-    },
+    headers,
   });
 };
