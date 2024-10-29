@@ -1,10 +1,10 @@
-import { onCleanup, onMount, Show, type VoidComponent } from "solid-js";
+import { onCleanup, onMount, type VoidComponent } from "solid-js";
 import { initPlayer, loadPlayer } from "~/libs/youtube-player";
 import { LikeButton } from "~/routes/watch/like-button";
 
 type Props = {
   videoId: string;
-  rating: string | null;
+  isLike: boolean;
   onClickLike: () => void;
 };
 export const Player: VoidComponent<Props> = (props) => {
@@ -52,11 +52,7 @@ export const Player: VoidComponent<Props> = (props) => {
         <div ref={playerEl!} />
       </div>
       <div class="grid-row-2">
-        <Show when={props.rating}>
-          {(data) => (
-            <LikeButton liked={data() === "like"} onClick={props.onClickLike} />
-          )}
-        </Show>
+        <LikeButton liked={props.isLike} onClick={props.onClickLike} />
       </div>
       <div class="w-full grid-row-2">
         <div class="flex justify-end items-start gap-2 pt-2">

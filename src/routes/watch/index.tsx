@@ -9,11 +9,7 @@ import {
 import { clientOnly } from "@solidjs/start";
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
-import {
-  getVideoRating,
-  postVideoRating,
-  type VideoRatingResponse,
-} from "~/libs/api/youtube";
+import { getVideoRating, postVideoRating } from "~/libs/api/youtube";
 import { isTokenExpired } from "~/libs/api/youtube/errors";
 import { failed, pending, type QueryResult, succeed } from "~/libs/query";
 import { parseYouTubeUrl } from "~/libs/url";
@@ -28,18 +24,16 @@ const Player = clientOnly(() =>
 const fetchRatings = cache(
   async (params: {
     ids: string[];
-  }): Promise<
-    QueryResult<{ ratings: Map<string, VideoRatingResponse["GET"]> }>
-  > => {
+  }): Promise<QueryResult<{ ratings: Map<string, boolean> }>> => {
     "use server";
     const event = getRequestEvent()!;
-    let ratings: Map<string, VideoRatingResponse["GET"]>;
+    let ratings: Map<string, boolean>;
     try {
       ratings = new Map(
         await Promise.all(
           params.ids.map((id) =>
             getVideoRating(event.locals.youtubeApi)({ id }).then(
-              (res) => [id, res] as const,
+              ({ rating }) => [id, rating === "like"] as const,
             ),
           ),
         ),
@@ -77,7 +71,7 @@ const Watch = () => {
   const [videoIds, setVideoIds] = createSignal<string[]>(
     searchParams.videoIds?.split(",") ?? [],
   );
-  const [liked, setLiked] = createSignal(false);
+  const [liked, setLiked] = createSignal(new Map());
 
   const isLoggedIn = createAsync(() => getLoginStatus());
   const ratingsQuery = createAsync(
@@ -90,11 +84,14 @@ const Watch = () => {
 
   const divisions = createMemo(() => Math.ceil(Math.sqrt(videoIds().length)));
 
-  const ratings = createMemo(() => {
+  const likeMap = createMemo(() => {
     const query = ratingsQuery()!;
     if (!query.succeed) return new Map();
     return new Map(
-      videoIds().map((id) => [id, query.data.ratings.get(id)?.rating ?? null]),
+      videoIds().map((id) => [
+        id,
+        liked().get(id) ?? query.data.ratings.get(id),
+      ]),
     );
   });
 
@@ -211,13 +208,13 @@ const Watch = () => {
                 {data.map((videoId) => (
                   <Player
                     videoId={videoId}
-                    rating={liked() ? "like" : (ratings().get(videoId) ?? null)}
+                    isLike={likeMap().get(videoId)}
                     onClickLike={async () => {
-                      setLiked(true);
+                      setLiked((prev) => prev.set(videoId, true));
                       try {
                         await like(videoId);
                       } catch {
-                        return setLiked(false);
+                        return setLiked((prev) => prev.set(videoId, false));
                       }
                     }}
                   />
