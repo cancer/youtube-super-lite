@@ -2,6 +2,7 @@ import {
   action,
   cache,
   createAsync,
+  redirect,
   type RouteDefinition,
   useAction,
   useSearchParams,
@@ -35,8 +36,8 @@ const fetchRatings = cache(async (params: { ids: string[] }) => {
         ),
       ),
     );
-  } catch {
-    return null;
+  } catch (e) {
+    return redirect("/login");
   }
   return ratings;
 }, "ratings");
@@ -118,6 +119,7 @@ const Watch = () => {
 
                   if (ev.currentTarget.url.value === "") return;
 
+                  // https://youtu.be/2wczkeeoYQc にも対応できるように
                   const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
                   if (parsed.type !== "video") return;
 

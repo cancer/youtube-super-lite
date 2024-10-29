@@ -2,10 +2,10 @@ import { type RequestMiddleware } from "@solidjs/start/middleware";
 import { createAuthApiClient, refreshAccessToken } from "~/libs/api/auth";
 import { type ApiClient, createApiClient } from "~/libs/api/youtube/client";
 import { TokenExpiredError } from "~/libs/api/youtube/errors";
-import { AuthSession } from "~/libs/auth-sessions/client";
+import { type AuthSession } from "~/libs/auth-sessions/client";
 
 declare global {
-  interface RequestLocals {
+  interface RequestEventLocals {
     youtubeApi: ApiClient;
   }
 }
