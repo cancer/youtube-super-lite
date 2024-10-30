@@ -4,10 +4,12 @@ import {
   createAsync,
   type RouteDefinition,
   useAction,
+  useLocation,
+  useNavigate,
   useSearchParams,
 } from "@solidjs/router";
 import { clientOnly } from "@solidjs/start";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { getRequestEvent } from "solid-js/web";
 import { getVideoRating, postVideoRating } from "~/libs/api/youtube";
 import { isTokenExpired } from "~/libs/api/youtube/errors";
@@ -67,7 +69,9 @@ export const routes = {
 } satisfies RouteDefinition;
 
 const Watch = () => {
-  const [searchParams, setSearchParams] = useSearchParams<Params>();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams<Params>();
 
   const [videoIds, setVideoIds] = createSignal<string[]>(
     searchParams.videoIds?.split(",") ?? [],
@@ -116,14 +120,32 @@ const Watch = () => {
     if (query.succeed) return;
     if (!isTokenExpired(query.error)) return;
 
-    location.assign(`/login?redirect_to=${location.href}`);
+    window.location.assign(`/login?redirect_to=${window.location.href}`);
   });
 
   createEffect(() => {
-    if (videoIds().length === 0) return;
-    // 変化がないのにsearchParamsを更新すると、`/`にリダイレクトされてしまう
-    if (videoIds().join(",") === searchParams.videoIds) return;
-    setSearchParams({ videoIds: videoIds().join(",") });
+    if (
+      JSON.stringify(window.history.state.videoIds) ===
+      JSON.stringify(videoIds())
+    )
+      return;
+    if (videoIds().length === 0 && location.search === "") return navigate(".");
+    // 履歴には残したいがre-renderはしたくない
+    window.history.pushState(
+      { videoIds: videoIds() },
+      "",
+      `?videoIds=${videoIds().join(",")}`,
+    );
+  });
+
+  createEffect(() => {
+    window.addEventListener(
+      "popstate",
+      () => {
+        setVideoIds(window.history.state.videoIds ?? []);
+      },
+      true,
+    );
   });
 
   return (
@@ -205,33 +227,42 @@ const Watch = () => {
           >
             {(data) => (
               <div
-                class={`grid gap-2 ${squareDivisionsMap.get(divisions())} justify-items-center w-full h-full aspect-ratio-video`}
+                class={`grid gap-2 ${squareDivisionsMap.get(divisions())} justify-items-center w-full h-full aspect-ratio-video relative`}
               >
-                {data.map((videoId) => (
-                  <Player
-                    videoId={videoId}
-                    LikeButton={
-                      /* ログイン直後のみ、likeMap()がundefになってしまう */
-                      <Show when={likeMap()}>
-                        {(data) => (
-                          <LikeButton
-                            liked={data().get(videoId)}
-                            onClick={async () => {
-                              setLiked((prev) => prev.set(videoId, true));
-                              try {
-                                await like(videoId);
-                              } catch {
-                                return setLiked((prev) =>
-                                  prev.set(videoId, false),
-                                );
-                              }
-                            }}
-                          />
-                        )}
-                      </Show>
-                    }
-                  />
-                ))}
+                <For each={data}>
+                  {(videoId) => (
+                    <>
+                      <Player
+                        videoId={videoId}
+                        onClickClose={() =>
+                          setVideoIds((prev) =>
+                            prev.filter((id) => id !== videoId),
+                          )
+                        }
+                        LikeButton={
+                          /* ログイン直後のみ、likeMap()がundefになってしまう */
+                          <Show when={likeMap()} keyed>
+                            {(likes) => (
+                              <LikeButton
+                                liked={likes.get(videoId)}
+                                onClick={async () => {
+                                  setLiked((prev) => prev.set(videoId, true));
+                                  try {
+                                    await like(videoId);
+                                  } catch {
+                                    return setLiked((prev) =>
+                                      prev.set(videoId, false),
+                                    );
+                                  }
+                                }}
+                              />
+                            )}
+                          </Show>
+                        }
+                      />
+                    </>
+                  )}
+                </For>
               </div>
             )}
           </Show>
