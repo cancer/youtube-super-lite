@@ -13,6 +13,7 @@ import { getVideoRating, postVideoRating } from "~/libs/api/youtube";
 import { isTokenExpired } from "~/libs/api/youtube/errors";
 import { failed, pending, type QueryResult, succeed } from "~/libs/query";
 import { parseYouTubeUrl } from "~/libs/url";
+import { LikeButton } from "~/routes/watch/like-button";
 import { Header } from "~/uis/header";
 import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
 import { WatchVideoFromYouTube } from "~/uis/watch-video-from-you-tube";
@@ -85,12 +86,13 @@ const Watch = () => {
   const divisions = createMemo(() => Math.ceil(Math.sqrt(videoIds().length)));
 
   const likeMap = createMemo(() => {
-    const query = ratingsQuery()!;
+    const query = ratingsQuery();
+    if (!query.done) return new Map();
     if (!query.succeed) return new Map();
     return new Map(
       videoIds().map((id) => [
         id,
-        liked().get(id) ?? query.data.ratings.get(id),
+        liked().get(id) ?? query.data.ratings.get(id) ?? false,
       ]),
     );
   });
@@ -109,7 +111,7 @@ const Watch = () => {
   ]);
 
   createEffect(() => {
-    const query = ratingsQuery()!;
+    const query = ratingsQuery();
     if (!query.done) return;
     if (query.succeed) return;
     if (!isTokenExpired(query.error)) return;
@@ -136,7 +138,7 @@ const Watch = () => {
 
                   if (ev.currentTarget.url.value === "") return;
 
-                  // https://youtu.be/2wczkeeoYQc にも対応できるように
+                  // TODO: https://youtu.be/2wczkeeoYQc にも対応できるように
                   const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
                   if (parsed.type !== "video") return;
 
@@ -208,15 +210,26 @@ const Watch = () => {
                 {data.map((videoId) => (
                   <Player
                     videoId={videoId}
-                    isLike={likeMap().get(videoId)}
-                    onClickLike={async () => {
-                      setLiked((prev) => prev.set(videoId, true));
-                      try {
-                        await like(videoId);
-                      } catch {
-                        return setLiked((prev) => prev.set(videoId, false));
-                      }
-                    }}
+                    LikeButton={
+                      /* ログイン直後のみ、likeMap()がundefになってしまう */
+                      <Show when={likeMap()}>
+                        {(data) => (
+                          <LikeButton
+                            liked={data().get(videoId)}
+                            onClick={async () => {
+                              setLiked((prev) => prev.set(videoId, true));
+                              try {
+                                await like(videoId);
+                              } catch {
+                                return setLiked((prev) =>
+                                  prev.set(videoId, false),
+                                );
+                              }
+                            }}
+                          />
+                        )}
+                      </Show>
+                    }
                   />
                 ))}
               </div>

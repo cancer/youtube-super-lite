@@ -1,11 +1,9 @@
-import { onCleanup, onMount, type VoidComponent } from "solid-js";
+import { type JSX, onCleanup, onMount, type VoidComponent } from "solid-js";
 import { initPlayer, loadPlayer } from "~/libs/youtube-player";
-import { LikeButton } from "~/routes/watch/like-button";
 
 type Props = {
   videoId: string;
-  isLike: boolean;
-  onClickLike: () => void;
+  LikeButton: JSX.Element;
 };
 export const Player: VoidComponent<Props> = (props) => {
   // YouTubeプレーヤー自体の読み込み
@@ -51,9 +49,7 @@ export const Player: VoidComponent<Props> = (props) => {
       <div class="w-max col-span-full grid-row-1">
         <div ref={playerEl!} />
       </div>
-      <div class="grid-row-2">
-        <LikeButton liked={props.isLike} onClick={props.onClickLike} />
-      </div>
+      <div class="grid-row-2">{props.LikeButton}</div>
       <div class="w-full grid-row-2">
         <div class="flex justify-end items-start gap-2 pt-2">
           <button onClick={() => player.setPlaybackRate(1)}>x1.0</button>

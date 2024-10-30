@@ -1,6 +1,5 @@
 type Pending = {
   done: false;
-  succeed: false;
 };
 type Succeed<T> = {
   done: true;
@@ -13,7 +12,7 @@ type Failed = {
   error: unknown;
 };
 export type QueryResult<T> = Pending | Succeed<T> | Failed;
-export const pending = (): Pending => ({ done: false, succeed: false });
+export const pending = (): Pending => ({ done: false });
 export const failed = (error: unknown): Failed => ({
   done: true,
   succeed: false,
