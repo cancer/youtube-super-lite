@@ -1,0 +1,45 @@
+@scope (.videoLayout) {
+  :scope {
+    display: grid;
+    justify-content: center;
+    align-items: center;
+    width: 100vw;
+    height: 100%;
+  }
+
+  & > div {
+    display: contents;
+  }
+
+  .videoItemLayout {
+    display: grid;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+
+    &[data-divisions="1"] {
+      grid-template: repeat(1, minmax(0, 1fr)) / repeat(1, minmax(0, 1fr));
+    }
+    &[data-divisions="2"] {
+      grid-template: repeat(2, minmax(0, 1fr)) / repeat(2, minmax(0, 1fr));
+    }
+    &[data-divisions="3"] {
+      grid-template: repeat(3, minmax(0, 1fr)) / repeat(3, minmax(0, 1fr));
+    }
+    &[data-divisions="4"] {
+      grid-template: repeat(4, minmax(0, 1fr)) / repeat(4, minmax(0, 1fr));
+    }
+  }
+
+  .noVideoLayout {
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: repeat(2, 1fr);
+    justify-items: center;
+    width: 100%;
+    height: 100%;
+    aspect-ratio: 16 / 9;
+    position: relative;
+  }
+}

@@ -20,6 +20,8 @@ import { Header } from "~/uis/header";
 import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
 import { WatchVideoFromYouTube } from "~/uis/watch-video-from-you-tube";
 
+import "./styles.css";
+
 const Player = clientOnly(() =>
   import("./player").then(({ Player }) => ({ default: Player })),
 );
@@ -102,17 +104,6 @@ const Watch = () => {
   });
 
   const like = useAction(likeAction);
-
-  // Tailwind的なCSSは、動的にclass文字列を作って使うことができないらしい
-  // e.g.)
-  //   NG class={`grid grid-cols-${divisions()}`}
-  //   OK class={`grid ${gridCols.get(divisions())}`}
-  const squareDivisionsMap = new Map([
-    [1, "grid-cols-1 grid-rows-1"],
-    [2, "grid-cols-2 grid-rows-2"],
-    [3, "grid-cols-3 grid-rows-3"],
-    [4, "grid-cols-4 grid-rows-4"],
-  ]);
 
   createEffect(() => {
     const query = ratingsQuery();
@@ -198,12 +189,12 @@ const Watch = () => {
           }
         />
       </div>
-      <div class="grid justify-center">
-        <div class="grid justify-center items-center h-full">
+      <div class="videoLayout">
+        <div>
           <Show
             when={videoIds().length > 0 && videoIds()}
             fallback={
-              <div class="grid justify-center items-center w-max h-max">
+              <div class="noVideoLayout">
                 <WatchVideoFromYouTube
                   onSubmit={(ev) => {
                     ev.preventDefault();
@@ -226,9 +217,7 @@ const Watch = () => {
             keyed
           >
             {(data) => (
-              <div
-                class={`grid gap-2 ${squareDivisionsMap.get(divisions())} justify-items-center w-full h-full aspect-ratio-video relative`}
-              >
+              <div class="videoItemLayout" data-divisions={divisions()}>
                 <For each={data}>
                   {(videoId) => (
                     <>

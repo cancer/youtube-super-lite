@@ -1,6 +1,8 @@
 import { type JSX, onCleanup, onMount, type VoidComponent } from "solid-js";
 import { initPlayer, loadPlayer } from "~/libs/youtube-player";
 
+import "./player.css";
+
 type Props = {
   videoId: string;
   onClickClose: () => void;
@@ -23,7 +25,6 @@ export const Player: VoidComponent<Props> = (props) => {
         },
       },
     });
-    player.getIframe().classList.add("h-full", "aspect-ratio-video");
   });
 
   // イベントハンドリング
@@ -46,7 +47,7 @@ export const Player: VoidComponent<Props> = (props) => {
   onCleanup(() => player?.destroy());
 
   return (
-    <div class="group grid grid-cols-2 grid-rows-[1fr_max-content] gap-2 w-max h-full relative">
+    <div class="playerComponent group grid grid-cols-2 grid-rows-[1fr_max-content] gap-2 w-max h-full relative">
       <div class="absolute w-full h-full scale-0 group-hover:scale-100 pointer-events-none">
         <button class="pointer-events-auto" onClick={props.onClickClose}>
           とじる
