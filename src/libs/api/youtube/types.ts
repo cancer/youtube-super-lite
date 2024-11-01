@@ -66,7 +66,7 @@ export type Channel = {
         url: string;
         width: number; // unsigned integer
         height: number; // unsigned integer
-      }
+      };
     };
     defaultLanguage: string;
     localized: {
@@ -80,7 +80,7 @@ export type Channel = {
       likes: string;
       favorites: string;
       uploads: string;
-    }
+    };
   };
   statistics: {
     viewCount: number; // unsigned long
@@ -113,7 +113,7 @@ export type Channel = {
       textColor: string;
       backgroundColor: string;
       featuredPlaylistId: string;
-    }
+    };
   };
   auditDetails: {
     overallGoodStanding: boolean;
@@ -131,7 +131,7 @@ export type Channel = {
       description: string;
     };
   };
-}
+};
 
 // https://developers.google.com/youtube/v3/docs/search?hl=ja
 export type SearchResult = {
@@ -185,7 +185,7 @@ export type Video = {
         url: string;
         width: number; // unsigned integer
         height: number; // unsigned integer
-      }
+      };
     };
     channelTitle: string;
     tags: string[];
@@ -309,7 +309,7 @@ export type Video = {
       description: string;
     };
   };
-}
+};
 
 export type PlaylistItem = {
   kind: string;
@@ -325,7 +325,7 @@ export type PlaylistItem = {
         url: string;
         width: number; // unsigned integer
         height: number; // unsigned integer
-      }
+      };
     };
     channelTitle: string;
     videoOwnerChannelTitle: string;
@@ -347,7 +347,7 @@ export type PlaylistItem = {
   status: {
     privacyStatus: string;
   };
-}
+};
 
 // https://developers.google.com/youtube/v3/docs/activities?hl=ja
 export type Activity = {
@@ -364,7 +364,7 @@ export type Activity = {
         url: string;
         width: number; // unsigned integer
         height: number; // unsigned integer
-      }
+      };
     };
     channelTitle: string;
     type: string;
@@ -437,4 +437,4 @@ export type Activity = {
       resourceId: {};
     };
   };
-}
+};

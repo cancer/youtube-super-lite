@@ -6,7 +6,8 @@
     "build": "vinxi build",
     "start": "bunx wrangler pages dev dist/",
     "deploy": "bunx wrangler pages deploy dist/",
-    "lint": "npx oxlint@latest --fix"
+    "lint": "npx oxlint@latest --fix",
+    "format": "npx prettier@latest --write ."
   },
   "dependencies": {
     "@iconify-json/icon-park-outline": "1.1.15",
