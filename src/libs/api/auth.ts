@@ -37,7 +37,7 @@ export const createAuthApiClient: (credentials: {
         case "application/json":
         default: {
           body = JSON.stringify({
-            ...(_body ?? {}),
+            ..._body,
             client_id: clientId,
             client_secret: clientSecret,
           });
@@ -49,7 +49,7 @@ export const createAuthApiClient: (credentials: {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(headers ?? {}),
+          ...headers,
         },
         body,
       });
