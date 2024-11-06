@@ -47,13 +47,13 @@ export const Player: VoidComponent<Props> = (props) => {
   onCleanup(() => player?.destroy());
 
   return (
-    <div class="playerComponent group grid grid-cols-2 grid-rows-[1fr_max-content] gap-2 w-max h-full relative">
+    <div class="playerComponent group">
       <div class="absolute w-full h-full scale-0 group-hover:scale-100 pointer-events-none">
         <button class="pointer-events-auto" onClick={props.onClickClose}>
           とじる
         </button>
       </div>
-      <div class="w-max col-span-full grid-row-1">
+      <div class="player">
         <div ref={playerEl!} />
       </div>
       <div class="grid-row-2">{props.LikeButton}</div>

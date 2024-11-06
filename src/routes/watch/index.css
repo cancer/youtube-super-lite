@@ -1,0 +1,54 @@
+@scope (.videoLayout) {
+  :scope {
+    display: contents;
+  }
+
+  /* これがrootでいい */
+  .videoItemLayout {
+    display: grid;
+    justify-content: center;
+    align-content: start;
+    align-items: center;
+    /* ヘッダーの高さを雑に100pxとしている */
+    width: min(100vw, calc((100vh - 100px) * 16 / 9));
+    margin: 0 auto;
+    
+    @media (orientation: portrait) {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, max-content);
+    }
+
+    @media (orientation: landscape) {
+      &[data-divisions="1"] {
+        grid-template-columns: repeat(1, minmax(0, 1fr));
+        grid-template-rows: repeat(1, minmax(0, max-content));
+      }
+
+      &[data-divisions="2"] {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: repeat(2, minmax(0, max-content));
+      }
+
+      &[data-divisions="3"] {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-rows: repeat(3, minmax(0, max-content));
+      }
+
+      &[data-divisions="4"] {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-rows: repeat(4, minmax(0, max-content));
+      }
+    }
+  }
+
+  .noVideoLayout {
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: repeat(2, 1fr);
+    justify-items: center;
+    width: 100%;
+    height: 100%;
+    aspect-ratio: 16 / 9;
+    position: relative;
+  }
+}

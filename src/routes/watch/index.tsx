@@ -20,7 +20,7 @@ import { Header } from "~/uis/header";
 import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
 import { WatchVideoFromYouTube } from "~/uis/watch-video-from-you-tube";
 
-import "./styles.css";
+import "./index.css";
 
 const Player = clientOnly(() =>
   import("./player").then(({ Player }) => ({ default: Player })),
@@ -190,72 +190,70 @@ const Watch = () => {
         />
       </div>
       <div class="videoLayout">
-        <div>
-          <Show
-            when={videoIds().length > 0 && videoIds()}
-            fallback={
-              <div class="noVideoLayout">
-                <WatchVideoFromYouTube
-                  onSubmit={(ev) => {
-                    ev.preventDefault();
-
-                    if (ev.currentTarget.url.value === "") return;
-
-                    if (videoIds().length === 16)
-                      return console.warn("Maximum number of videos reached.");
-
-                    const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
-                    if (parsed.type !== "video") return;
-
-                    setVideoIds((prev) => [...prev, parsed.id]);
-                    ev.currentTarget.url.value = "";
-                  }}
-                  Action={<button type="submit">Watch</button>}
-                ></WatchVideoFromYouTube>
-              </div>
-            }
-            keyed
-          >
-            {(data) => (
-              <div class="videoItemLayout" data-divisions={divisions()}>
-                <For each={data}>
-                  {(videoId) => (
-                    <>
-                      <Player
-                        videoId={videoId}
-                        onClickClose={() =>
-                          setVideoIds((prev) =>
-                            prev.filter((id) => id !== videoId),
-                          )
-                        }
-                        LikeButton={
-                          /* ログイン直後のみ、likeMap()がundefになってしまう */
-                          <Show when={likeMap()} keyed>
-                            {(likes) => (
-                              <LikeButton
-                                liked={likes.get(videoId)}
-                                onClick={async () => {
-                                  setLiked((prev) => prev.set(videoId, true));
-                                  try {
-                                    await like(videoId);
-                                  } catch {
-                                    return setLiked((prev) =>
-                                      prev.set(videoId, false),
-                                    );
-                                  }
-                                }}
-                              />
-                            )}
-                          </Show>
-                        }
-                      />
-                    </>
-                  )}
-                </For>
-              </div>
-            )}
-          </Show>
-        </div>
+        <Show
+          when={videoIds().length > 0 && videoIds()}
+          fallback={
+            <div class="noVideoLayout">
+              <WatchVideoFromYouTube
+                onSubmit={(ev) => {
+                  ev.preventDefault();
+                  
+                  if (ev.currentTarget.url.value === "") return;
+                  
+                  if (videoIds().length === 16)
+                    return console.warn("Maximum number of videos reached.");
+                  
+                  const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
+                  if (parsed.type !== "video") return;
+                  
+                  setVideoIds((prev) => [...prev, parsed.id]);
+                  ev.currentTarget.url.value = "";
+                }}
+                Action={<button type="submit">Watch</button>}
+              ></WatchVideoFromYouTube>
+            </div>
+          }
+          keyed
+        >
+          {(data) => (
+            <div class="videoItemLayout" data-divisions={divisions()}>
+              <For each={data}>
+                {(videoId) => (
+                  <>
+                    <Player
+                      videoId={videoId}
+                      onClickClose={() =>
+                        setVideoIds((prev) =>
+                          prev.filter((id) => id !== videoId),
+                        )
+                      }
+                      LikeButton={
+                        /* ログイン直後のみ、likeMap()がundefになってしまう */
+                        <Show when={likeMap()} keyed>
+                          {(likes) => (
+                            <LikeButton
+                              liked={likes.get(videoId)}
+                              onClick={async () => {
+                                setLiked((prev) => prev.set(videoId, true));
+                                try {
+                                  await like(videoId);
+                                } catch {
+                                  return setLiked((prev) =>
+                                    prev.set(videoId, false),
+                                  );
+                                }
+                              }}
+                            />
+                          )}
+                        </Show>
+                      }
+                    />
+                  </>
+                )}
+              </For>
+            </div>
+          )}
+        </Show>
       </div>
     </div>
   );
