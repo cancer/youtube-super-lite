@@ -41,6 +41,17 @@ export const GET = async ({ request, locals: { env, auth } }: APIEvent) => {
     } catch (err) {
       console.error("Failed to refresh access token: ", err);
 
+      if (
+        typeof err === "object" &&
+        err !== null &&
+        "error_description" in err
+      ) {
+        await auth
+          .clear()
+          .catch((e: Error) => console.error("Failed to clear session: ", e));
+        return reload();
+      }
+
       await revokeToken(authApiClient)(tokens.refreshToken).catch((e) =>
         console.error("Failed to revoke tokens: ", e),
       );
