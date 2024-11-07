@@ -138,6 +138,20 @@ const Watch = () => {
     );
   });
 
+  let videoUrl: HTMLFormElement | undefined;
+  let goButton: HTMLButtonElement | undefined;
+  createEffect(() => {
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter") return;
+      if (navigator.userAgentData.platform.startsWith("macOS") && !ev.metaKey)
+        return;
+      if (navigator.userAgentData.platform.startsWith("Windows") && !ev.altKey)
+        return;
+      if (!videoUrl) return;
+      videoUrl.requestSubmit(goButton);
+    });
+  });
+
   return (
     <div class="w-screen h-screen grid grid-rows-[max-content_1fr] justify-center">
       <div class="w-screen h-max col-span-full">
@@ -145,6 +159,7 @@ const Watch = () => {
           LeftSide={
             <Show when={videoIds().length > 0}>
               <WatchVideoFromYouTube
+                ref={videoUrl}
                 onSubmit={(navigation, triggerName) => {
                   if (navigation.type !== "video")
                     return console.warn("Unknown navigation type.");
@@ -163,7 +178,7 @@ const Watch = () => {
                     <button type="submit" name="openCurrentPage">
                       👇 Add
                     </button>
-                    <button type="submit" name="openNewPage">
+                    <button ref={goButton} type="submit" name="openNewPage">
                       👉 Go
                     </button>
                   </>
