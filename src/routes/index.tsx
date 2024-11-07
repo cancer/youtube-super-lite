@@ -14,7 +14,6 @@ import { getRequestEvent } from "solid-js/web";
 import { getVideoRating, postVideoRating } from "~/libs/api/youtube";
 import { isTokenExpired } from "~/libs/api/youtube/errors";
 import { failed, pending, type QueryResult, succeed } from "~/libs/query";
-import { parseYouTubeUrl } from "~/libs/url";
 import { LikeButton } from "~/routes/index/like-button";
 import { Header } from "~/uis/header";
 import { getLoginStatus, LoginButton, LogoutButton } from "~/uis/login-button";
@@ -146,28 +145,18 @@ const Watch = () => {
           LeftSide={
             <Show when={videoIds().length > 0}>
               <WatchVideoFromYouTube
-                onSubmit={(ev) => {
-                  ev.preventDefault();
+                onSubmit={(navigation, triggerName) => {
+                  if (navigation.type !== "video")
+                    return console.warn("Unknown navigation type.");
 
-                  if (ev.currentTarget.url.value === "") return;
-
-                  // TODO: https://youtu.be/2wczkeeoYQc にも対応できるように
-                  const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
-                  if (parsed.type !== "video") return;
-
-                  if (
-                    (ev.submitter as HTMLButtonElement).name === "openNewPage"
-                  ) {
-                    setVideoIds([parsed.id]);
-                    ev.currentTarget.url.value = "";
+                  if (triggerName === "openNewPage") {
+                    setVideoIds([navigation.id]);
                     return;
                   }
 
                   if (videoIds().length === 16)
                     return console.warn("Maximum number of videos reached.");
-
-                  setVideoIds((prev) => [...prev, parsed.id]);
-                  ev.currentTarget.url.value = "";
+                  setVideoIds((prev) => [...prev, navigation.id]);
                 }}
                 Action={
                   <>
@@ -195,19 +184,13 @@ const Watch = () => {
           fallback={
             <div class="noVideoLayout">
               <WatchVideoFromYouTube
-                onSubmit={(ev) => {
-                  ev.preventDefault();
-                  
-                  if (ev.currentTarget.url.value === "") return;
-                  
+                onSubmit={(navigation) => {
                   if (videoIds().length === 16)
                     return console.warn("Maximum number of videos reached.");
-                  
-                  const parsed = parseYouTubeUrl(ev.currentTarget.url.value);
-                  if (parsed.type !== "video") return;
-                  
-                  setVideoIds((prev) => [...prev, parsed.id]);
-                  ev.currentTarget.url.value = "";
+                  if (navigation.type !== "video")
+                    return console.warn("Unknown navigation type.");
+
+                  setVideoIds((prev) => [...prev, navigation.id]);
                 }}
                 Action={<button type="submit">Watch</button>}
               ></WatchVideoFromYouTube>

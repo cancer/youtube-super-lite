@@ -1,6 +1,11 @@
+type VideoNavigation = { type: "video"; id: string };
+type UnknownNavigation = { type: "unknown" };
+export type YTNavigation = VideoNavigation | UnknownNavigation;
+
+// TODO: https://youtu.be/2wczkeeoYQc にも対応できるように
 type ParseYouTubeUrl = (
   urlStr: string,
-) => { type: "video"; id: string } | { type: "unknown" };
+) => YTNavigation;
 export const parseYouTubeUrl: ParseYouTubeUrl = (urlStr) => {
   const url = new URL(urlStr);
 
