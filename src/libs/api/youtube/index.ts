@@ -1,36 +1,5 @@
 import type { ApiClient } from "~/libs/api/youtube/client";
-import type {
-  PageInfo,
-  Subscription,
-  VideoGetRatingResponse,
-} from "~/libs/api/youtube/types";
-
-export type MyChannelsRequest = {
-  GET: { part: string[]; maxResults: number };
-};
-export type MyChannelsResponse = {
-  GET: PageInfo & {
-    items: Subscription[];
-  };
-};
-export const listMyChannels = (client: ApiClient) => {
-  "use server";
-  return ({
-    part,
-    maxResults,
-  }: MyChannelsRequest["GET"]): Promise<MyChannelsResponse["GET"]> => {
-    const params = {
-      maxResults,
-      part: part.join(","),
-      mine: true,
-    };
-    return client.request({
-      uri: "/subscriptions",
-      method: "GET",
-      params,
-    });
-  };
-};
+import type { VideoGetRatingResponse } from "~/libs/api/youtube/types";
 
 export type VideoRatingRequest = {
   GET: { id: string };

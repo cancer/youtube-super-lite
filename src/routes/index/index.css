@@ -43,12 +43,8 @@
 
   .noVideoLayout {
     display: grid;
-    gap: 0.5rem;
-    grid-template-columns: repeat(2, 1fr);
-    justify-items: center;
-    width: 100%;
+    place-items: center;
+    width: 100vw;
     height: 100%;
-    aspect-ratio: 16 / 9;
-    position: relative;
   }
 }
