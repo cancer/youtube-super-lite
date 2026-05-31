@@ -1,0 +1,19 @@
+{
+  // Talava Player 用 OAuth トークン交換 Worker（workers-rs / Rust→WASM）
+  "name": "youtube-super-lite-backend",
+  "main": "build/worker/shim.mjs",
+  "compatibility_date": "2025-01-01",
+
+  // wrangler が deploy/dev 時に Rust→WASM をビルドする。
+  "build": {
+    "command": "cargo install -q worker-build && worker-build --release"
+  },
+
+  // client_id は秘密ではないので vars でよい。自分の OAuth クライアント ID に置き換える。
+  "vars": {
+    "GAUTH_CLIENT_ID": "1020737557708-2foac4qrncnjnop48rjegik5vsqkdp0h.apps.googleusercontent.com"
+  }
+
+  // client_secret は vars に書かない。次で Secret 登録する:
+  //   wrangler secret put GAUTH_CLIENT_SECRET
+}

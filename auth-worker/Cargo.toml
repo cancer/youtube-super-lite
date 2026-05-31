@@ -1,0 +1,16 @@
+[package]
+name = "talava-auth-worker"
+version = "0.1.0"
+edition = "2021"
+description = "Cloudflare Worker (workers-rs) that holds the OAuth client secret for Talava Player"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+worker = "0.8"
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true

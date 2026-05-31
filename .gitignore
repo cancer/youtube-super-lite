@@ -1,0 +1,15 @@
+/target
+
+# ビルド時に生成・取得される大きなバイナリ（再取得可能なため除外）
+/tools/*.7z
+/tools/*.exe
+/tools/mpv-dev/libmpv-2.dll
+
+# デバッグ用の一時出力
+/mpv.log
+/err.txt
+/out.txt
+
+# 秘密情報（OAuth クライアント / トークン）
+/client_secret.json
+/auth.json
