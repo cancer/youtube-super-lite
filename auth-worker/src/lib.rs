@@ -1,4 +1,4 @@
-//! Talava Player 用 OAuth トークン交換 Worker（Cloudflare Workers / workers-rs）。
+//! YouTube Super Lite 用 OAuth トークン交換 Worker（Cloudflare Workers / workers-rs）。
 //!
 //! client_secret は Worker の Secret としてのみ存在し、配布アプリには渡さない。
 //! デスクトップから受け取った認可コード / リフレッシュトークンに、ここで

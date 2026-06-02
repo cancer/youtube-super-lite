@@ -1,8 +1,8 @@
 [package]
-name = "talava-auth-worker"
+name = "youtube-super-lite-auth-worker"
 version = "0.1.0"
 edition = "2021"
-description = "Cloudflare Worker (workers-rs) that holds the OAuth client secret for Talava Player"
+description = "Cloudflare Worker (workers-rs) that holds the OAuth client secret for YouTube Super Lite"
 
 [lib]
 crate-type = ["cdylib"]

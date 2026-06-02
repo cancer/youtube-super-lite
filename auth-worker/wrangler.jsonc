@@ -1,5 +1,5 @@
 {
-  // Talava Player 用 OAuth トークン交換 Worker（workers-rs / Rust→WASM）
+  // YouTube Super Lite 用 OAuth トークン交換 Worker（workers-rs / Rust→WASM）
   "name": "youtube-super-lite-backend",
   "main": "build/worker/shim.mjs",
   "compatibility_date": "2025-01-01",
