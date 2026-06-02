@@ -10,6 +10,7 @@ mod subscriptions;
 use anyhow::{anyhow, bail, Result};
 use std::num::NonZeroU32;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -242,6 +243,9 @@ struct Running {
     chat_stop: Option<chat::ChatStop>,
     chat_status: String,
     chat_visible: bool,
+    /// リプレイチャット用: メインスレッドが mpv の time-pos (ms) を継続的に store し、
+    /// チャットスレッドが get_live_chat_replay リクエストに乗せる。
+    player_offset_ms: Arc<AtomicI64>,
     // --- おすすめ動画 ---
     recommend_items: Vec<recommend::VideoItem>,
     recommend_tx: Sender<recommend::RecommendUpdate>,
@@ -439,8 +443,9 @@ impl Running {
 
         let tx = self.chat_tx.clone();
         let proxy = self.proxy.clone();
+        let offset = Arc::clone(&self.player_offset_ms);
         std::thread::spawn(move || {
-            chat::run_chat_poll(&video_id, &tx, &stop_flag);
+            chat::run_chat_poll(&video_id, &tx, &stop_flag, &offset);
             let _ = proxy.send_event(UserEvent::Background);
         });
     }
@@ -626,6 +631,10 @@ impl Running {
 
     /// 1 フレーム描画する：mpv 動画 → egui UI の順に重ねて表示。
     fn redraw(&mut self) {
+        // リプレイチャット用に現在の再生位置 (ms) を共有する。チャット非表示でも軽量なので毎回更新。
+        self.player_offset_ms
+            .store((self.player.time_pos() * 1000.0) as i64, Ordering::Relaxed);
+
         self.poll_auth();
         self.poll_chat();
         self.poll_recommend();
@@ -1467,6 +1476,7 @@ impl App {
             chat_stop: None,
             chat_status: String::new(),
             chat_visible: false,
+            player_offset_ms: Arc::new(AtomicI64::new(0)),
             recommend_items: Vec::new(),
             recommend_tx,
             recommend_rx,

@@ -5,12 +5,14 @@
 //!
 //! フロー:
 //!   1. ウォッチページ HTML から ytInitialData（continuation トークン）と INNERTUBE_API_KEY を抽出
-//!   2. POST /youtubei/v1/live_chat/get_live_chat でメッセージ取得
+//!   2. 配信中ライブ → /youtubei/v1/live_chat/get_live_chat
+//!      終了済みライブ（リプレイ）→ /youtubei/v1/live_chat/get_live_chat_replay
+//!      （リクエストに `currentPlayerState.playerOffsetMs` を載せて再生位置に同期させる）
 //!   3. レスポンスの timeoutMs 間隔でポーリング（continuation を更新しながらループ）
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,7 +61,15 @@ impl ChatStop {
 // ---------------------------------------------------------------------------
 
 /// ライブチャットのポーリングループ。背景スレッドで呼び出す。
-pub fn run_chat_poll(video_id: &str, tx: &Sender<ChatUpdate>, stop: &Arc<AtomicBool>) {
+///
+/// `player_offset_ms` はリプレイの場合のみ参照する（メインスレッドが mpv の time-pos を
+/// 継続的に store する想定）。ライブ配信では無視される。
+pub fn run_chat_poll(
+    video_id: &str,
+    tx: &Sender<ChatUpdate>,
+    stop: &Arc<AtomicBool>,
+    player_offset_ms: &Arc<AtomicI64>,
+) {
     let ctx = match fetch_initial_data(video_id) {
         Ok(ctx) => ctx,
         Err(e) => {
@@ -80,7 +90,14 @@ pub fn run_chat_poll(video_id: &str, tx: &Sender<ChatUpdate>, stop: &Arc<AtomicB
             break;
         }
 
-        match poll_chat(&ctx.api_key, &continuation) {
+        let result = if ctx.is_replay {
+            let offset = player_offset_ms.load(Ordering::Relaxed).max(0);
+            poll_chat_replay(&ctx.api_key, &continuation, offset)
+        } else {
+            poll_chat_live(&ctx.api_key, &continuation)
+        };
+
+        match result {
             Ok((messages, next_cont, timeout_ms)) => {
                 if !messages.is_empty() {
                     let _ = tx.send(ChatUpdate::Messages(messages));
@@ -120,6 +137,8 @@ fn sleep_interruptible(total: Duration, stop: &Arc<AtomicBool>) {
 struct InnerTubeContext {
     api_key: String,
     continuation: String,
+    /// 終了済みライブ配信（リプレイ）なら true。get_live_chat_replay を使う。
+    is_replay: bool,
 }
 
 fn http_client() -> Result<reqwest::blocking::Client> {
@@ -139,16 +158,17 @@ fn fetch_initial_data(video_id: &str) -> Result<InnerTubeContext> {
 
     let initial_data = extract_json_var(&html, "ytInitialData")?;
     let api_key = extract_api_key(&html)?;
-    let continuation = extract_chat_continuation(&initial_data)?;
+    let (continuation, is_replay) = extract_chat_continuation(&initial_data)?;
 
     Ok(InnerTubeContext {
         api_key,
         continuation,
+        is_replay,
     })
 }
 
-/// チャットメッセージをポーリングし、(メッセージ一覧, 次の continuation, 待機 ms) を返す。
-fn poll_chat(
+/// 配信中ライブ用ポーリング。(メッセージ一覧, 次の continuation, 待機 ms) を返す。
+fn poll_chat_live(
     api_key: &str,
     continuation: &str,
 ) -> Result<(Vec<ChatMessage>, Option<String>, u64)> {
@@ -185,27 +205,93 @@ fn poll_chat(
     }
 
     // 次の continuation とポーリング間隔。
-    let (mut next_continuation, mut timeout_ms) = (None, 5000u64);
-    if let Some(continuations) = live_chat["continuations"].as_array() {
-        for cont in continuations {
-            for key in [
-                "timedContinuationData",
-                "invalidationContinuationData",
-                "reloadContinuationData",
-            ] {
-                if let Some(data) = cont.get(key) {
-                    next_continuation = data["continuation"].as_str().map(|s| s.to_string());
-                    timeout_ms = data["timeoutMs"].as_u64().unwrap_or(5000);
-                    break;
-                }
+    let (next_continuation, timeout_ms) =
+        extract_next_continuation(live_chat, &["timedContinuationData", "invalidationContinuationData", "reloadContinuationData"]);
+
+    Ok((messages, next_continuation, timeout_ms))
+}
+
+/// 終了済みライブ（リプレイ）用ポーリング。
+///
+/// 配信中と違いリクエストに `currentPlayerState.playerOffsetMs` を載せ、再生位置に対応する
+/// メッセージをサーバから受け取る。レスポンスは `replayChatItemAction` で 1 段ラップされる。
+fn poll_chat_replay(
+    api_key: &str,
+    continuation: &str,
+    player_offset_ms: i64,
+) -> Result<(Vec<ChatMessage>, Option<String>, u64)> {
+    let client = http_client()?;
+
+    let body = serde_json::json!({
+        "context": {
+            "client": {
+                "clientName": "WEB",
+                "clientVersion": "2.20241001.00.00"
             }
-            if next_continuation.is_some() {
-                break;
+        },
+        "continuation": continuation,
+        "currentPlayerState": {
+            "playerOffsetMs": player_offset_ms.to_string()
+        }
+    });
+
+    let resp: Value = client
+        .post(format!(
+            "https://www.youtube.com/youtubei/v1/live_chat/get_live_chat_replay?key={api_key}"
+        ))
+        .json(&body)
+        .send()?
+        .json()?;
+
+    let live_chat = &resp["continuationContents"]["liveChatContinuation"];
+
+    let mut messages = Vec::new();
+    if let Some(actions) = live_chat["actions"].as_array() {
+        for action in actions {
+            // リプレイは replayChatItemAction.actions[] でラップされている。
+            if let Some(inner) = action
+                .get("replayChatItemAction")
+                .and_then(|r| r.get("actions"))
+                .and_then(|a| a.as_array())
+            {
+                for sub in inner {
+                    if let Some(msg) = parse_chat_action(sub) {
+                        messages.push(msg);
+                    }
+                }
+            } else if let Some(msg) = parse_chat_action(action) {
+                // 念のためラップ無しもサポート。
+                messages.push(msg);
             }
         }
     }
 
+    let (next_continuation, timeout_ms) = extract_next_continuation(
+        live_chat,
+        &["liveChatReplayContinuationData", "timedContinuationData"],
+    );
+
     Ok((messages, next_continuation, timeout_ms))
+}
+
+/// `liveChatContinuation.continuations[]` から、指定キーのいずれかを優先して
+/// (continuation 文字列, timeoutMs) を取り出す。
+fn extract_next_continuation(live_chat: &Value, keys: &[&str]) -> (Option<String>, u64) {
+    let Some(continuations) = live_chat["continuations"].as_array() else {
+        return (None, 5000);
+    };
+    for cont in continuations {
+        for key in keys {
+            if let Some(data) = cont.get(key) {
+                let next = data["continuation"].as_str().map(|s| s.to_string());
+                let timeout = data["timeoutMs"].as_u64().unwrap_or(5000);
+                if next.is_some() {
+                    return (next, timeout);
+                }
+            }
+        }
+    }
+    (None, 5000)
 }
 
 // ---------------------------------------------------------------------------
@@ -266,25 +352,52 @@ fn extract_api_key(html: &str) -> Result<String> {
     Ok(rest[..end].to_string())
 }
 
-/// ytInitialData からライブチャットの continuation トークンを抽出する。
-fn extract_chat_continuation(data: &Value) -> Result<String> {
-    // contents.twoColumnWatchNextResults.conversationBar
-    //   .liveChatRenderer.continuations[0]
-    //   .reloadContinuationData.continuation
-    let continuations = &data["contents"]["twoColumnWatchNextResults"]["conversationBar"]
-        ["liveChatRenderer"]["continuations"];
+/// ytInitialData からチャットの continuation トークンと配信種別 (live / replay) を抽出する。
+///
+/// - ライブ: `liveChatRenderer.continuations[].reloadContinuationData.continuation`
+/// - リプレイ: `liveChatRenderer.header.liveChatHeaderRenderer.viewSelector
+///             .sortFilterSubMenuRenderer.subMenuItems[].continuation.reloadContinuationData.continuation`
+///   subMenuItems は通常「上位のチャット」「すべてのチャット」の 2 要素を持つ。
+///   `selected: true` の項目（既定では「上位のチャット」が多い）を優先し、無ければ末尾を使う。
+fn extract_chat_continuation(data: &Value) -> Result<(String, bool)> {
+    let renderer = &data["contents"]["twoColumnWatchNextResults"]["conversationBar"]
+        ["liveChatRenderer"];
 
-    if let Some(arr) = continuations.as_array() {
-        for item in arr {
-            for key in ["reloadContinuationData", "invalidationContinuationData"] {
-                if let Some(c) = item[key]["continuation"].as_str() {
-                    return Ok(c.to_string());
+    if renderer.is_null() {
+        bail!("ライブチャットの continuation が見つかりません（ライブ配信ではない可能性）");
+    }
+
+    let is_replay = renderer["isReplay"].as_bool().unwrap_or(false);
+
+    if !is_replay {
+        if let Some(arr) = renderer["continuations"].as_array() {
+            for item in arr {
+                for key in ["reloadContinuationData", "invalidationContinuationData"] {
+                    if let Some(c) = item[key]["continuation"].as_str() {
+                        return Ok((c.to_string(), false));
+                    }
                 }
             }
         }
+        bail!("ライブチャットの continuation が見つかりません（ライブ配信ではない可能性）");
     }
 
-    bail!("ライブチャットの continuation が見つかりません（ライブ配信ではない可能性）")
+    let sub_items = &renderer["header"]["liveChatHeaderRenderer"]["viewSelector"]
+        ["sortFilterSubMenuRenderer"]["subMenuItems"];
+    let arr = sub_items
+        .as_array()
+        .ok_or_else(|| anyhow!("リプレイチャットの subMenuItems が見つかりません"))?;
+
+    let pick = arr
+        .iter()
+        .find(|item| item["selected"].as_bool().unwrap_or(false))
+        .or_else(|| arr.last())
+        .ok_or_else(|| anyhow!("リプレイチャットの subMenuItems が空です"))?;
+
+    if let Some(c) = pick["continuation"]["reloadContinuationData"]["continuation"].as_str() {
+        return Ok((c.to_string(), true));
+    }
+    bail!("リプレイチャットの reloadContinuationData が見つかりません")
 }
 
 /// addChatItemAction からメッセージを抽出する。
