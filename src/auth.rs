@@ -1,7 +1,7 @@
 //! YouTube ログイン（OAuth2 認可コードフロー / ループバック）と Data API 呼び出し。
 //!
 //! client_secret は配布アプリに持たせない。secret が必要な処理（トークン交換・更新）は
-//! バックエンド（talava-auth-backend）に中継させる。ここが持つのは「バックエンドの URL」だけ。
+//! バックエンド（auth-worker）に中継させる。ここが持つのは「バックエンドの URL」だけ。
 //! 認証の同意画面のみブラウザに委譲し、高評価などの操作は API で行う。
 
 use anyhow::{anyhow, bail, Result};
@@ -13,13 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const SCOPE: &str = "https://www.googleapis.com/auth/youtube.force-ssl";
-const DEFAULT_BACKEND: &str = "http://127.0.0.1:8787";
-
-/// トークン交換バックエンドのベース URL。
-pub fn backend_base() -> String {
-    let url = std::env::var("TALAVA_AUTH_BACKEND").unwrap_or_else(|_| DEFAULT_BACKEND.to_string());
-    url.trim_end_matches('/').to_string()
-}
+pub const DEFAULT_BACKEND: &str = "https://youtube-super-lite-backend.cancer6.workers.dev";
 
 /// アクセストークン一式。
 #[derive(Clone)]
@@ -74,7 +68,10 @@ impl TokenResp {
 /// バックエンドから client_id を取得する。
 fn fetch_client_id(backend: &str) -> Result<String> {
     let client = reqwest::blocking::Client::new();
-    let resp = client.get(format!("{backend}/client_id")).send()?;
+    let resp = client
+        .get(format!("{backend}/client_id"))
+        .send()
+        .map_err(|_| anyhow!("認証バックエンドに接続できません"))?;
     if !resp.status().is_success() {
         bail!("client_id 取得に失敗 ({})", resp.status());
     }
@@ -120,7 +117,7 @@ pub fn login(backend: &str) -> Result<Tokens> {
 
     let (code, got_state) = parse_redirect(&request_line)?;
 
-    let body = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Talava Player</title></head>\
+    let body = "<!doctype html><html><head><meta charset=\"utf-8\"><title>YouTube Super Lite</title></head>\
                 <body style=\"font-family:sans-serif\"><h2>ログインが完了しました</h2>\
                 <p>このタブを閉じてアプリに戻ってください。</p></body></html>";
     let _ = write!(
@@ -144,7 +141,7 @@ fn exchange_code(backend: &str, code: &str, redirect: &str) -> Result<Tokens> {
         .post(format!("{backend}/token"))
         .json(&serde_json::json!({ "code": code, "redirect_uri": redirect }))
         .send()
-        .map_err(|e| anyhow!("バックエンドに接続できません: {e}"))?;
+        .map_err(|_| anyhow!("認証バックエンドに接続できません"))?;
     let tr: TokenResp = resp.json()?;
     tr.into_tokens(None)
 }
@@ -156,7 +153,7 @@ pub fn refresh(backend: &str, refresh_token: &str) -> Result<Tokens> {
         .post(format!("{backend}/refresh"))
         .json(&serde_json::json!({ "refresh_token": refresh_token }))
         .send()
-        .map_err(|e| anyhow!("バックエンドに接続できません: {e}"))?;
+        .map_err(|_| anyhow!("認証バックエンドに接続できません"))?;
     let tr: TokenResp = resp.json()?;
     // 更新レスポンスには refresh_token が含まれないので元の値を保持する。
     tr.into_tokens(Some(refresh_token.to_string()))
@@ -222,8 +219,19 @@ pub fn extract_video_id(url: &str) -> Option<String> {
 // --- リフレッシュトークンの保存/読み込み（パッケージ外の設定ディレクトリ）---
 
 fn config_dir() -> PathBuf {
-    let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(base).join("TalavaPlayer")
+    #[cfg(target_os = "windows")]
+    {
+        let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(base).join("YouTubeSuperLite")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("YouTubeSuperLite")
+    }
 }
 
 fn token_store_path() -> PathBuf {

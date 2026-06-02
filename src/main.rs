@@ -1,7 +1,13 @@
 mod auth;
+mod chat;
+mod gl_quad;
+mod player;
+mod playlist;
+mod recommend;
+mod resolve;
+mod subscriptions;
 
-use anyhow::{anyhow, Result};
-use std::ffi::{c_void, CString};
+use anyhow::{anyhow, bail, Result};
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
@@ -15,9 +21,6 @@ use glutin::prelude::*;
 use glutin::surface::{Surface, SurfaceAttributesBuilder, SwapInterval, WindowSurface};
 use glutin_winit::{DisplayBuilder, GlWindow};
 use raw_window_handle::HasWindowHandle;
-
-use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
-use libmpv2::Mpv;
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -48,25 +51,28 @@ enum AuthMsg {
 /// この時間だけ操作がなければ UI（URL欄・コントロール・カーソル）を隠す。
 const UI_HIDE_AFTER: Duration = Duration::from_secs(3);
 
-/// mpv が GL 関数ポインタを解決するためのコールバック。
-/// ctx には glutin の Display を渡しておき、ここで名前解決する。
-fn get_proc_address(display: &glutin::display::Display, name: &str) -> *mut c_void {
-    let cname = match CString::new(name) {
-        Ok(c) => c,
-        Err(_) => return std::ptr::null_mut(),
-    };
-    display.get_proc_address(cname.as_c_str()) as *mut c_void
-}
+/// チャットパネルに保持するメッセージの上限。
+const CHAT_MAX_MESSAGES: usize = 200;
 
-/// 既定ブラウザで URL を開く（Windows）。
+/// チャットサイドパネルの幅（display points）。動画描画領域の計算にも使う。
+const CHAT_PANEL_WIDTH: f32 = 320.0;
+
+/// 既定ブラウザで URL を開く。
 fn open_in_browser(url: &str) {
     if url.is_empty() {
         return;
     }
-    // cmd の start。第1引数の "" は start のウィンドウタイトル指定（URL を誤認させないため）。
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
-        .spawn();
+    #[cfg(target_os = "windows")]
+    {
+        // cmd の start。第1引数の "" は start のウィンドウタイトル指定。
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(url).spawn();
+    }
 }
 
 /// 秒数を mm:ss / h:mm:ss 形式の文字列にする。
@@ -83,8 +89,103 @@ fn format_time(secs: f64) -> String {
     }
 }
 
-/// 同梱の yt-dlp.exe があるディレクトリを PATH 先頭に追加する。
+/// 指定パス候補のいずれかからフォントを読み込む。
+fn load_font_from(paths: &[&str]) -> Option<Vec<u8>> {
+    for p in paths {
+        if let Ok(bytes) = std::fs::read(p) {
+            println!("font loaded: {p}");
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+/// システムの日本語フォントを探す。
+fn load_system_japanese_font() -> Option<Vec<u8>> {
+    #[cfg(target_os = "macos")]
+    let paths: &[&str] = &[
+        "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/Library/Fonts/Arial Unicode.ttf",
+    ];
+    #[cfg(target_os = "windows")]
+    let paths: &[&str] = &[
+        r"C:\Windows\Fonts\YuGothR.ttc",
+        r"C:\Windows\Fonts\YuGothM.ttc",
+        r"C:\Windows\Fonts\meiryo.ttc",
+        r"C:\Windows\Fonts\msgothic.ttc",
+    ];
+    load_font_from(paths)
+}
+
+/// システムの絵文字フォントを探す。
+/// 注: ab_glyph はカラー絵文字（sbix/COLR）のビットマップ描画には完全対応していないが、
+/// グリフのアウトラインがある絵文字や OS フォントのカバレッジは egui 同梱フォントより広いため、
+/// 豆腐になる絵文字を減らす効果がある。
+fn load_system_emoji_font() -> Option<Vec<u8>> {
+    #[cfg(target_os = "macos")]
+    let paths: &[&str] = &[
+        "/System/Library/Fonts/Apple Color Emoji.ttc",
+    ];
+    #[cfg(target_os = "windows")]
+    let paths: &[&str] = &[
+        r"C:\Windows\Fonts\seguiemj.ttf",
+    ];
+    load_font_from(paths)
+}
+
+/// egui コンテキストに日本語フォントと絵文字フォントをフォールバックとして登録する。
+fn setup_japanese_font(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    let mut to_append: Vec<String> = Vec::new();
+
+    if let Some(bytes) = load_system_emoji_font() {
+        fonts
+            .font_data
+            .insert("emoji".to_owned(), egui::FontData::from_owned(bytes));
+        to_append.push("emoji".to_owned());
+    }
+    if let Some(bytes) = load_system_japanese_font() {
+        fonts
+            .font_data
+            .insert("ja".to_owned(), egui::FontData::from_owned(bytes));
+        to_append.push("ja".to_owned());
+    }
+    if to_append.is_empty() {
+        eprintln!("warning: no system fonts found; CJK/emoji may render as tofu");
+        return;
+    }
+    // 既存ファミリーの末尾に追加してフォールバックとして利用する。
+    // 絵文字フォントを日本語フォントより前に置くと、CJK 範囲外の絵文字 codepoint で
+    // 先に hit するため CJK 文字がカラー絵文字フォントの不適切なグリフで上書きされない。
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        let entry = fonts.families.entry(family).or_default();
+        for name in &to_append {
+            entry.push(name.clone());
+        }
+    }
+    ctx.set_fonts(fonts);
+}
+
+/// yt-dlp が PATH 上にあるか確認し、なければ同梱ディレクトリを PATH 先頭に追加する。
 fn ensure_ytdlp_on_path() {
+    let ytdlp_name = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
+    let path_sep = if cfg!(windows) { ";" } else { ":" };
+
+    // システム PATH 上にあればそのまま使う。
+    if let Ok(output) = std::process::Command::new("which")
+        .arg("yt-dlp")
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout);
+            println!("yt-dlp found: {}", path.trim());
+            return;
+        }
+    }
+
+    // 同梱ディレクトリを探す。
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -95,23 +196,25 @@ fn ensure_ytdlp_on_path() {
     candidates.push(PathBuf::from("tools"));
 
     for dir in &candidates {
-        if dir.join("yt-dlp.exe").exists() {
+        if dir.join(ytdlp_name).exists() {
             let current = std::env::var("PATH").unwrap_or_default();
-            std::env::set_var("PATH", format!("{};{}", dir.display(), current));
-            println!("yt-dlp found: {}", dir.join("yt-dlp.exe").display());
+            std::env::set_var("PATH", format!("{}{path_sep}{current}", dir.display()));
+            println!("yt-dlp found: {}", dir.join(ytdlp_name).display());
             return;
         }
     }
-    eprintln!("warning: yt-dlp.exe not found near the executable; YouTube URLs may fail");
+    eprintln!("warning: yt-dlp not found; YouTube URLs may fail");
 }
 
-/// 初期化済み（ウィンドウ・GL・mpv がそろった）状態。
+/// 初期化済み（ウィンドウ・GL・Player がそろった）状態。
 struct Running {
     egui_glow: egui_glow::EguiGlow,
-    // RenderContext は Mpv を借用する。Mpv はリークして 'static 化しているため、
-    // RenderContext<'static> として保持できる（自己参照を回避）。
-    render_context: RenderContext<'static>,
-    mpv: &'static Mpv,
+    /// 動画プレイヤー（mpv + 描画先テクスチャを内包）。
+    player: player::Player,
+    /// 動画テクスチャを背景として描画するクワッド。
+    quad: gl_quad::FullscreenQuad,
+    /// 直接 GL 操作（背景クリア等）用。
+    gl: Arc<glow::Context>,
     gl_context: glutin::context::PossiblyCurrentContext,
     gl_surface: Surface<WindowSurface>,
     window: Window,
@@ -132,21 +235,99 @@ struct Running {
     auth_busy: bool,
     auth_tx: Sender<AuthMsg>,
     auth_rx: Receiver<AuthMsg>,
+    // --- ライブチャット ---
+    chat_messages: Vec<chat::ChatMessage>,
+    chat_tx: Sender<chat::ChatUpdate>,
+    chat_rx: Receiver<chat::ChatUpdate>,
+    chat_stop: Option<chat::ChatStop>,
+    chat_status: String,
+    chat_visible: bool,
+    // --- おすすめ動画 ---
+    recommend_items: Vec<recommend::VideoItem>,
+    recommend_tx: Sender<recommend::RecommendUpdate>,
+    recommend_rx: Receiver<recommend::RecommendUpdate>,
+    recommend_visible: bool,
+    recommend_status: String,
+    // --- 登録チャンネル新着 ---
+    sub_items: Vec<subscriptions::SubVideo>,
+    sub_tx: Sender<subscriptions::SubUpdate>,
+    sub_rx: Receiver<subscriptions::SubUpdate>,
+    sub_visible: bool,
+    sub_status: String,
+    sub_busy: bool,
+    // --- 再生リスト ---
+    playlist_lists: Vec<playlist::PlaylistSummary>,
+    playlist_items: Vec<playlist::PlaylistItem>,
+    playlist_items_title: String,
+    playlist_tx: Sender<playlist::PlaylistUpdate>,
+    playlist_rx: Receiver<playlist::PlaylistUpdate>,
+    playlist_visible: bool,
+    playlist_status: String,
+    playlist_busy: bool,
+    // --- ストリーム解決（yt-dlp）---
+    resolve_tx: Sender<resolve::ResolveUpdate>,
+    resolve_rx: Receiver<resolve::ResolveUpdate>,
+    resolve_busy: bool,
+    load_error: Option<String>,
 }
 
 impl Running {
-    /// 動画を読み込む。
+    /// 動画を読み込む。YouTube URL は背景で yt-dlp 解決してから mpv に渡す。
     fn load(&mut self, url: &str) {
-        let url = url.trim();
+        let url = url.trim().to_string();
         if url.is_empty() {
             return;
         }
-        match self.mpv.command("loadfile", &[url]) {
-            Ok(_) => {
-                println!("loadfile: {url}");
-                self.current_url = url.to_string();
+        self.current_url = url.clone();
+        self.load_error = None;
+
+        if resolve::is_youtube_url(&url) {
+            self.start_resolve(url);
+        } else {
+            // YouTube 以外の URL（直リンク等）はそのまま mpv に渡す。
+            self.mpv_loadfile(&url, None, None);
+        }
+    }
+
+    /// yt-dlp による解決を背景スレッドで開始する。
+    fn start_resolve(&mut self, url: String) {
+        self.resolve_busy = true;
+        let tx = self.resolve_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            resolve::resolve(&url, &tx);
+            let _ = proxy.send_event(UserEvent::Background);
+        });
+    }
+
+    /// 解決結果を取り込み、mpv に loadfile する。
+    fn poll_resolve(&mut self) {
+        while let Ok(update) = self.resolve_rx.try_recv() {
+            self.resolve_busy = false;
+            match update {
+                resolve::ResolveUpdate::Ready(r) => {
+                    self.mpv_loadfile(
+                        &r.video_url,
+                        r.audio_url.as_deref(),
+                        r.title.as_deref(),
+                    );
+                }
+                resolve::ResolveUpdate::Error(e) => {
+                    self.load_error = Some(e.clone());
+                    eprintln!("resolve failed: {e}");
+                }
             }
-            Err(e) => eprintln!("loadfile failed: {e}"),
+        }
+    }
+
+    /// Player に解決済み URL を渡して再生開始する。
+    fn mpv_loadfile(&mut self, video_url: &str, audio_url: Option<&str>, title: Option<&str>) {
+        match self.player.loadfile(video_url, audio_url, title) {
+            Ok(_) => println!("loadfile: {video_url}"),
+            Err(e) => {
+                eprintln!("loadfile failed: {e}");
+                self.load_error = Some(e.to_string());
+            }
         }
     }
 
@@ -222,6 +403,189 @@ impl Running {
         });
     }
 
+    /// チャット更新を取り込む。
+    fn poll_chat(&mut self) {
+        while let Ok(update) = self.chat_rx.try_recv() {
+            match update {
+                chat::ChatUpdate::Messages(msgs) => {
+                    self.chat_messages.extend(msgs);
+                    // 上限を超えたら古いメッセージを捨てる。
+                    if self.chat_messages.len() > CHAT_MAX_MESSAGES {
+                        let excess = self.chat_messages.len() - CHAT_MAX_MESSAGES;
+                        self.chat_messages.drain(..excess);
+                    }
+                    self.chat_status = format!("チャット ({} 件)", self.chat_messages.len());
+                }
+                chat::ChatUpdate::Error(e) => {
+                    self.chat_status = format!("チャットエラー: {e}");
+                }
+                chat::ChatUpdate::NotLive => {
+                    self.chat_status.clear();
+                    self.stop_chat();
+                }
+            }
+        }
+    }
+
+    /// ライブチャットのポーリングを背景スレッドで開始する。
+    fn start_chat(&mut self, video_id: String) {
+        self.stop_chat();
+        self.chat_messages.clear();
+        self.chat_status = "チャット接続中…".to_string();
+        self.chat_visible = true;
+
+        let (stopper, stop_flag) = chat::ChatStop::new();
+        self.chat_stop = Some(stopper);
+
+        let tx = self.chat_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            chat::run_chat_poll(&video_id, &tx, &stop_flag);
+            let _ = proxy.send_event(UserEvent::Background);
+        });
+    }
+
+    /// おすすめ動画の更新を取り込む。
+    fn poll_recommend(&mut self) {
+        while let Ok(update) = self.recommend_rx.try_recv() {
+            match update {
+                recommend::RecommendUpdate::Items(items) => {
+                    self.recommend_status = format!("おすすめ ({} 件)", items.len());
+                    self.recommend_items = items;
+                }
+                recommend::RecommendUpdate::Error(e) => {
+                    self.recommend_status = format!("取得エラー: {e}");
+                }
+            }
+        }
+    }
+
+    /// おすすめ動画を背景スレッドで取得する。
+    fn start_recommend(&mut self, video_id: String) {
+        self.recommend_items.clear();
+        self.recommend_status = "おすすめ取得中…".to_string();
+        let tx = self.recommend_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            recommend::fetch_recommendations(&video_id, &tx);
+            let _ = proxy.send_event(UserEvent::Background);
+        });
+    }
+
+    /// 登録チャンネル新着の更新を取り込む。
+    fn poll_subs(&mut self) {
+        while let Ok(update) = self.sub_rx.try_recv() {
+            self.sub_busy = false;
+            match update {
+                subscriptions::SubUpdate::Items(items) => {
+                    self.sub_status = format!("新着動画 ({} 件)", items.len());
+                    self.sub_items = items;
+                }
+                subscriptions::SubUpdate::Error(e) => {
+                    self.sub_status = format!("取得エラー: {e}");
+                }
+            }
+        }
+    }
+
+    /// 登録チャンネルの新着動画を背景スレッドで取得する。
+    fn start_subs(&mut self) {
+        let Some(tokens) = &self.tokens else {
+            self.sub_status = "先にログインしてください".to_string();
+            return;
+        };
+        if self.sub_busy {
+            return;
+        }
+        self.sub_busy = true;
+        self.sub_status = "新着動画を取得中…".to_string();
+        self.sub_visible = true;
+
+        let access_token = tokens.access_token.clone();
+        let tx = self.sub_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            subscriptions::fetch_subscription_feed(&access_token, &tx);
+            let _ = proxy.send_event(UserEvent::Background);
+        });
+    }
+
+    /// 再生リストの更新を取り込む。
+    fn poll_playlist(&mut self) {
+        while let Ok(update) = self.playlist_rx.try_recv() {
+            self.playlist_busy = false;
+            match update {
+                playlist::PlaylistUpdate::Playlists(lists) => {
+                    self.playlist_status = format!("再生リスト ({} 件)", lists.len());
+                    self.playlist_lists = lists;
+                    // リスト一覧に戻ったので動画一覧をクリア。
+                    self.playlist_items.clear();
+                    self.playlist_items_title.clear();
+                }
+                playlist::PlaylistUpdate::Items { title, items } => {
+                    self.playlist_status = format!("{title} ({} 件)", items.len());
+                    self.playlist_items_title = title;
+                    self.playlist_items = items;
+                }
+                playlist::PlaylistUpdate::Error(e) => {
+                    self.playlist_status = format!("取得エラー: {e}");
+                }
+            }
+        }
+    }
+
+    /// 自分の再生リスト一覧を背景スレッドで取得する。
+    fn start_playlist_list(&mut self) {
+        let Some(tokens) = &self.tokens else {
+            self.playlist_status = "先にログインしてください".to_string();
+            return;
+        };
+        if self.playlist_busy {
+            return;
+        }
+        self.playlist_busy = true;
+        self.playlist_lists.clear();
+        self.playlist_items.clear();
+        self.playlist_items_title.clear();
+        self.playlist_status = "再生リスト取得中…".to_string();
+        self.playlist_visible = true;
+
+        let access_token = tokens.access_token.clone();
+        let tx = self.playlist_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            playlist::fetch_my_playlists(&access_token, &tx);
+            let _ = proxy.send_event(UserEvent::Background);
+        });
+    }
+
+    /// 選択した再生リストの動画一覧を背景スレッドで取得する。
+    fn start_playlist_items(&mut self, playlist_id: String, title: String) {
+        let Some(tokens) = &self.tokens else {
+            return;
+        };
+        if self.playlist_busy {
+            return;
+        }
+        self.playlist_busy = true;
+        self.playlist_status = format!("{title} を読み込み中…");
+
+        let access_token = tokens.access_token.clone();
+        let tx = self.playlist_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            playlist::fetch_playlist_items(&access_token, &playlist_id, &title, &tx);
+            let _ = proxy.send_event(UserEvent::Background);
+        });
+    }
+
+    /// ライブチャットのポーリングを停止する。
+    fn stop_chat(&mut self) {
+        if let Some(stopper) = self.chat_stop.take() {
+            stopper.stop();
+        }
+    }
+
     /// 現在の動画に高評価を付ける（必要ならトークンを更新してから）を背景で開始。
     fn start_like(&mut self, video_id: String) {
         let Some(tokens) = self.tokens.clone() else {
@@ -263,23 +627,51 @@ impl Running {
     /// 1 フレーム描画する：mpv 動画 → egui UI の順に重ねて表示。
     fn redraw(&mut self) {
         self.poll_auth();
+        self.poll_chat();
+        self.poll_recommend();
+        self.poll_subs();
+        self.poll_playlist();
+        self.poll_resolve();
 
         let _ = self.gl_context.make_current(&self.gl_surface);
 
         let size = self.window.inner_size();
         let (w, h) = (size.width.max(1) as i32, size.height.max(1) as i32);
 
-        // 下地として mpv の映像を既定フレームバッファ(fbo 0)へ描画。flip=true は GL 座標系向け。
-        if let Err(e) = self.render_context.render::<()>(0, w, h, true) {
-            eprintln!("mpv render error: {e}");
+        // チャットパネルが表示される条件と一致させて、動画の描画領域を決める。
+        // CHAT_PANEL_WIDTH は egui の論理ポイント単位。
+        // self.window.inner_size() は物理ピクセル単位（Retina では 2 倍）なので
+        // scale_factor をかけて物理ピクセルに変換する必要がある。
+        let scale = self.window.scale_factor() as f32;
+        let chat_panel_w: i32 = (CHAT_PANEL_WIDTH * scale) as i32;
+        let chat_visible_now = self.chat_visible && !self.chat_messages.is_empty();
+        let video_w = if chat_visible_now {
+            (w - chat_panel_w).max(1)
+        } else {
+            w
+        };
+
+        // 背景を黒でクリア（動画が描かれない領域のため）。
+        unsafe {
+            use glow::HasContext;
+            self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            self.gl.viewport(0, 0, w, h);
+            self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
+            self.gl.clear(glow::COLOR_BUFFER_BIT);
         }
 
-        // mpv の現在状態を取得（ファイル未読込時はエラーになるので既定値で受ける）。
-        let paused = self.mpv.get_property::<bool>("pause").unwrap_or(false);
-        let time_pos = self.mpv.get_property::<f64>("time-pos").unwrap_or(0.0);
-        let duration = self.mpv.get_property::<f64>("duration").unwrap_or(0.0);
-        let volume = self.mpv.get_property::<f64>("volume").unwrap_or(100.0);
-        let title = self.mpv.get_property::<String>("media-title").unwrap_or_default();
+        // 動画フレームを Player 内のテクスチャに描画（動画領域のアスペクトで）。
+        // egui の Y 軸はウィンドウ上から下、OpenGL は下から上なので、
+        // チャットが右側なら動画ビューポートは (0, 0, video_w, h) で左下原点から左半分を覆う。
+        self.player.render(video_w, h);
+        self.quad.draw(self.player.texture(), (0, 0, video_w, h));
+
+        // 現在の再生状態を Player から取得。
+        let paused = self.player.paused();
+        let time_pos = self.player.time_pos();
+        let duration = self.player.duration();
+        let volume = self.player.volume();
+        let title = self.player.media_title();
 
         // 一定時間操作がなければ UI を隠す。表示状態が変わったらカーソルも合わせる。
         let show_ui = self.last_activity.elapsed() < UI_HIDE_AFTER;
@@ -296,32 +688,371 @@ impl Running {
         let channel = self.channel.clone();
         let video_id = auth::extract_video_id(&self.current_url);
 
-        let mpv = self.mpv;
+        let chat_messages = &self.chat_messages;
+        let chat_status = self.chat_status.clone();
+        let chat_visible = self.chat_visible;
+
+        let recommend_items = &self.recommend_items;
+        let recommend_visible = self.recommend_visible;
+        let recommend_status = self.recommend_status.clone();
+
+        let sub_items = &self.sub_items;
+        let sub_visible = self.sub_visible;
+        let sub_status = self.sub_status.clone();
+        let sub_busy = self.sub_busy;
+
+        let playlist_lists = &self.playlist_lists;
+        let playlist_items = &self.playlist_items;
+        let playlist_visible = self.playlist_visible;
+        let playlist_status = self.playlist_status.clone();
+        let playlist_busy = self.playlist_busy;
+
+        let resolve_busy = self.resolve_busy;
+        let load_error = self.load_error.clone();
+
+        let player = &self.player;
         let window = &self.window;
         let url_input = &mut self.url_input;
         let mut to_load: Option<String> = None;
         let mut login_clicked = false;
         let mut like_clicked = false;
+        let mut toggle_chat = false;
+        let mut toggle_recommend = false;
+        let mut toggle_subs = false;
+        let mut toggle_playlist = false;
+        let mut pick_playlist: Option<(String, String)> = None; // (id, title)
+        let mut playlist_back = false;
+        let mut pick_video: Option<String> = None;
         self.egui_glow.run(window, |ctx| {
             // キーボードショートカットは UI 非表示中も有効（URL 欄入力中のみ無効）。
             if !ctx.wants_keyboard_input() {
                 ctx.input(|i| {
                     if i.key_pressed(egui::Key::Space) {
-                        let _ = mpv.set_property("pause", !paused);
+                        player.set_paused(!paused);
                     }
                     if i.key_pressed(egui::Key::ArrowRight) {
-                        let _ = mpv.command("seek", &["5", "relative"]);
+                        player.seek_relative(5.0);
                     }
                     if i.key_pressed(egui::Key::ArrowLeft) {
-                        let _ = mpv.command("seek", &["-5", "relative"]);
+                        player.seek_relative(-5.0);
                     }
                     if i.key_pressed(egui::Key::ArrowUp) {
-                        let _ = mpv.set_property("volume", (volume + 5.0).min(130.0));
+                        player.set_volume((volume + 5.0).min(130.0));
                     }
                     if i.key_pressed(egui::Key::ArrowDown) {
-                        let _ = mpv.set_property("volume", (volume - 5.0).max(0.0));
+                        player.set_volume((volume - 5.0).max(0.0));
+                    }
+                    // Escape で最前面のオーバーレイを閉じる。
+                    if i.key_pressed(egui::Key::Escape) {
+                        if playlist_visible {
+                            toggle_playlist = true;
+                        } else if sub_visible {
+                            toggle_subs = true;
+                        } else if recommend_visible {
+                            toggle_recommend = true;
+                        } else if chat_visible {
+                            toggle_chat = true;
+                        }
                     }
                 });
+            }
+
+            // おすすめ動画オーバーレイ（プレーヤー全体を覆う）。
+            if recommend_visible && !recommend_items.is_empty() {
+                let screen = ctx.screen_rect();
+                egui::Area::new(egui::Id::new("recommend_overlay"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(screen.min)
+                    .show(ctx, |ui| {
+                        let frame = egui::Frame::none()
+                            .fill(egui::Color32::from_black_alpha(220))
+                            .inner_margin(16.0);
+                        frame.show(ui, |ui| {
+                            // Frame の inner_margin (16) を考慮して内部コンテンツサイズを固定。
+                            let inner = screen.size() - egui::vec2(32.0, 32.0);
+                            ui.set_min_size(inner);
+                            ui.set_max_size(inner);
+
+                            if draw_overlay_header(ui, &recommend_status, false) {
+                                toggle_recommend = true;
+                            }
+                            ui.separator();
+
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                for item in recommend_items {
+                                    let resp = ui
+                                        .horizontal(|ui| {
+                                            ui.set_min_width(ui.available_width());
+                                            ui.vertical(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(&item.title)
+                                                        .color(egui::Color32::WHITE)
+                                                        .strong(),
+                                                );
+                                                ui.horizontal(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(&item.channel)
+                                                            .color(egui::Color32::from_rgb(
+                                                                180, 180, 180,
+                                                            )),
+                                                    );
+                                                    if !item.duration.is_empty() {
+                                                        ui.label(
+                                                            egui::RichText::new(&item.duration)
+                                                                .color(egui::Color32::from_rgb(
+                                                                    150, 150, 150,
+                                                                )),
+                                                        );
+                                                    }
+                                                    if !item.view_count.is_empty() {
+                                                        ui.label(
+                                                            egui::RichText::new(&item.view_count)
+                                                                .color(egui::Color32::from_rgb(
+                                                                    150, 150, 150,
+                                                                )),
+                                                        );
+                                                    }
+                                                });
+                                            });
+                                        })
+                                        .response;
+
+                                    if resp.interact(egui::Sense::click()).clicked() {
+                                        pick_video =
+                                            Some(format!(
+                                                "https://www.youtube.com/watch?v={}",
+                                                item.video_id
+                                            ));
+                                        toggle_recommend = true;
+                                    }
+
+                                    ui.separator();
+                                }
+                            });
+                        });
+                    });
+            }
+
+            // 登録チャンネル新着オーバーレイ。
+            if sub_visible {
+                let screen = ctx.screen_rect();
+                egui::Area::new(egui::Id::new("subs_overlay"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(screen.min)
+                    .show(ctx, |ui| {
+                        let frame = egui::Frame::none()
+                            .fill(egui::Color32::from_black_alpha(220))
+                            .inner_margin(16.0);
+                        frame.show(ui, |ui| {
+                            // Frame の inner_margin (16) を考慮して内部コンテンツサイズを固定。
+                            let inner = screen.size() - egui::vec2(32.0, 32.0);
+                            ui.set_min_size(inner);
+                            ui.set_max_size(inner);
+
+                            if draw_overlay_header(ui, &sub_status, sub_busy) {
+                                toggle_subs = true;
+                            }
+                            ui.separator();
+
+                            if sub_items.is_empty() && !sub_busy {
+                                ui.label(
+                                    egui::RichText::new("新着動画がありません")
+                                        .color(egui::Color32::GRAY),
+                                );
+                            }
+
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                for item in sub_items {
+                                    let resp = ui
+                                        .horizontal(|ui| {
+                                            ui.set_min_width(ui.available_width());
+                                            ui.vertical(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(&item.title)
+                                                        .color(egui::Color32::WHITE)
+                                                        .strong(),
+                                                );
+                                                ui.horizontal(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(&item.channel)
+                                                            .color(egui::Color32::from_rgb(
+                                                                180, 180, 180,
+                                                            )),
+                                                    );
+                                                    if !item.published.is_empty() {
+                                                        ui.label(
+                                                            egui::RichText::new(&item.published)
+                                                                .color(egui::Color32::from_rgb(
+                                                                    150, 150, 150,
+                                                                )),
+                                                        );
+                                                    }
+                                                });
+                                            });
+                                        })
+                                        .response;
+
+                                    if resp.interact(egui::Sense::click()).clicked() {
+                                        pick_video = Some(format!(
+                                            "https://www.youtube.com/watch?v={}",
+                                            item.video_id
+                                        ));
+                                        toggle_subs = true;
+                                    }
+
+                                    ui.separator();
+                                }
+                            });
+                        });
+                    });
+            }
+
+            // 再生リストオーバーレイ（2段階: 一覧 → 動画リスト）。
+            if playlist_visible {
+                let screen = ctx.screen_rect();
+                egui::Area::new(egui::Id::new("playlist_overlay"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(screen.min)
+                    .show(ctx, |ui| {
+                        let frame = egui::Frame::none()
+                            .fill(egui::Color32::from_black_alpha(220))
+                            .inner_margin(16.0);
+                        frame.show(ui, |ui| {
+                            // Frame の inner_margin (16) を考慮して内部コンテンツサイズを固定。
+                            let inner = screen.size() - egui::vec2(32.0, 32.0);
+                            ui.set_min_size(inner);
+                            ui.set_max_size(inner);
+
+                            // ヘッダー（左に戻る・タイトル・スピナー、右に「✕ 閉じる」）。
+                            ui.horizontal(|ui| {
+                                if !playlist_items.is_empty()
+                                    && ui.button("← 一覧").clicked()
+                                {
+                                    playlist_back = true;
+                                }
+                                ui.label(
+                                    egui::RichText::new(&playlist_status)
+                                        .color(egui::Color32::WHITE)
+                                        .heading(),
+                                );
+                                if playlist_busy {
+                                    ui.spinner();
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.button("閉じる").clicked() {
+                                            toggle_playlist = true;
+                                        }
+                                    },
+                                );
+                            });
+                            ui.separator();
+
+                            if !playlist_items.is_empty() {
+                                // --- 動画リスト表示 ---
+                                egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    for item in playlist_items {
+                                        let resp = ui
+                                            .horizontal(|ui| {
+                                                ui.set_min_width(ui.available_width());
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        format!("{}", item.position + 1),
+                                                    )
+                                                    .color(egui::Color32::from_rgb(120, 120, 120))
+                                                    .monospace(),
+                                                );
+                                                ui.vertical(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(&item.title)
+                                                            .color(egui::Color32::WHITE)
+                                                            .strong(),
+                                                    );
+                                                    if !item.channel.is_empty() {
+                                                        ui.label(
+                                                            egui::RichText::new(&item.channel)
+                                                                .color(egui::Color32::from_rgb(
+                                                                    180, 180, 180,
+                                                                )),
+                                                        );
+                                                    }
+                                                });
+                                            })
+                                            .response;
+
+                                        if resp.interact(egui::Sense::click()).clicked() {
+                                            pick_video = Some(format!(
+                                                "https://www.youtube.com/watch?v={}",
+                                                item.video_id
+                                            ));
+                                            toggle_playlist = true;
+                                        }
+                                        ui.separator();
+                                    }
+                                });
+                            } else if !playlist_lists.is_empty() {
+                                // --- 再生リスト一覧表示 ---
+                                egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    for pl in playlist_lists {
+                                        let resp = ui
+                                            .horizontal(|ui| {
+                                                ui.set_min_width(ui.available_width());
+                                                ui.vertical(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(&pl.title)
+                                                            .color(egui::Color32::WHITE)
+                                                            .strong(),
+                                                    );
+                                                    if pl.item_count > 0 {
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "{} 本",
+                                                                pl.item_count
+                                                            ))
+                                                            .color(egui::Color32::from_rgb(
+                                                                150, 150, 150,
+                                                            )),
+                                                        );
+                                                    }
+                                                });
+                                            })
+                                            .response;
+
+                                        if resp.interact(egui::Sense::click()).clicked() {
+                                            pick_playlist = Some((
+                                                pl.playlist_id.clone(),
+                                                pl.title.clone(),
+                                            ));
+                                        }
+                                        ui.separator();
+                                    }
+                                });
+                            }
+                        });
+                    });
+            }
+
+            // ライブチャットサイドパネル（右）。動画と並べて表示し、動画には重ねない。
+            // UI 非表示中も表示する（独立した恒常パネルとして扱う）。
+            if chat_visible && !chat_messages.is_empty() {
+                egui::SidePanel::right("chat_panel")
+                    .resizable(false)
+                    .exact_width(CHAT_PANEL_WIDTH)
+                    .frame(egui::Frame::none().fill(egui::Color32::from_rgb(20, 20, 20)))
+                    .show(ctx, |ui| {
+                        if draw_chat(ui, chat_messages, &chat_status) {
+                            toggle_chat = true;
+                        }
+                    });
             }
 
             if !show_ui {
@@ -343,8 +1074,18 @@ impl Running {
                     }
                 });
 
-                // タイトル表示（動画読込後のみ）。
-                if !title.is_empty() {
+                // タイトル / 解決中スピナー / エラー表示。
+                if resolve_busy {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("動画を解決中…");
+                    });
+                } else if let Some(err) = &load_error {
+                    ui.label(
+                        egui::RichText::new(format!("読み込み失敗: {err}"))
+                            .color(egui::Color32::from_rgb(255, 100, 100)),
+                    );
+                } else if !title.is_empty() {
                     ui.label(egui::RichText::new(&title).strong());
                 }
 
@@ -370,6 +1111,39 @@ impl Running {
                         }
                     }
                     ui.label(&auth_status);
+
+                    // チャット表示切り替え（チャットが接続中 or メッセージがあるとき）。
+                    if !chat_status.is_empty() {
+                        ui.separator();
+                        let label = if chat_visible { "💬 チャット非表示" } else { "💬 チャット表示" };
+                        if ui.button(label).clicked() {
+                            toggle_chat = true;
+                        }
+                    }
+
+                    // おすすめ動画。
+                    if !recommend_items.is_empty() {
+                        ui.separator();
+                        if ui.button("📋 おすすめ").clicked() {
+                            toggle_recommend = true;
+                        }
+                    }
+
+                    // 再生リスト。
+                    if logged_in {
+                        ui.separator();
+                        if ui.button("📃 再生リスト").clicked() {
+                            toggle_playlist = true;
+                        }
+                    }
+
+                    // 登録チャンネル新着。
+                    if logged_in {
+                        ui.separator();
+                        if ui.button("📺 新着").on_hover_text("登録チャンネルの新着動画").clicked() {
+                            toggle_subs = true;
+                        }
+                    }
                 });
             });
 
@@ -378,7 +1152,7 @@ impl Running {
                     // 再生 / 一時停止
                     let label = if paused { "▶" } else { "⏸" };
                     if ui.button(label).clicked() {
-                        let _ = mpv.set_property("pause", !paused);
+                        player.set_paused(!paused);
                     }
 
                     ui.label(format_time(time_pos));
@@ -391,7 +1165,7 @@ impl Running {
                     let resp = ui.add_enabled(seekable, slider);
                     // ドラッグ終了時・クリック時にシーク（毎フレームのシーク連発を避ける）。
                     if seekable && (resp.drag_stopped() || (resp.changed() && !resp.dragged())) {
-                        let _ = mpv.set_property("time-pos", pos);
+                        player.set_time_pos(pos);
                     }
 
                     ui.label(format_time(duration));
@@ -404,7 +1178,7 @@ impl Running {
                         .add(egui::Slider::new(&mut vol, 0.0..=130.0).fixed_decimals(0))
                         .changed()
                     {
-                        let _ = mpv.set_property("volume", vol);
+                        player.set_volume(vol);
                     }
                 });
             });
@@ -424,8 +1198,55 @@ impl Running {
             self.window.request_redraw();
         }
 
-        if let Some(url) = to_load {
+        if let Some(url) = pick_video {
+            self.url_input = url.clone();
             self.load(&url);
+            if let Some(vid) = auth::extract_video_id(&self.current_url) {
+                self.start_chat(vid.clone());
+                self.start_recommend(vid);
+            }
+            // 再生リスト・新着から選んだ場合はリスト自体はリセットしない。
+        } else if let Some(url) = to_load {
+            self.load(&url);
+            if let Some(vid) = auth::extract_video_id(&self.current_url) {
+                self.start_chat(vid.clone());
+                self.start_recommend(vid);
+            }
+            // URL 手入力時は再生リストの動画一覧をリセット（一覧は保持）。
+            self.playlist_items.clear();
+            self.playlist_items_title.clear();
+        }
+        if toggle_chat {
+            self.chat_visible = !self.chat_visible;
+        }
+        if toggle_recommend {
+            self.recommend_visible = !self.recommend_visible;
+        }
+        if toggle_subs {
+            self.sub_visible = !self.sub_visible;
+            // 表示時かつ未取得なら取得開始。
+            if self.sub_visible && self.sub_items.is_empty() && !self.sub_busy {
+                self.start_subs();
+            }
+        }
+        if toggle_playlist {
+            self.playlist_visible = !self.playlist_visible;
+            // 表示時かつ未取得なら一覧取得開始。
+            if self.playlist_visible
+                && self.playlist_lists.is_empty()
+                && self.playlist_items.is_empty()
+                && !self.playlist_busy
+            {
+                self.start_playlist_list();
+            }
+        }
+        if let Some((pl_id, pl_title)) = pick_playlist {
+            self.start_playlist_items(pl_id, pl_title);
+        }
+        if playlist_back {
+            self.playlist_items.clear();
+            self.playlist_items_title.clear();
+            self.playlist_status = format!("再生リスト ({} 件)", self.playlist_lists.len());
         }
         if login_clicked {
             self.start_login();
@@ -438,19 +1259,104 @@ impl Running {
     }
 }
 
+/// チャットパネルの描画。閉じるボタンが押されたら true を返す。
+/// オーバーレイ共通のヘッダーを描画する。「✕ 閉じる」が押されたら true を返す。
+/// 1 行ぶんの高さで、左にタイトル＋スピナー、右に閉じるボタンを配置する。
+fn draw_overlay_header(ui: &mut egui::Ui, title: &str, busy: bool) -> bool {
+    let mut close = false;
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(title)
+                .color(egui::Color32::WHITE)
+                .heading(),
+        );
+        if busy {
+            ui.spinner();
+        }
+        // 残りの幅を右寄せレイアウトで使い、閉じるボタンを右端に。
+        ui.with_layout(
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                if ui.button("閉じる").clicked() {
+                    close = true;
+                }
+            },
+        );
+    });
+    close
+}
+
+fn draw_chat(ui: &mut egui::Ui, messages: &[chat::ChatMessage], status: &str) -> bool {
+    let mut close = false;
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(status)
+                .color(egui::Color32::WHITE)
+                .strong(),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("閉じる").on_hover_text("チャットを閉じる").clicked() {
+                close = true;
+            }
+        });
+    });
+    ui.separator();
+
+    egui::ScrollArea::vertical()
+        .stick_to_bottom(true)
+        .show(ui, |ui| {
+            // テキスト・カスタム絵文字画像が1行内で混在するため間隔を詰める。
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for msg in messages {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new(&msg.author)
+                            .color(egui::Color32::from_rgb(100, 180, 255))
+                            .strong(),
+                    );
+                    for run in &msg.runs {
+                        match run {
+                            chat::ChatRun::Text(t) => {
+                                ui.label(
+                                    egui::RichText::new(t).color(egui::Color32::WHITE),
+                                );
+                            }
+                            chat::ChatRun::Image { url, alt } => {
+                                // インライン絵文字サイズ（行の高さに合わせる）。
+                                let size = ui.text_style_height(&egui::TextStyle::Body);
+                                let img = egui::Image::new(url)
+                                    .max_height(size)
+                                    .fit_to_original_size(1.0);
+                                ui.add(img).on_hover_text(alt);
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    close
+}
+
 struct App {
     proxy: EventLoopProxy<UserEvent>,
     initial_url: Option<String>,
     verbose: bool,
+    backend: String,
     state: Option<Running>,
 }
 
 impl App {
-    fn new(proxy: EventLoopProxy<UserEvent>, initial_url: Option<String>) -> Self {
+    fn new(
+        proxy: EventLoopProxy<UserEvent>,
+        initial_url: Option<String>,
+        verbose: bool,
+        backend: String,
+    ) -> Self {
         Self {
             proxy,
             initial_url,
-            verbose: std::env::var("TALAVA_VERBOSE").is_ok(),
+            verbose,
+            backend,
             state: None,
         }
     }
@@ -459,7 +1365,7 @@ impl App {
     fn init(&mut self, event_loop: &ActiveEventLoop) -> Result<Running> {
         // --- ウィンドウ + GL コンフィグ ---
         let window_attributes = Window::default_attributes()
-            .with_title("Talava Player")
+            .with_title("YouTube Super Lite")
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0));
 
         let template = ConfigTemplateBuilder::new().with_alpha_size(8);
@@ -502,55 +1408,42 @@ impl App {
             let _ = gl_surface.set_swap_interval(&gl_context, SwapInterval::Wait(one));
         }
 
-        // --- glow + egui ---
-        let gl = unsafe {
+        // --- glow + egui + Player ---
+        let gl = Arc::new(unsafe {
             glow::Context::from_loader_function_cstr(|s| gl_display.get_proc_address(s).cast())
-        };
-        let egui_glow = egui_glow::EguiGlow::new(event_loop, Arc::new(gl), None, None, true);
-
-        // --- mpv（Render API 利用時は vo=libmpv）---
-        let verbose = self.verbose;
-        let mpv = Mpv::with_initializer(|init| {
-            init.set_property("vo", "libmpv")?;
-            init.set_property("ytdl", true)?;
-            init.set_property("ytdl-format", "bestvideo+bestaudio/best")?;
-            if verbose {
-                init.set_property("terminal", true)?;
-                init.set_property("msg-level", "all=status")?;
-            }
-            Ok(())
-        })
-        .map_err(|e| anyhow!("mpv init failed: {e}"))?;
-
-        // RenderContext は Mpv を借用するため、Mpv をリークして 'static 化する。
-        let mpv: &'static Mpv = Box::leak(Box::new(mpv));
-
-        // --- mpv Render Context（OpenGL）---
-        let mut render_context = mpv
-            .create_render_context(vec![
-                RenderParam::ApiType(RenderParamApiType::OpenGl),
-                RenderParam::InitParams(OpenGLInitParams {
-                    get_proc_address,
-                    ctx: gl_display.clone(),
-                }),
-            ])
-            .map_err(|e| anyhow!("mpv render context failed: {e}"))?;
-
-        // 新フレーム到着時にイベントループを起こして再描画させる。
-        let proxy = self.proxy.clone();
-        render_context.set_update_callback(move || {
-            let _ = proxy.send_event(UserEvent::MpvRedraw);
         });
+        let egui_glow = egui_glow::EguiGlow::new(event_loop, gl.clone(), None, None, true);
+        setup_japanese_font(&egui_glow.egui_ctx);
+        // メンバーシップスタンプ等のカスタム絵文字を URL から動的に描画するため画像ローダを登録。
+        egui_extras::install_image_loaders(&egui_glow.egui_ctx);
+
+        let proxy_for_mpv = self.proxy.clone();
+        let player = player::Player::new(gl.clone(), gl_display.clone(), self.verbose, move || {
+            let _ = proxy_for_mpv.send_event(UserEvent::MpvRedraw);
+        })?;
+        let quad = gl_quad::FullscreenQuad::new(gl.clone())?;
 
         // 認証まわりの初期化。
-        let backend = auth::backend_base();
+        let backend = self.backend.clone();
         let (auth_tx, auth_rx) = std::sync::mpsc::channel();
         let auth_status = "未ログイン".to_string();
 
+        // チャットまわりの初期化。
+        let (chat_tx, chat_rx) = std::sync::mpsc::channel();
+        // おすすめ動画の初期化。
+        let (recommend_tx, recommend_rx) = std::sync::mpsc::channel();
+        // 登録チャンネル新着の初期化。
+        let (sub_tx, sub_rx) = std::sync::mpsc::channel();
+        // 再生リストの初期化。
+        let (playlist_tx, playlist_rx) = std::sync::mpsc::channel();
+        // yt-dlp ストリーム解決の初期化。
+        let (resolve_tx, resolve_rx) = std::sync::mpsc::channel();
+
         let mut running = Running {
             egui_glow,
-            render_context,
-            mpv,
+            player,
+            quad,
+            gl: gl.clone(),
             gl_context,
             gl_surface,
             window,
@@ -568,6 +1461,35 @@ impl App {
             auth_busy: false,
             auth_tx,
             auth_rx,
+            chat_messages: Vec::new(),
+            chat_tx,
+            chat_rx,
+            chat_stop: None,
+            chat_status: String::new(),
+            chat_visible: false,
+            recommend_items: Vec::new(),
+            recommend_tx,
+            recommend_rx,
+            recommend_visible: false,
+            recommend_status: String::new(),
+            sub_items: Vec::new(),
+            sub_tx,
+            sub_rx,
+            sub_visible: false,
+            sub_status: String::new(),
+            sub_busy: false,
+            playlist_lists: Vec::new(),
+            playlist_items: Vec::new(),
+            playlist_items_title: String::new(),
+            playlist_tx,
+            playlist_rx,
+            playlist_visible: false,
+            playlist_status: String::new(),
+            playlist_busy: false,
+            resolve_tx,
+            resolve_rx,
+            resolve_busy: false,
+            load_error: None,
         };
 
         // 保存済みリフレッシュトークンがあれば自動ログインを試みる。
@@ -589,6 +1511,10 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(url) = self.initial_url.take() {
                     running.url_input = url.clone();
                     running.load(&url);
+                    if let Some(vid) = auth::extract_video_id(&running.current_url) {
+                        running.start_chat(vid.clone());
+                        running.start_recommend(vid);
+                    }
                 }
                 self.state = Some(running);
             }
@@ -633,6 +1559,9 @@ impl ApplicationHandler<UserEvent> for App {
 
         match event {
             WindowEvent::CloseRequested => {
+                if let Some(s) = &mut self.state {
+                    s.stop_chat();
+                }
                 self.state = None;
                 event_loop.exit();
                 return;
@@ -657,12 +1586,71 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
+/// CLI 引数のパース結果。
+struct CliArgs {
+    url: Option<String>,
+    verbose: bool,
+    backend: String,
+}
+
+fn parse_args() -> Result<CliArgs> {
+    let mut verbose = false;
+    let mut backend = auth::DEFAULT_BACKEND.to_string();
+    let mut url: Option<String> = None;
+
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "-v" | "--verbose" => verbose = true,
+            "--debug-backend" => {
+                backend = args
+                    .next()
+                    .ok_or_else(|| anyhow!("--debug-backend に URL を指定してください"))?;
+            }
+            "-h" | "--help" => {
+                print_help();
+                std::process::exit(0);
+            }
+            other if other.starts_with('-') => {
+                bail!("不明なオプション: {other}");
+            }
+            _ => {
+                if url.is_some() {
+                    bail!("URL が複数指定されています");
+                }
+                url = Some(a);
+            }
+        }
+    }
+
+    Ok(CliArgs {
+        url,
+        verbose,
+        backend: backend.trim_end_matches('/').to_string(),
+    })
+}
+
+fn print_help() {
+    println!(
+        "YouTube Super Lite\n\
+         \n\
+         Usage: youtube-super-lite [OPTIONS] [URL]\n\
+         \n\
+         Options:\n\
+         \x20\x20-v, --verbose             mpv の詳細ログを出力\n\
+         \x20\x20    --debug-backend URL   認証バックエンドを上書き（デバッグ用、デフォルト: {}）\n\
+         \x20\x20-h, --help                このヘルプを表示",
+        auth::DEFAULT_BACKEND
+    );
+}
+
 fn main() -> Result<()> {
-    let initial_url = std::env::args().nth(1);
-    if let Some(url) = &initial_url {
-        println!("Talava Player - playing: {url}");
+    let args = parse_args()?;
+
+    if let Some(url) = &args.url {
+        println!("YouTube Super Lite - playing: {url}");
     } else {
-        println!("Talava Player - URL 欄に貼り付けて Enter で再生");
+        println!("YouTube Super Lite - URL 欄に貼り付けて Enter で再生");
     }
 
     ensure_ytdlp_on_path();
@@ -671,7 +1659,7 @@ fn main() -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(proxy, initial_url);
+    let mut app = App::new(proxy, args.url, args.verbose, args.backend);
     event_loop.run_app(&mut app)?;
     Ok(())
 }
