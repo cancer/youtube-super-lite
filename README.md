@@ -1,39 +1,56 @@
-# Talava Player
+# YouTube Super Lite
 
-Rust 製の YouTube プレーヤー。
+Rust 製の YouTube プレーヤー（Windows / macOS）。
 
 - 再生エンジン: **libmpv (mpv)** の Render API（OpenGL）
 - ウィンドウ / GL コンテキスト: **winit** + **glutin**
-- 操作 UI: **egui**（動画の上に URL 入力欄と再生コントロールを重ねて表示）
-- YouTube URL の解決: **yt-dlp**（mpv の ytdl_hook 経由）
+- 操作 UI: **egui**（動画と並べてサイドパネル、操作系は重ねて表示）
+- YouTube URL の解決: **yt-dlp**（mpv の ytdl_hook ではなくアプリ側で直接呼ぶ）
+- DASH manifest の処理: **`dash-mpd`** クレートでパースし mpv EDL に変換（ffmpeg に DASH demuxer がなくても再生可能）
 
-mpv が動画を OpenGL の既定フレームバッファに描画し、その上へ egui の UI を合成する。
-これにより再生コントロールやプレイリストなどの UI を将来重ねていける。
+## 主な機能
 
-## 構成
+| 機能 | 説明 | 認証 |
+|------|------|------|
+| 動画再生 | 短尺動画・配信中ライブ・終了ライブのアーカイブをすべて再生 | 不要 |
+| 高評価 | ログイン中ユーザーで `videos.rate` を呼んで高評価を付ける | OAuth |
+| ライブチャット | InnerTube `get_live_chat` 経由でメッセージを取得し動画の右側にサイドパネル表示 | 不要 |
+| メンバーシップスタンプ | カスタム絵文字を YouTube CDN から動的に取得してインライン画像描画 | 不要 |
+| おすすめ動画 | ウォッチページの `ytInitialData.secondaryResults` から関連動画一覧をオーバーレイ表示 | 不要 |
+| 登録チャンネル新着 | Data API v3 で登録チャンネル一覧を取り、各チャンネルの RSS フィードから新着動画を集約 | OAuth |
+| 自分の再生リスト | Data API v3 `playlists.list?mine=true` → `playlistItems.list` で 2 段階オーバーレイ表示 | OAuth |
 
-| ファイル | 役割 |
-|----------|------|
-| [src/main.rs](src/main.rs) | GL コンテキスト生成 → mpv Render API で動画描画 → egui で UI を重ねる |
-| [src/auth.rs](src/auth.rs) | YouTube OAuth2（ループバック）＋ Data API（高評価・チャンネル名）。トークン交換は Worker に委譲 |
-| [auth-worker/](auth-worker/) | Cloudflare Worker（workers-rs）。client_secret を保持しトークン交換を中継 |
-| [build.rs](build.rs) | `tools/mpv-dev` をリンク検索パスに追加（libmpv2-sys は検索パスを設定しないため） |
-| [build.ps1](build.ps1) | MSVC 環境(vcvars) + `MPV_SOURCE` を設定して `cargo build`、実行用 DLL/exe をコピー |
-| `tools/mpv-dev/` | libmpv 開発ファイル（`libmpv-2.dll` / ヘッダ / 生成した `mpv.lib`） |
-| `tools/yt-dlp.exe` | YouTube ストリーム解決用 |
+## アーキテクチャ
 
-> 注: 描画合成のため再生エンジンは `libmpv2` **6.x** を使用（4.x には Render API 利用時に
-> use-after-free でクラッシュするバグがある）。
+```
+[main.rs / Running]
+  ├ player::Player          — libmpv ラッパー。動画を内部 FBO/テクスチャに描画
+  ├ gl_quad::FullscreenQuad — テクスチャを画面に描画するクワッド
+  ├ egui_glow::EguiGlow     — UI 描画
+  └ 各機能モジュール（chat / recommend / subscriptions / playlist / resolve / auth）
+```
 
-## 必要環境（Windows）
+- 動画は `Player` 内部のテクスチャに描画され、UI 層はそのテクスチャを背景として配置する分離設計。将来 UI バックエンドを差し替える際の負債軽減のため。
+- mpv は `Box::leak` で `'static` 化し、`RenderContext<'static>` の自己参照を回避。
+- すべての I/O（API 呼び出し・yt-dlp 解決・チャットポーリング）はバックグラウンドスレッドで実行し、結果は `mpsc::channel` でメインスレッドに送信される。
+- egui のクロージャ内では `egui_glow` が `&mut self` として借用されているため、UI イベントは intent flag (`like_clicked` 等) を立てるだけにし、実際の処理は `egui_glow.run` の戻り後に実行。
 
+詳細な設計判断（UI スタック選定の背景・配布形態への影響等）は [CLAUDE.md](CLAUDE.md) を参照。
+
+## 必要環境
+
+### macOS
+```sh
+brew install mpv yt-dlp
+```
+`build.rs` が `pkg-config --libs-only-L mpv` で libmpv のリンクパスを解決する。
+
+### Windows
 - Rust (MSVC toolchain) … `rustup default stable-x86_64-pc-windows-msvc`
 - Visual Studio Build Tools 2022（VC Tools / Windows SDK）… libmpv のリンクに必要
 - `tools/mpv-dev/`（libmpv 開発パッケージ）, `tools/yt-dlp.exe`
 
-`mpv.lib`（MSVC 用インポートライブラリ）は `libmpv-2.dll` のエクスポートから生成済み。
-再生成する場合は vcvars 環境で:
-
+`mpv.lib`（MSVC 用インポートライブラリ）は `libmpv-2.dll` のエクスポートから生成済み。再生成は vcvars 環境で:
 ```powershell
 dumpbin /exports libmpv-2.dll   # mpv_ で始まる関数名を mpv.def の EXPORTS に列挙
 lib /def:mpv.def /name:libmpv-2.dll /out:mpv.lib /machine:x64
@@ -41,36 +58,37 @@ lib /def:mpv.def /name:libmpv-2.dll /out:mpv.lib /machine:x64
 
 ## ビルド
 
+### macOS
+```sh
+cargo build               # debug
+cargo build --release     # release
+```
+
+### Windows
 ```powershell
 .\build.ps1            # debug
 .\build.ps1 -Release   # release
 ```
-
 ビルド後、実行に必要な `libmpv-2.dll` と `yt-dlp.exe` が `target\debug`（または `release`）にコピーされる。
 
-## ログインの設定（高評価に必要）
+## ログインの設定（高評価・登録チャンネル・再生リストに必要）
 
-**client_secret は配布アプリには持たせない。** 認証の同意画面のみブラウザに委譲し、
-secret が必要なトークン交換は **Cloudflare Worker**（[auth-worker/](auth-worker/)）が代行する。
-アプリは「Worker の URL」だけを知り、トークン取得後は Data API を直接呼ぶ。
+**client_secret は配布アプリには持たせない。** 認証の同意画面のみブラウザに委譲し、secret が必要なトークン交換は **Cloudflare Worker**（[auth-worker/](auth-worker/)）が代行する。アプリは「Worker の URL」だけを知り、トークン取得後は Data API を直接呼ぶ。
 
 ```
 [アプリ] ─ブラウザで同意→ループバックでcode ─▶ [Worker] ─(id+secret付与)→ Google
         ◀──────── access / refresh token ───────
-        ── videos.rate を直接 ─────────────────▶ YouTube API
+        ── Data API を直接 ──────────────────▶ YouTube API
 ```
 
 ### 1. Google 側
-
 1. [Google Cloud Console](https://console.cloud.google.com/) でプロジェクト作成。
 2. **YouTube Data API v3** を有効化。
 3. **OAuth 同意画面**（User Type: 外部）。テストユーザーに自分のアカウントを追加。スコープ `.../auth/youtube.force-ssl`。
 4. **OAuth クライアント ID** を作成。種類は **デスクトップ アプリ**（`127.0.0.1` への戻りが許可される）。client_id と client_secret を控える。
 
 ### 2. Worker のデプロイ（[auth-worker/](auth-worker/)）
-
-`wrangler`（`npm i -g wrangler`）が必要。Rust + `wasm32-unknown-unknown` ターゲットも要る。
-
+`wrangler`（`npm i -g wrangler`）と Rust + `wasm32-unknown-unknown` ターゲットが必要。
 ```bash
 cd auth-worker
 # wrangler.jsonc の vars GAUTH_CLIENT_ID を自分の client_id に書き換える
@@ -79,43 +97,60 @@ wrangler deploy                            # → https://<worker-name>.<account>
 ```
 
 ### 3. アプリ側
+既定では本番 Worker（`https://youtube-super-lite-backend.cancer6.workers.dev`）に接続する。ローカル `wrangler dev` 等で別の Worker を使う場合のみ `--debug-backend` で上書きする。
 
-環境変数で Worker の URL を指定して起動する（既定は `http://127.0.0.1:8787`＝`wrangler dev` 用）。
-
-```powershell
-$env:TALAVA_AUTH_BACKEND = "https://talava-auth.<account>.workers.dev"
-.\target\debug\talava-player.exe
+```sh
+./target/debug/youtube-super-lite                                          # 本番Worker
+./target/debug/youtube-super-lite --debug-backend http://127.0.0.1:8787    # ローカル開発
 ```
 
-上部の **🔑 YouTube にログイン** → ブラウザで承認 → 戻ると **👍 高評価** が使える。
-
-- リフレッシュトークンは `%APPDATA%\TalavaPlayer\auth.json` に保存され、次回は自動ログインを試みる。
-- 配布物・リポジトリに secret は含まれない（secret は Worker の Secret のみ）。`auth.json` は `.gitignore` 済み。
+- リフレッシュトークンは次のパスに保存され、次回は自動ログインを試みる:
+  - macOS: `~/Library/Application Support/YouTubeSuperLite/auth.json`
+  - Windows: `%APPDATA%\YouTubeSuperLite\auth.json`
 
 ## 実行
 
-```powershell
-.\target\debug\talava-player.exe "https://www.youtube.com/watch?v=..."
+```sh
+./target/debug/youtube-super-lite "https://www.youtube.com/watch?v=..."
 ```
 
-- 引数で URL を渡すと起動時に再生。引数なしでも起動でき、**ウィンドウ上部の URL 欄に貼り付けて Enter** で再生できる。
-- 読み込んだ動画の **タイトル** を表示。
-- **YouTube ログイン**（OAuth2）と **👍 高評価**（YouTube Data API `videos.rate`）をアプリ内で実行。
-  認証（同意画面）のみブラウザに委譲し、それ以外の操作は API で行う。設定は「ログインの設定」を参照。
-- ウィンドウ下部のコントロールで **再生/一時停止・シーク・音量** を操作できる。
+引数で URL を渡すと起動時に再生。引数なしでも起動でき、URL 欄に貼り付けて Enter で再生できる。
+
+### CLI オプション
+
+```
+youtube-super-lite [OPTIONS] [URL]
+  -v, --verbose             mpv の詳細ログを出力（動作確認用）
+      --debug-backend URL   認証バックエンドを上書き（デバッグ用、既定: 本番Worker）
+  -h, --help                ヘルプを表示
+```
+
+### 操作
+- 動画は左側に表示。チャット表示中は動画を縮小して右側にチャットパネル（幅 320 dp）を並べる。
+- ウィンドウ下部のコントロールで **再生/一時停止・シーク・音量** を操作。
+- 上部に **🔑 YouTube ログイン** / **👍 高評価** / **💬 チャット表示・非表示** / **📋 おすすめ** / **📃 再生リスト** / **📺 新着** ボタン。
 - キーボードショートカット（URL 欄に入力中は無効）:
   - `Space` 再生/一時停止
   - `←` / `→` 5秒シーク
   - `↑` / `↓` 音量 ±5
-- 約3秒間マウス/キー操作がないと、URL欄・コントロール・マウスカーソルを自動的に隠す（動かすと再表示）。
-- `TALAVA_VERBOSE=1` を設定すると mpv の再生ステータスとフレーム数を端末に出力（動作確認用）。
+  - `Esc` 開いているオーバーレイ（おすすめ・再生リスト・新着）を閉じる
+- 約3秒間マウス/キー操作がないと、URL欄・コントロール・マウスカーソルを自動的に隠す（動かすと再表示）。チャットパネルは恒常表示。
 
-```powershell
-$env:TALAVA_VERBOSE="1"; .\target\debug\talava-player.exe "https://youtu.be/..."
-```
+## DASH 対応の仕組み
 
-## 今後
+ffmpeg（Homebrew 標準ビルド）は DASH demuxer 非対応のため、YouTube が DASH manifest しか返さないケース（終了ライブのアーカイブ等）は通常再生できない。本アプリでは:
 
-- 高評価の現在状態表示（`videos.getRating`）・トグル、登録チャンネル等
-- プレイリスト / 検索
-- フルスクリーン切替
+1. `yt-dlp -g` でストリーム URL を取得
+2. URL が DASH manifest（`manifest.googlevideo.com/api/manifest/dash/...`）と判定したら `dash-mpd` で MPD XML をパース
+3. SegmentTemplate の `$Number$` 等を展開して各セグメントの URL を生成
+4. mpv の EDL（`edl://!mp4_dash,init=...;seg1;seg2;...`）として組み立てて `loadfile` に渡す
+
+これにより配信中ライブ・終了アーカイブ・短尺動画すべて再生できる。
+
+## 制限事項・今後
+
+- 配布形態は未確定（現状はソースビルド前提）。リリース時は LGPL ビルドの mpv 同梱と `.app` バンドル化が必要（詳細は [CLAUDE.md](CLAUDE.md)）。
+- 高評価の現在状態表示・トグル（`videos.getRating`）未実装。
+- 検索機能未実装。
+- フルスクリーン切替未実装。
+- カスタム絵文字のうち画像 URL のみ対応。Author Badges（メンバー継続バッジ等）は未対応。
