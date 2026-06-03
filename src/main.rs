@@ -1177,61 +1177,56 @@ impl Running {
                         .inner_margin(egui::Margin::symmetric(16.0, 8.0)),
                 )
                 .show(ctx, |ui| {
-                    // 本家風: シーク / 音量スライダーの埋まり部分を赤系に。
-                    let red = egui::Color32::from_rgb(229, 9, 20);
-                    ui.style_mut().visuals.selection.bg_fill = red;
-                    ui.style_mut().visuals.selection.stroke.color = red;
-
-                    ui.horizontal(|ui| {
-                        // 再生 / 一時停止 (フラットボタン、白文字、大きめ)
-                        let label = if paused { "▶" } else { "⏸" };
-                        let btn = egui::Button::new(
-                            egui::RichText::new(label)
-                                .color(egui::Color32::WHITE)
-                                .size(18.0),
-                        )
-                        .frame(false);
-                        if ui.add(btn).clicked() {
-                            player.set_paused(!paused);
-                        }
-
-                        ui.label(
-                            egui::RichText::new(format_time(time_pos))
-                                .color(egui::Color32::WHITE)
-                                .monospace(),
-                        );
-
-                        // シークバー
+                    ui.vertical(|ui| {
+                        // シークバー (フル幅、上)
                         let mut pos = time_pos;
                         let seekable = duration > 0.0;
-                        let slider = egui::Slider::new(&mut pos, 0.0..=duration.max(0.1))
-                            .show_value(false);
-                        let resp = ui.add_enabled(seekable, slider);
-                        // ドラッグ終了時・クリック時にシーク。
-                        if seekable && (resp.drag_stopped() || (resp.changed() && !resp.dragged())) {
+                        if seek_bar(ui, &mut pos, duration, seekable).changed() {
                             player.set_time_pos(pos);
                         }
 
-                        ui.label(
-                            egui::RichText::new(format_time(duration))
-                                .color(egui::Color32::WHITE)
-                                .monospace(),
-                        );
+                        ui.add_space(4.0);
 
-                        // 音量
-                        ui.separator();
-                        ui.label(egui::RichText::new("🔊").color(egui::Color32::WHITE));
-                        let mut vol = volume;
-                        if ui
-                            .add(
-                                egui::Slider::new(&mut vol, 0.0..=130.0)
-                                    .fixed_decimals(0)
-                                    .show_value(false),
+                        // ボタン行
+                        ui.horizontal(|ui| {
+                            // 再生 / 一時停止 (フラット白)
+                            let label = if paused { "▶" } else { "⏸" };
+                            let btn = egui::Button::new(
+                                egui::RichText::new(label)
+                                    .color(egui::Color32::WHITE)
+                                    .size(18.0),
                             )
-                            .changed()
-                        {
-                            player.set_volume(vol);
-                        }
+                            .frame(false);
+                            if ui.add(btn).clicked() {
+                                player.set_paused(!paused);
+                            }
+
+                            // 時刻 (経過 / 全体)
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} / {}",
+                                    format_time(time_pos),
+                                    format_time(duration),
+                                ))
+                                .color(egui::Color32::WHITE)
+                                .size(13.0),
+                            );
+
+                            // 右寄せ: 音量
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let mut vol = volume;
+                                    if volume_bar(ui, &mut vol, 130.0).changed() {
+                                        player.set_volume(vol);
+                                    }
+                                    ui.label(
+                                        egui::RichText::new("🔊")
+                                            .color(egui::Color32::WHITE),
+                                    );
+                                },
+                            );
+                        });
                     });
                 });
         });
@@ -1425,6 +1420,98 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
     } else {
         None
     }
+}
+
+/// 本家風シークバー: 細い赤線 + ホバー時にハンドル円。クリック / ドラッグで pos を更新。
+/// pos が変更されたら Response.changed() = true を返す。
+fn seek_bar(ui: &mut egui::Ui, pos: &mut f64, duration: f64, seekable: bool) -> egui::Response {
+    let desired_size = egui::vec2(ui.available_width(), 16.0);
+    let sense = if seekable {
+        egui::Sense::click_and_drag()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, mut response) = ui.allocate_exact_size(desired_size, sense);
+
+    let bar_h: f32 = if response.hovered() || response.dragged() {
+        6.0
+    } else {
+        4.0
+    };
+    let bar_rect =
+        egui::Rect::from_center_size(rect.center(), egui::vec2(rect.width(), bar_h));
+
+    let painter = ui.painter();
+    painter.rect_filled(bar_rect, 2.0, egui::Color32::from_white_alpha(64));
+
+    let progress = if duration > 0.0 {
+        (*pos / duration).clamp(0.0, 1.0) as f32
+    } else {
+        0.0
+    };
+    let red = egui::Color32::from_rgb(229, 9, 20);
+    let progress_rect = egui::Rect::from_min_size(
+        bar_rect.min,
+        egui::vec2(bar_rect.width() * progress, bar_h),
+    );
+    painter.rect_filled(progress_rect, 2.0, red);
+
+    if response.hovered() || response.dragged() {
+        let handle_x = bar_rect.left() + bar_rect.width() * progress;
+        painter.circle_filled(egui::pos2(handle_x, rect.center().y), 7.0, red);
+    }
+
+    if seekable && (response.clicked() || response.dragged()) {
+        if let Some(p) = response.interact_pointer_pos() {
+            let ratio = ((p.x - bar_rect.left()) / bar_rect.width()).clamp(0.0, 1.0);
+            let new_pos = ratio as f64 * duration;
+            if (*pos - new_pos).abs() > 0.001 {
+                *pos = new_pos;
+                response.mark_changed();
+            }
+        }
+    }
+
+    response
+}
+
+/// 本家風音量バー: 細い白線 + ホバー時にハンドル円。
+fn volume_bar(ui: &mut egui::Ui, vol: &mut f64, max: f64) -> egui::Response {
+    let desired_size = egui::vec2(80.0, 16.0);
+    let (rect, mut response) =
+        ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
+
+    let bar_h: f32 = 4.0;
+    let bar_rect =
+        egui::Rect::from_center_size(rect.center(), egui::vec2(rect.width(), bar_h));
+
+    let painter = ui.painter();
+    painter.rect_filled(bar_rect, 2.0, egui::Color32::from_white_alpha(64));
+
+    let progress = (*vol / max).clamp(0.0, 1.0) as f32;
+    let progress_rect = egui::Rect::from_min_size(
+        bar_rect.min,
+        egui::vec2(bar_rect.width() * progress, bar_h),
+    );
+    painter.rect_filled(progress_rect, 2.0, egui::Color32::WHITE);
+
+    if response.hovered() || response.dragged() {
+        let handle_x = bar_rect.left() + bar_rect.width() * progress;
+        painter.circle_filled(egui::pos2(handle_x, rect.center().y), 6.0, egui::Color32::WHITE);
+    }
+
+    if response.clicked() || response.dragged() {
+        if let Some(p) = response.interact_pointer_pos() {
+            let ratio = ((p.x - bar_rect.left()) / bar_rect.width()).clamp(0.0, 1.0);
+            let new_vol = ratio as f64 * max;
+            if (*vol - new_vol).abs() > 0.01 {
+                *vol = new_vol;
+                response.mark_changed();
+            }
+        }
+    }
+
+    response
 }
 
 /// 再生リスト 1 行を描画する。順序番号 + サムネ小 + タイトル + チャンネル。
