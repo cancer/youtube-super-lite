@@ -1170,41 +1170,70 @@ impl Running {
                     }
                 });
 
-            egui::TopBottomPanel::bottom("controls").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    // 再生 / 一時停止
-                    let label = if paused { "▶" } else { "⏸" };
-                    if ui.button(label).clicked() {
-                        player.set_paused(!paused);
-                    }
+            egui::TopBottomPanel::bottom("controls")
+                .frame(
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_black_alpha(200))
+                        .inner_margin(egui::Margin::symmetric(16.0, 8.0)),
+                )
+                .show(ctx, |ui| {
+                    // 本家風: シーク / 音量スライダーの埋まり部分を赤系に。
+                    let red = egui::Color32::from_rgb(229, 9, 20);
+                    ui.style_mut().visuals.selection.bg_fill = red;
+                    ui.style_mut().visuals.selection.stroke.color = red;
 
-                    ui.label(format_time(time_pos));
+                    ui.horizontal(|ui| {
+                        // 再生 / 一時停止 (フラットボタン、白文字、大きめ)
+                        let label = if paused { "▶" } else { "⏸" };
+                        let btn = egui::Button::new(
+                            egui::RichText::new(label)
+                                .color(egui::Color32::WHITE)
+                                .size(18.0),
+                        )
+                        .frame(false);
+                        if ui.add(btn).clicked() {
+                            player.set_paused(!paused);
+                        }
 
-                    // シークバー（duration が確定したときのみ操作可能）
-                    let mut pos = time_pos;
-                    let seekable = duration > 0.0;
-                    let slider = egui::Slider::new(&mut pos, 0.0..=duration.max(0.1))
-                        .show_value(false);
-                    let resp = ui.add_enabled(seekable, slider);
-                    // ドラッグ終了時・クリック時にシーク（毎フレームのシーク連発を避ける）。
-                    if seekable && (resp.drag_stopped() || (resp.changed() && !resp.dragged())) {
-                        player.set_time_pos(pos);
-                    }
+                        ui.label(
+                            egui::RichText::new(format_time(time_pos))
+                                .color(egui::Color32::WHITE)
+                                .monospace(),
+                        );
 
-                    ui.label(format_time(duration));
+                        // シークバー
+                        let mut pos = time_pos;
+                        let seekable = duration > 0.0;
+                        let slider = egui::Slider::new(&mut pos, 0.0..=duration.max(0.1))
+                            .show_value(false);
+                        let resp = ui.add_enabled(seekable, slider);
+                        // ドラッグ終了時・クリック時にシーク。
+                        if seekable && (resp.drag_stopped() || (resp.changed() && !resp.dragged())) {
+                            player.set_time_pos(pos);
+                        }
 
-                    // 音量
-                    ui.separator();
-                    ui.label("🔊");
-                    let mut vol = volume;
-                    if ui
-                        .add(egui::Slider::new(&mut vol, 0.0..=130.0).fixed_decimals(0))
-                        .changed()
-                    {
-                        player.set_volume(vol);
-                    }
+                        ui.label(
+                            egui::RichText::new(format_time(duration))
+                                .color(egui::Color32::WHITE)
+                                .monospace(),
+                        );
+
+                        // 音量
+                        ui.separator();
+                        ui.label(egui::RichText::new("🔊").color(egui::Color32::WHITE));
+                        let mut vol = volume;
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut vol, 0.0..=130.0)
+                                    .fixed_decimals(0)
+                                    .show_value(false),
+                            )
+                            .changed()
+                        {
+                            player.set_volume(vol);
+                        }
+                    });
                 });
-            });
         });
         self.egui_glow.paint(window);
 
