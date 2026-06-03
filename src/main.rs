@@ -2028,7 +2028,6 @@ struct App {
     verbose: bool,
     backend: String,
     enable_dev_tools: bool,
-    auto_hwdec_fallback: bool,
     state: Option<Running>,
 }
 
@@ -2039,7 +2038,6 @@ impl App {
         verbose: bool,
         backend: String,
         enable_dev_tools: bool,
-        auto_hwdec_fallback: bool,
     ) -> Self {
         Self {
             proxy,
@@ -2047,7 +2045,6 @@ impl App {
             verbose,
             backend,
             enable_dev_tools,
-            auto_hwdec_fallback,
             state: None,
         }
     }
@@ -2214,19 +2211,11 @@ impl App {
             }
         }
 
-        // --auto-hwdec-fallback 時のみ GPU 使用率の監視を起動（現状 Windows のみ）。
-        if self.auto_hwdec_fallback {
-            match gpu_usage::start_monitoring() {
-                Some(m) => {
-                    running.gpu_monitor = Some(m);
-                    eprintln!("[auto-hwdec] GPU 使用率の監視を開始");
-                }
-                None => {
-                    eprintln!(
-                        "[auto-hwdec] このプラットフォームではサポートされていません"
-                    );
-                }
-            }
+        // 外部アプリ (ゲーム等) に GPU を譲るため、GPU 使用率の監視を常時起動する。
+        // 現状 Windows のみで動作し、それ以外のプラットフォームでは NOP。
+        if let Some(m) = gpu_usage::start_monitoring() {
+            running.gpu_monitor = Some(m);
+            eprintln!("[auto-hwdec] GPU 使用率の監視を開始");
         }
 
         Ok(running)
@@ -2324,9 +2313,6 @@ struct CliArgs {
     verbose: bool,
     backend: String,
     enable_dev_tools: bool,
-    /// Windows のみ。GPU 使用率が高い時に mpv の hwdec を自動で SW にフォールバックする。
-    /// 非 Windows では何もしない（PDH が無いため）。
-    auto_hwdec_fallback: bool,
 }
 
 fn parse_args() -> Result<CliArgs> {
@@ -2334,7 +2320,6 @@ fn parse_args() -> Result<CliArgs> {
     let mut backend = auth::DEFAULT_BACKEND.to_string();
     let mut url: Option<String> = None;
     let mut enable_dev_tools = false;
-    let mut auto_hwdec_fallback = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -2346,7 +2331,6 @@ fn parse_args() -> Result<CliArgs> {
                     .ok_or_else(|| anyhow!("--debug-backend に URL を指定してください"))?;
             }
             "--enable-dev-tools" => enable_dev_tools = true,
-            "--auto-hwdec-fallback" => auto_hwdec_fallback = true,
             "-h" | "--help" => {
                 print_help();
                 std::process::exit(0);
@@ -2368,7 +2352,6 @@ fn parse_args() -> Result<CliArgs> {
         verbose,
         backend: backend.trim_end_matches('/').to_string(),
         enable_dev_tools,
-        auto_hwdec_fallback,
     })
 }
 
@@ -2383,8 +2366,6 @@ fn print_help() {
          \x20\x20    --debug-backend URL   認証バックエンドを上書き（デバッグ用、デフォルト: {}）\n\
          \x20\x20    --enable-dev-tools    デバッグ用のローカル HTTP サーバを起動\n\
          \x20\x20                          (GET /screenshot 等。listen ポートは stderr に出力)\n\
-         \x20\x20    --auto-hwdec-fallback Windows のみ。GPU 使用率が高い時に\n\
-         \x20\x20                          mpv の HW デコードを SW にフォールバック\n\
          \x20\x20-h, --help                このヘルプを表示",
         auth::DEFAULT_BACKEND
     );
@@ -2411,7 +2392,6 @@ fn main() -> Result<()> {
         args.verbose,
         args.backend,
         args.enable_dev_tools,
-        args.auto_hwdec_fallback,
     );
     event_loop.run_app(&mut app)?;
     Ok(())

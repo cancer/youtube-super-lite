@@ -1,9 +1,9 @@
 //! GPU 使用率の取得と、それに基づく mpv のハードウェアデコード自動フォールバック。
 //!
-//! Windows 限定。`--auto-hwdec-fallback` フラグが立っているとき、別スレッドで
-//! Performance Data Helper (PDH) の `\GPU Engine(*)\Utilization Percentage`
-//! カウンタを 1 秒間隔でポーリングし、外部アプリ含めた全体 GPU 負荷が高ければ
-//! mpv の `hwdec` を `no` に倒し、低くなれば `auto` に戻す。
+//! Windows では常時動作。別スレッドで Performance Data Helper (PDH) の
+//! `\GPU Engine(*)\Utilization Percentage` カウンタを 1 秒間隔でポーリングし、
+//! 外部アプリ含めた全体 GPU 負荷が高ければ mpv の `hwdec` を `no` に倒し、
+//! 低くなれば `auto` に戻す。
 //!
 //! 動画描画 (OpenGL) は GPU を引き続き使うが、HW デコード分の GPU 負荷は
 //! 軽くなる（4K/60fps なら 10-30% 程度）。ゲーム・エンコーダ等の外部アプリに
