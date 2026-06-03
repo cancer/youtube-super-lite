@@ -154,6 +154,12 @@ impl Player {
             .command("seek", &[&secs.to_string(), "relative"]);
     }
 
+    /// HW デコードの設定を動的に変更する。`"auto"` で HW 利用、`"no"` で SW 強制。
+    /// `--auto-hwdec-fallback` 経由で GPU 使用率が高い時に呼ばれる。
+    pub fn set_hwdec(&self, mode: &str) {
+        let _ = self.mpv.set_property("hwdec", mode);
+    }
+
     /// 動画を読み込む（loadfile replace）。
     /// `audio_url` / `title` は loadfile のオプションとして `audio-file=` / `force-media-title=` を渡す。
     pub fn loadfile(

@@ -2,6 +2,9 @@ mod auth;
 mod chat;
 mod devtools;
 mod gl_quad;
+mod gpu_usage;
+mod history;
+mod mark_watched;
 mod player;
 mod playlist;
 mod recommend;
@@ -208,6 +211,21 @@ fn ensure_ytdlp_on_path() {
     eprintln!("warning: yt-dlp not found; YouTube URLs may fail");
 }
 
+/// dev-tools `POST /action/<name>` で立てる intent flag の集合体。
+/// redraw 開始時に取り出し、UI クリック由来の flag と OR して使う。
+#[derive(Default)]
+struct DevToolsPending {
+    toggle_chat: bool,
+    toggle_recommend: bool,
+    toggle_subs: bool,
+    toggle_playlist: bool,
+    toggle_history: bool,
+    play_pause: bool,
+    login: bool,
+    like: bool,
+    close_overlay: bool,
+}
+
 /// 初期化済み（ウィンドウ・GL・Player がそろった）状態。
 struct Running {
     egui_glow: egui_glow::EguiGlow,
@@ -260,6 +278,13 @@ struct Running {
     sub_visible: bool,
     sub_status: String,
     sub_busy: bool,
+    // --- 再生履歴 ---
+    history_items: Vec<history::HistoryItem>,
+    history_tx: Sender<history::HistoryUpdate>,
+    history_rx: Receiver<history::HistoryUpdate>,
+    history_visible: bool,
+    history_status: String,
+    history_busy: bool,
     // --- 再生リスト ---
     playlist_lists: Vec<playlist::PlaylistSummary>,
     playlist_items: Vec<playlist::PlaylistItem>,
@@ -276,6 +301,11 @@ struct Running {
     load_error: Option<String>,
     // --- dev-tools (--enable-dev-tools 時のみ Some) ---
     devtools_rx: Option<Receiver<devtools::Command>>,
+    /// dev-tools の `POST /action/<name>` で立てられた intent flag を redraw 開始時に吸い上げる。
+    /// 既存の UI クリック由来の flag と同じローカル変数に OR される。
+    devtools_pending: DevToolsPending,
+    /// `--auto-hwdec-fallback` 時のみ Some。GPU 使用率を見て mpv の hwdec を切り替える。
+    gpu_monitor: Option<gpu_usage::Monitor>,
 }
 
 impl Running {
@@ -288,12 +318,38 @@ impl Running {
         self.current_url = url.clone();
         self.load_error = None;
 
+        // ログイン済みなら再生履歴に載せる。CLI 引数経由の起動直後は auto-login が
+        // 完了する前にここに来るため tokens=None になりがちで、その場合は
+        // poll_auth で LoggedIn を受け取った時点で改めて起動する。
+        self.start_mark_watched_if_logged_in();
+
         if resolve::is_youtube_url(&url) {
             self.start_resolve(url);
         } else {
             // YouTube 以外の URL（直リンク等）はそのまま mpv に渡す。
             self.mpv_loadfile(&url, None, None);
         }
+    }
+
+    /// 現在の `current_url` の動画を再生履歴に載せる（背景スレッドで投げっぱなし）。
+    /// ログインしていない、または URL から video_id を取れなければ何もしない。
+    fn start_mark_watched_if_logged_in(&self) {
+        let Some(tokens) = self.tokens.as_ref() else {
+            eprintln!("[mark_watched] skip: not logged in (current_url={})", self.current_url);
+            return;
+        };
+        let Some(video_id) = auth::extract_video_id(&self.current_url) else {
+            eprintln!("[mark_watched] skip: no video_id in url={}", self.current_url);
+            return;
+        };
+        eprintln!("[mark_watched] spawn for {video_id}");
+        let access_token = tokens.access_token.clone();
+        std::thread::spawn(move || {
+            match mark_watched::mark_watched(&access_token, &video_id) {
+                Ok(_) => eprintln!("[mark_watched] ok ({video_id})"),
+                Err(e) => eprintln!("[mark_watched] fail ({video_id}): {e}"),
+            }
+        });
     }
 
     /// yt-dlp による解決を背景スレッドで開始する。
@@ -353,6 +409,8 @@ impl Running {
                         Some(name) => format!("ログイン中: {name}"),
                         None => "ログイン済み".to_string(),
                     };
+                    // CLI 引数経由で既に load() を通った動画がここで履歴に載る。
+                    self.start_mark_watched_if_logged_in();
                 }
                 AuthMsg::Like { ok, msg, tokens } => {
                     if let Some(t) = tokens {
@@ -512,8 +570,67 @@ impl Running {
         let access_token = tokens.access_token.clone();
         let tx = self.sub_tx.clone();
         let proxy = self.proxy.clone();
+        // dev-tools 起動中（--enable-dev-tools）のときのみタイミングログを出す。
+        let log_timings = self.devtools_rx.is_some();
         std::thread::spawn(move || {
-            subscriptions::fetch_subscription_feed(&access_token, &tx);
+            subscriptions::fetch_subscription_feed(&access_token, &tx, log_timings);
+            let _ = proxy.send_event(UserEvent::Background);
+        });
+    }
+
+    /// GPU 使用率監視スレッドからの hwdec 切替決定を取り込んで mpv に反映する。
+    fn poll_gpu_usage(&mut self) {
+        let Some(monitor) = self.gpu_monitor.as_ref() else {
+            return;
+        };
+        while let Some(decision) = monitor.try_recv() {
+            match decision {
+                gpu_usage::HwdecDecision::UseSoftware => {
+                    eprintln!("[auto-hwdec] GPU 高負荷検出 → SW デコードへ切替");
+                    self.player.set_hwdec("no");
+                }
+                gpu_usage::HwdecDecision::UseHardware => {
+                    eprintln!("[auto-hwdec] GPU 負荷低下 → HW デコードへ復帰");
+                    self.player.set_hwdec("auto");
+                }
+            }
+        }
+    }
+
+    /// 再生履歴の更新を取り込む。
+    fn poll_history(&mut self) {
+        while let Ok(update) = self.history_rx.try_recv() {
+            self.history_busy = false;
+            match update {
+                history::HistoryUpdate::Items(items) => {
+                    self.history_status = format!("再生履歴 ({} 件)", items.len());
+                    self.history_items = items;
+                }
+                history::HistoryUpdate::Error(e) => {
+                    self.history_status = format!("取得エラー: {e}");
+                }
+            }
+        }
+    }
+
+    /// 再生履歴を背景スレッドで取得する。
+    fn start_history(&mut self) {
+        let Some(tokens) = &self.tokens else {
+            self.history_status = "先にログインしてください".to_string();
+            return;
+        };
+        if self.history_busy {
+            return;
+        }
+        self.history_busy = true;
+        self.history_status = "再生履歴を取得中…".to_string();
+        self.history_visible = true;
+
+        let access_token = tokens.access_token.clone();
+        let tx = self.history_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            history::fetch_history(&access_token, &tx);
             let _ = proxy.send_event(UserEvent::Background);
         });
     }
@@ -642,7 +759,9 @@ impl Running {
         self.poll_chat();
         self.poll_recommend();
         self.poll_subs();
+        self.poll_history();
         self.poll_playlist();
+        self.poll_gpu_usage();
         self.poll_resolve();
 
         let _ = self.gl_context.make_current(&self.gl_surface);
@@ -713,6 +832,11 @@ impl Running {
         let sub_status = self.sub_status.clone();
         let sub_busy = self.sub_busy;
 
+        let history_items = &self.history_items;
+        let history_visible = self.history_visible;
+        let history_status = self.history_status.clone();
+        let history_busy = self.history_busy;
+
         let playlist_lists = &self.playlist_lists;
         let playlist_items = &self.playlist_items;
         let playlist_items_title = self.playlist_items_title.clone();
@@ -730,14 +854,19 @@ impl Running {
         let window = &self.window;
         let url_input = &mut self.url_input;
         let mut to_load: Option<String> = None;
-        let mut login_clicked = false;
-        let mut like_clicked = false;
-        let mut toggle_chat = false;
-        let mut toggle_recommend = false;
-        let mut toggle_subs = false;
-        let mut toggle_playlist = false;
+        // dev-tools 由来の intent flag を吸い上げる（取り出した側はクリアして次フレームに残さない）。
+        let pending = std::mem::take(&mut self.devtools_pending);
+        let mut login_clicked = pending.login;
+        let mut like_clicked = pending.like;
+        let mut toggle_chat = pending.toggle_chat;
+        let mut toggle_recommend = pending.toggle_recommend;
+        let mut toggle_subs = pending.toggle_subs;
+        let mut toggle_history = pending.toggle_history;
+        let mut toggle_playlist = pending.toggle_playlist;
         let mut pick_playlist: Option<(String, String)> = None; // (id, title)
         let mut playlist_back = false;
+        let devtools_close_overlay = pending.close_overlay;
+        let devtools_play_pause = pending.play_pause;
         // loading オーバーレイの spinner をアニメさせるため、closure 内で立てる。
         let mut loading_spinning = false;
         let mut pick_video: Option<String> = None;
@@ -745,7 +874,7 @@ impl Running {
             // キーボードショートカットは UI 非表示中も有効（URL 欄入力中のみ無効）。
             if !ctx.wants_keyboard_input() {
                 ctx.input(|i| {
-                    if i.key_pressed(egui::Key::Space) {
+                    if i.key_pressed(egui::Key::Space) || devtools_play_pause {
                         player.set_paused(!paused);
                     }
                     if i.key_pressed(egui::Key::ArrowRight) {
@@ -760,10 +889,12 @@ impl Running {
                     if i.key_pressed(egui::Key::ArrowDown) {
                         player.set_volume((volume - 5.0).max(0.0));
                     }
-                    // Escape で最前面のオーバーレイを閉じる。
-                    if i.key_pressed(egui::Key::Escape) {
+                    // Escape で最前面のオーバーレイを閉じる。dev-tools の close_overlay も同じ経路。
+                    if i.key_pressed(egui::Key::Escape) || devtools_close_overlay {
                         if playlist_visible {
                             toggle_playlist = true;
+                        } else if history_visible {
+                            toggle_history = true;
                         } else if sub_visible {
                             toggle_subs = true;
                         } else if recommend_visible {
@@ -807,6 +938,7 @@ impl Running {
                                             channel: item.channel.clone(),
                                             duration: item.duration.clone(),
                                             meta: item.view_count.clone(),
+                                            channel_icon: String::new(),
                                         })
                                         .collect();
                                     if let Some(id) = draw_video_grid(ui, &cards) {
@@ -857,8 +989,9 @@ impl Running {
                                             video_id: item.video_id.clone(),
                                             title: item.title.clone(),
                                             channel: item.channel.clone(),
-                                            duration: String::new(),
-                                            meta: item.published.clone(),
+                                            duration: item.duration.clone(),
+                                            meta: item.meta.clone(),
+                                            channel_icon: item.channel_icon.clone(),
                                         })
                                         .collect();
                                     if let Some(id) = draw_video_grid(ui, &cards) {
@@ -866,6 +999,58 @@ impl Running {
                                             "https://www.youtube.com/watch?v={id}"
                                         ));
                                         toggle_subs = true;
+                                    }
+                                });
+                        });
+                    });
+            }
+
+            // 再生履歴オーバーレイ。
+            if history_visible {
+                let screen = ctx.screen_rect();
+                egui::Area::new(egui::Id::new("history_overlay"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(screen.min)
+                    .show(ctx, |ui| {
+                        let frame = egui::Frame::none()
+                            .fill(egui::Color32::from_black_alpha(220))
+                            .inner_margin(16.0);
+                        frame.show(ui, |ui| {
+                            let inner = screen.size() - egui::vec2(32.0, 32.0);
+                            ui.set_min_size(inner);
+                            ui.set_max_size(inner);
+
+                            if draw_overlay_header(ui, &history_status, history_busy) {
+                                toggle_history = true;
+                            }
+                            ui.separator();
+
+                            if history_items.is_empty() && !history_busy {
+                                ui.label(
+                                    egui::RichText::new("再生履歴がありません")
+                                        .color(egui::Color32::GRAY),
+                                );
+                            }
+
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    let cards: Vec<GridCard> = history_items
+                                        .iter()
+                                        .map(|item| GridCard {
+                                            video_id: item.video_id.clone(),
+                                            title: item.title.clone(),
+                                            channel: item.channel.clone(),
+                                            duration: item.duration.clone(),
+                                            meta: item.view_count.clone(),
+                                            channel_icon: String::new(),
+                                        })
+                                        .collect();
+                                    if let Some(id) = draw_video_grid(ui, &cards) {
+                                        pick_video = Some(format!(
+                                            "https://www.youtube.com/watch?v={id}"
+                                        ));
+                                        toggle_history = true;
                                     }
                                 });
                         });
@@ -1160,6 +1345,9 @@ impl Running {
                         if ui.button("📺 新着").on_hover_text("登録チャンネルの新着動画").clicked() {
                             toggle_subs = true;
                         }
+                        if ui.button("🕘 履歴").on_hover_text("再生履歴").clicked() {
+                            toggle_history = true;
+                        }
                     }
 
                     // 右端のアカウント表示 / ログインボタン。
@@ -1330,6 +1518,15 @@ impl Running {
                 self.start_subs();
             }
         }
+        if toggle_history {
+            self.history_visible = !self.history_visible;
+            // 履歴は古くなるので「再表示時は毎回取り直す」のが履歴 UI として自然だが、
+            // ここは subs と同じく「未取得ならフェッチ」だけにし、再フェッチは
+            // overlay ヘッダのリロードボタン（共通の閉じるボタン横、未実装）に委ねる方針。
+            if self.history_visible && self.history_items.is_empty() && !self.history_busy {
+                self.start_history();
+            }
+        }
         if toggle_playlist {
             self.playlist_visible = !self.playlist_visible;
             // 表示時かつ未取得なら一覧取得開始。
@@ -1362,6 +1559,7 @@ impl Running {
     /// dev-tools サーバからの要求を 1 件処理する（swap 前に呼ぶこと）。
     /// 要求が無ければ何もしない。複数たまっていても次の redraw で次が処理される。
     fn handle_devtools_commands(&mut self) {
+        // 試行回数を制限すれば飢餓は起きないが、1 件ずつでも次の redraw で次が処理される。
         let Some(rx) = self.devtools_rx.as_ref() else {
             return;
         };
@@ -1372,7 +1570,32 @@ impl Running {
             devtools::Command::Screenshot(reply) => {
                 let _ = reply.send(self.capture_framebuffer_png());
             }
+            devtools::Command::Action(name, reply) => {
+                let known = self.apply_devtools_action(&name);
+                let _ = reply.send(known);
+            }
         }
+    }
+
+    /// dev-tools の `POST /action/<name>` を受けて intent flag を立てる。
+    /// 既知のアクションなら true、未知なら false（HTTP 400 で返るよう devtools 側で扱う）。
+    fn apply_devtools_action(&mut self, name: &str) -> bool {
+        let p = &mut self.devtools_pending;
+        match name {
+            "toggle_chat" => p.toggle_chat = true,
+            "toggle_recommend" => p.toggle_recommend = true,
+            "toggle_subs" => p.toggle_subs = true,
+            "toggle_playlist" => p.toggle_playlist = true,
+            "toggle_history" => p.toggle_history = true,
+            "play_pause" => p.play_pause = true,
+            "login" => p.login = true,
+            "like" => p.like = true,
+            "close_overlay" => p.close_overlay = true,
+            _ => return false,
+        }
+        // 次フレームで吸い上げる必要があるので、redraw を要求しておく。
+        self.window.request_redraw();
+        true
     }
 
     /// 現在の back buffer を PNG にエンコードして返す。
@@ -1439,6 +1662,8 @@ struct GridCard {
     duration: String,
     /// 視聴数 / 公開日などの追加メタ情報。空文字なら非表示。
     meta: String,
+    /// チャンネルアイコン URL。空ならアイコン非表示。
+    channel_icon: String,
 }
 
 const CARD_TARGET_WIDTH: f32 = 320.0;
@@ -1476,10 +1701,12 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
             ui.set_min_width(w);
             ui.set_max_width(w);
 
-            // サムネ画像（YouTube CDN の mqdefault.jpg を直接 URL ロード）。
+            // サムネ画像（YouTube CDN の hqdefault.jpg を直接 URL ロード）。
+            // 表示サイズは論理 320×180 だが Retina 2x で物理 640×360 必要。
+            // mqdefault.jpg は 320×180 なので Retina ではぼやける。hqdefault.jpg は 480×360
+            // でほぼ十分（古い 16:9 動画は上下に黒帯が入るが視覚的にはほぼ気にならない）。
             // ui.add でレイアウトを進めると egui_extras の http loader が駆動される。
-            // Image::paint_at は未ロード時のロード要求を出さないので使わない。
-            let thumb_url = format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", card.video_id);
+            let thumb_url = format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", card.video_id);
             let thumb_resp = ui.add(
                 egui::Image::new(thumb_url)
                     .rounding(8.0)
@@ -1508,25 +1735,59 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
 
             ui.add_space(8.0);
 
-            ui.label(
-                egui::RichText::new(&card.title)
-                    .color(egui::Color32::WHITE)
-                    .strong(),
-            );
-            if !card.channel.is_empty() {
-                ui.label(
-                    egui::RichText::new(&card.channel)
-                        .color(egui::Color32::from_rgb(170, 170, 170))
-                        .small(),
-                );
-            }
-            if !card.meta.is_empty() {
-                ui.label(
-                    egui::RichText::new(&card.meta)
-                        .color(egui::Color32::from_rgb(170, 170, 170))
-                        .small(),
-                );
-            }
+            // YouTube 風レイアウト: 左にチャンネルアイコン（丸）、右に
+            // タイトル / チャンネル名 / 視聴数・公開時刻 を縦に積む。
+            // horizontal で並べることで、テキスト側の wrap 幅が確定する。
+            const ICON_SIZE: f32 = 36.0;
+            const ICON_GAP: f32 = 8.0;
+            let text_w = if card.channel_icon.is_empty() {
+                w
+            } else {
+                w - ICON_SIZE - ICON_GAP
+            };
+            ui.horizontal_top(|ui| {
+                if !card.channel_icon.is_empty() {
+                    ui.add(
+                        egui::Image::new(&card.channel_icon)
+                            .fit_to_exact_size(egui::vec2(ICON_SIZE, ICON_SIZE))
+                            .rounding(ICON_SIZE / 2.0),
+                    );
+                    ui.add_space(ICON_GAP);
+                }
+                ui.vertical(|ui| {
+                    ui.set_max_width(text_w);
+                    // wrap_mode を明示しないと horizontal layout 配下では Extend に
+                    // なって 1 行に伸び、カード幅を超えて他カードに食い込む。
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&card.title)
+                                .color(egui::Color32::WHITE)
+                                .strong(),
+                        )
+                        .wrap_mode(egui::TextWrapMode::Wrap),
+                    );
+                    if !card.channel.is_empty() {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&card.channel)
+                                    .color(egui::Color32::from_rgb(170, 170, 170))
+                                    .small(),
+                            )
+                            .wrap_mode(egui::TextWrapMode::Wrap),
+                        );
+                    }
+                    if !card.meta.is_empty() {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&card.meta)
+                                    .color(egui::Color32::from_rgb(170, 170, 170))
+                                    .small(),
+                            )
+                            .wrap_mode(egui::TextWrapMode::Wrap),
+                        );
+                    }
+                });
+            });
         },
     );
 
@@ -1767,6 +2028,7 @@ struct App {
     verbose: bool,
     backend: String,
     enable_dev_tools: bool,
+    auto_hwdec_fallback: bool,
     state: Option<Running>,
 }
 
@@ -1777,6 +2039,7 @@ impl App {
         verbose: bool,
         backend: String,
         enable_dev_tools: bool,
+        auto_hwdec_fallback: bool,
     ) -> Self {
         Self {
             proxy,
@@ -1784,6 +2047,7 @@ impl App {
             verbose,
             backend,
             enable_dev_tools,
+            auto_hwdec_fallback,
             state: None,
         }
     }
@@ -1861,6 +2125,8 @@ impl App {
         let (recommend_tx, recommend_rx) = std::sync::mpsc::channel();
         // 登録チャンネル新着の初期化。
         let (sub_tx, sub_rx) = std::sync::mpsc::channel();
+        // 再生履歴の初期化。
+        let (history_tx, history_rx) = std::sync::mpsc::channel();
         // 再生リストの初期化。
         let (playlist_tx, playlist_rx) = std::sync::mpsc::channel();
         // yt-dlp ストリーム解決の初期化。
@@ -1906,6 +2172,12 @@ impl App {
             sub_visible: false,
             sub_status: String::new(),
             sub_busy: false,
+            history_items: Vec::new(),
+            history_tx,
+            history_rx,
+            history_visible: false,
+            history_status: String::new(),
+            history_busy: false,
             playlist_lists: Vec::new(),
             playlist_items: Vec::new(),
             playlist_items_title: String::new(),
@@ -1919,6 +2191,8 @@ impl App {
             resolve_busy: false,
             load_error: None,
             devtools_rx: None,
+            devtools_pending: DevToolsPending::default(),
+            gpu_monitor: None,
         };
 
         // 保存済みリフレッシュトークンがあれば自動ログインを試みる。
@@ -1936,6 +2210,21 @@ impl App {
                 }
                 Err(e) => {
                     eprintln!("[dev-tools] サーバ起動失敗: {e}");
+                }
+            }
+        }
+
+        // --auto-hwdec-fallback 時のみ GPU 使用率の監視を起動（現状 Windows のみ）。
+        if self.auto_hwdec_fallback {
+            match gpu_usage::start_monitoring() {
+                Some(m) => {
+                    running.gpu_monitor = Some(m);
+                    eprintln!("[auto-hwdec] GPU 使用率の監視を開始");
+                }
+                None => {
+                    eprintln!(
+                        "[auto-hwdec] このプラットフォームではサポートされていません"
+                    );
                 }
             }
         }
@@ -2035,6 +2324,9 @@ struct CliArgs {
     verbose: bool,
     backend: String,
     enable_dev_tools: bool,
+    /// Windows のみ。GPU 使用率が高い時に mpv の hwdec を自動で SW にフォールバックする。
+    /// 非 Windows では何もしない（PDH が無いため）。
+    auto_hwdec_fallback: bool,
 }
 
 fn parse_args() -> Result<CliArgs> {
@@ -2042,6 +2334,7 @@ fn parse_args() -> Result<CliArgs> {
     let mut backend = auth::DEFAULT_BACKEND.to_string();
     let mut url: Option<String> = None;
     let mut enable_dev_tools = false;
+    let mut auto_hwdec_fallback = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -2053,6 +2346,7 @@ fn parse_args() -> Result<CliArgs> {
                     .ok_or_else(|| anyhow!("--debug-backend に URL を指定してください"))?;
             }
             "--enable-dev-tools" => enable_dev_tools = true,
+            "--auto-hwdec-fallback" => auto_hwdec_fallback = true,
             "-h" | "--help" => {
                 print_help();
                 std::process::exit(0);
@@ -2074,6 +2368,7 @@ fn parse_args() -> Result<CliArgs> {
         verbose,
         backend: backend.trim_end_matches('/').to_string(),
         enable_dev_tools,
+        auto_hwdec_fallback,
     })
 }
 
@@ -2088,6 +2383,8 @@ fn print_help() {
          \x20\x20    --debug-backend URL   認証バックエンドを上書き（デバッグ用、デフォルト: {}）\n\
          \x20\x20    --enable-dev-tools    デバッグ用のローカル HTTP サーバを起動\n\
          \x20\x20                          (GET /screenshot 等。listen ポートは stderr に出力)\n\
+         \x20\x20    --auto-hwdec-fallback Windows のみ。GPU 使用率が高い時に\n\
+         \x20\x20                          mpv の HW デコードを SW にフォールバック\n\
          \x20\x20-h, --help                このヘルプを表示",
         auth::DEFAULT_BACKEND
     );
@@ -2108,7 +2405,14 @@ fn main() -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(proxy, args.url, args.verbose, args.backend, args.enable_dev_tools);
+    let mut app = App::new(
+        proxy,
+        args.url,
+        args.verbose,
+        args.backend,
+        args.enable_dev_tools,
+        args.auto_hwdec_fallback,
+    );
     event_loop.run_app(&mut app)?;
     Ok(())
 }
