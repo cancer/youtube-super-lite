@@ -722,6 +722,9 @@ impl Running {
 
         let resolve_busy = self.resolve_busy;
         let load_error = self.load_error.clone();
+        // 中央オーバーレイ判定用: URL がまだ一度も渡されていない初期状態では
+        // 「再生準備中…」のような誤った表示を抑制する。
+        let url_set = !self.current_url.is_empty();
 
         let player = &self.player;
         let window = &self.window;
@@ -735,6 +738,8 @@ impl Running {
         let mut toggle_playlist = false;
         let mut pick_playlist: Option<(String, String)> = None; // (id, title)
         let mut playlist_back = false;
+        // loading オーバーレイの spinner をアニメさせるため、closure 内で立てる。
+        let mut loading_spinning = false;
         let mut pick_video: Option<String> = None;
         self.egui_glow.run(window, |ctx| {
             // キーボードショートカットは UI 非表示中も有効（URL 欄入力中のみ無効）。
@@ -1062,6 +1067,57 @@ impl Running {
                     });
             }
 
+            // 動画ロード状態の中央オーバーレイ。
+            // auto-hide で URL バー以下が消える状態でも、画面が完全に黒くなって
+            // 何が起きているか分からなくなる事態を避けるため show_ui に依存せず描画する。
+            // 表示優先度: エラー > 解決中 > 再生準備中（mpv loadfile 後で初フレーム前）。
+            let loading_overlay: Option<(String, bool, bool)> = if let Some(err) = &load_error {
+                // (本文, 赤色か, spinner を出すか)
+                Some((format!("読み込み失敗\n{err}"), true, false))
+            } else if resolve_busy {
+                Some(("動画を解決中…".to_string(), false, true))
+            } else if url_set && time_pos == 0.0 {
+                // mpv はメタデータ取得（duration > 0）と初フレーム描画の間に
+                // バッファリングで停滞する。duration を条件に入れると、その間
+                // テクスチャが空のまま画面が真っ黒になるため、time_pos が進む
+                // までは「再生準備中…」を出し続ける。
+                Some(("再生準備中…".to_string(), false, true))
+            } else {
+                None
+            };
+            if let Some((text, is_error, with_spinner)) = loading_overlay {
+                if with_spinner {
+                    loading_spinning = true;
+                }
+                egui::Area::new(egui::Id::new("loading_overlay"))
+                    .order(egui::Order::Foreground)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                    .show(ctx, |ui| {
+                        egui::Frame::none()
+                            .fill(egui::Color32::from_black_alpha(200))
+                            .inner_margin(egui::Margin::symmetric(24.0, 16.0))
+                            .rounding(8.0)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    if with_spinner {
+                                        ui.add(egui::Spinner::new().size(20.0));
+                                        ui.add_space(8.0);
+                                    }
+                                    let color = if is_error {
+                                        egui::Color32::from_rgb(255, 120, 120)
+                                    } else {
+                                        egui::Color32::WHITE
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(&text)
+                                            .color(color)
+                                            .size(16.0),
+                                    );
+                                });
+                            });
+                    });
+            }
+
             if !show_ui {
                 return;
             }
@@ -1136,24 +1192,15 @@ impl Running {
 
             // 動画下情報パネル: タイトル + 高評価ボタン。
             // controls より「先に」bottom で登録するため controls の上に積まれる。
-            egui::TopBottomPanel::bottom("video_info")
-                .frame(
-                    egui::Frame::none()
-                        .fill(egui::Color32::TRANSPARENT)
-                        .inner_margin(egui::Margin::symmetric(16.0, 8.0)),
-                )
-                .show(ctx, |ui| {
-                    if resolve_busy {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label("動画を解決中…");
-                        });
-                    } else if let Some(err) = &load_error {
-                        ui.label(
-                            egui::RichText::new(format!("読み込み失敗: {err}"))
-                                .color(egui::Color32::from_rgb(255, 100, 100)),
-                        );
-                    } else if !title.is_empty() {
+            // resolve_busy / load_error の表示は中央の loading オーバーレイに移譲済み。
+            if !title.is_empty() {
+                egui::TopBottomPanel::bottom("video_info")
+                    .frame(
+                        egui::Frame::none()
+                            .fill(egui::Color32::TRANSPARENT)
+                            .inner_margin(egui::Margin::symmetric(16.0, 8.0)),
+                    )
+                    .show(ctx, |ui| {
                         ui.label(
                             egui::RichText::new(&title)
                                 .color(egui::Color32::WHITE)
@@ -1170,8 +1217,8 @@ impl Running {
                                 like_clicked = true;
                             }
                         });
-                    }
-                });
+                    });
+            }
 
             egui::TopBottomPanel::bottom("controls")
                 .frame(
@@ -1247,7 +1294,8 @@ impl Running {
 
         // 一時停止中は mpv が再描画を駆動しないので、UI 表示中は自前で次フレームを要求して
         // 非表示への移行（カウントダウン）を進める。vsync で頻度は抑えられる。
-        if paused && show_ui {
+        // また、ロード状態オーバーレイの spinner を回し続けるためにも自前で再描画する。
+        if (paused && show_ui) || loading_spinning {
             self.window.request_redraw();
         }
 
