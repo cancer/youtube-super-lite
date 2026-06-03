@@ -1078,78 +1078,97 @@ impl Running {
                     }
                 });
 
-                // タイトル / 解決中スピナー / エラー表示。
-                if resolve_busy {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("動画を解決中…");
-                    });
-                } else if let Some(err) = &load_error {
-                    ui.label(
-                        egui::RichText::new(format!("読み込み失敗: {err}"))
-                            .color(egui::Color32::from_rgb(255, 100, 100)),
-                    );
-                } else if !title.is_empty() {
-                    ui.label(egui::RichText::new(&title).strong());
-                }
-
-                // 認証 / 高評価。
+                // 機能ナビとアカウント。アカウントは右端に寄せる。
                 ui.horizontal(|ui| {
-                    if logged_in {
-                        let who = channel.as_deref().unwrap_or("ログイン済み");
-                        ui.label(format!("👤 {who}"));
-                        let can_like = !auth_busy && video_id.is_some();
-                        if ui
-                            .add_enabled(can_like, egui::Button::new("👍 高評価"))
-                            .on_hover_text("この動画に高評価を付けます")
-                            .clicked()
-                        {
-                            like_clicked = true;
-                        }
-                    } else {
-                        if ui
-                            .add_enabled(!auth_busy, egui::Button::new("🔑 YouTube にログイン"))
-                            .clicked()
-                        {
-                            login_clicked = true;
-                        }
-                    }
-                    ui.label(&auth_status);
-
                     // チャット表示切り替え（チャットが接続中 or メッセージがあるとき）。
                     if !chat_status.is_empty() {
-                        ui.separator();
                         let label = if chat_visible { "💬 チャット非表示" } else { "💬 チャット表示" };
                         if ui.button(label).clicked() {
                             toggle_chat = true;
                         }
                     }
 
-                    // おすすめ動画。
                     if !recommend_items.is_empty() {
-                        ui.separator();
                         if ui.button("📋 おすすめ").clicked() {
                             toggle_recommend = true;
                         }
                     }
 
-                    // 再生リスト。
                     if logged_in {
-                        ui.separator();
                         if ui.button("📃 再生リスト").clicked() {
                             toggle_playlist = true;
                         }
-                    }
-
-                    // 登録チャンネル新着。
-                    if logged_in {
-                        ui.separator();
                         if ui.button("📺 新着").on_hover_text("登録チャンネルの新着動画").clicked() {
                             toggle_subs = true;
                         }
                     }
+
+                    // 右端のアカウント表示 / ログインボタン。
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            if logged_in {
+                                let who = channel.as_deref().unwrap_or("ログイン済み");
+                                ui.label(
+                                    egui::RichText::new(format!("👤 {who}"))
+                                        .color(egui::Color32::WHITE),
+                                );
+                            } else if ui
+                                .add_enabled(!auth_busy, egui::Button::new("🔑 ログイン"))
+                                .clicked()
+                            {
+                                login_clicked = true;
+                            }
+                            if !auth_status.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(&auth_status)
+                                        .color(egui::Color32::from_rgb(170, 170, 170))
+                                        .small(),
+                                );
+                            }
+                        },
+                    );
                 });
             });
+
+            // 動画下情報パネル: タイトル + 高評価ボタン。
+            // controls より「先に」bottom で登録するため controls の上に積まれる。
+            egui::TopBottomPanel::bottom("video_info")
+                .frame(
+                    egui::Frame::none()
+                        .fill(egui::Color32::TRANSPARENT)
+                        .inner_margin(egui::Margin::symmetric(16.0, 8.0)),
+                )
+                .show(ctx, |ui| {
+                    if resolve_busy {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("動画を解決中…");
+                        });
+                    } else if let Some(err) = &load_error {
+                        ui.label(
+                            egui::RichText::new(format!("読み込み失敗: {err}"))
+                                .color(egui::Color32::from_rgb(255, 100, 100)),
+                        );
+                    } else if !title.is_empty() {
+                        ui.label(
+                            egui::RichText::new(&title)
+                                .color(egui::Color32::WHITE)
+                                .size(16.0)
+                                .strong(),
+                        );
+                        ui.horizontal(|ui| {
+                            let can_like = logged_in && !auth_busy && video_id.is_some();
+                            if ui
+                                .add_enabled(can_like, egui::Button::new("👍 高評価"))
+                                .on_hover_text("この動画に高評価を付けます")
+                                .clicked()
+                            {
+                                like_clicked = true;
+                            }
+                        });
+                    }
+                });
 
             egui::TopBottomPanel::bottom("controls").show(ctx, |ui| {
                 ui.horizontal(|ui| {
