@@ -712,6 +712,7 @@ impl Running {
 
         let playlist_lists = &self.playlist_lists;
         let playlist_items = &self.playlist_items;
+        let playlist_items_title = self.playlist_items_title.clone();
         let playlist_visible = self.playlist_visible;
         let playlist_status = self.playlist_status.clone();
         let playlist_busy = self.playlist_busy;
@@ -906,48 +907,99 @@ impl Running {
                             ui.separator();
 
                             if !playlist_items.is_empty() {
-                                // --- 動画リスト表示 ---
-                                egui::ScrollArea::vertical()
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    for item in playlist_items {
-                                        let resp = ui
-                                            .horizontal(|ui| {
-                                                ui.set_min_width(ui.available_width());
-                                                ui.label(
-                                                    egui::RichText::new(
-                                                        format!("{}", item.position + 1),
-                                                    )
-                                                    .color(egui::Color32::from_rgb(120, 120, 120))
-                                                    .monospace(),
-                                                );
-                                                ui.vertical(|ui| {
-                                                    ui.label(
-                                                        egui::RichText::new(&item.title)
-                                                            .color(egui::Color32::WHITE)
-                                                            .strong(),
-                                                    );
-                                                    if !item.channel.is_empty() {
-                                                        ui.label(
-                                                            egui::RichText::new(&item.channel)
-                                                                .color(egui::Color32::from_rgb(
-                                                                    180, 180, 180,
-                                                                )),
-                                                        );
-                                                    }
-                                                });
-                                            })
-                                            .response;
+                                // --- 2 ペイン表示: 左に概要、右に動画行リスト ---
+                                let first_id = playlist_items
+                                    .first()
+                                    .map(|i| i.video_id.clone())
+                                    .unwrap_or_default();
 
-                                        if resp.interact(egui::Sense::click()).clicked() {
-                                            pick_video = Some(format!(
-                                                "https://www.youtube.com/watch?v={}",
-                                                item.video_id
-                                            ));
-                                            toggle_playlist = true;
-                                        }
-                                        ui.separator();
-                                    }
+                                ui.horizontal_top(|ui| {
+                                    // 左ペイン: プレイリスト概要 + アクション。
+                                    let left_w: f32 = 280.0;
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(left_w, ui.available_height()),
+                                        egui::Layout::top_down(egui::Align::Min),
+                                        |ui| {
+                                            ui.set_min_width(left_w);
+                                            ui.set_max_width(left_w);
+
+                                            if !first_id.is_empty() {
+                                                let thumb_h = left_w * 9.0 / 16.0;
+                                                ui.add(
+                                                    egui::Image::new(format!(
+                                                        "https://i.ytimg.com/vi/{first_id}/mqdefault.jpg"
+                                                    ))
+                                                    .rounding(8.0)
+                                                    .fit_to_exact_size(egui::vec2(
+                                                        left_w, thumb_h,
+                                                    )),
+                                                );
+                                            }
+
+                                            ui.add_space(12.0);
+                                            ui.label(
+                                                egui::RichText::new(&playlist_items_title)
+                                                    .color(egui::Color32::WHITE)
+                                                    .heading(),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} 本",
+                                                    playlist_items.len()
+                                                ))
+                                                .color(egui::Color32::from_rgb(170, 170, 170))
+                                                .small(),
+                                            );
+
+                                            ui.add_space(12.0);
+                                            ui.horizontal(|ui| {
+                                                if ui.button("▶ すべて再生").clicked() {
+                                                    if let Some(item) = playlist_items.first() {
+                                                        pick_video = Some(format!(
+                                                            "https://www.youtube.com/watch?v={}",
+                                                            item.video_id
+                                                        ));
+                                                        toggle_playlist = true;
+                                                    }
+                                                }
+                                                if ui.button("🔀 シャッフル").clicked() {
+                                                    let nanos = std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .map(|d| d.subsec_nanos())
+                                                        .unwrap_or(0);
+                                                    let idx = (nanos as usize)
+                                                        % playlist_items.len();
+                                                    pick_video = Some(format!(
+                                                        "https://www.youtube.com/watch?v={}",
+                                                        playlist_items[idx].video_id
+                                                    ));
+                                                    toggle_playlist = true;
+                                                }
+                                            });
+                                        },
+                                    );
+
+                                    ui.add_space(16.0);
+
+                                    // 右ペイン: 動画行リスト。
+                                    ui.vertical(|ui| {
+                                        egui::ScrollArea::vertical()
+                                            .auto_shrink([false, false])
+                                            .show(ui, |ui| {
+                                                for (i, item) in
+                                                    playlist_items.iter().enumerate()
+                                                {
+                                                    if draw_playlist_row(ui, item, i + 1) {
+                                                        pick_video = Some(format!(
+                                                            "https://www.youtube.com/watch?v={}",
+                                                            item.video_id
+                                                        ));
+                                                        toggle_playlist = true;
+                                                    }
+                                                    ui.add_space(4.0);
+                                                }
+                                            });
+                                    });
                                 });
                             } else if !playlist_lists.is_empty() {
                                 // --- 再生リスト一覧表示 ---
@@ -1323,6 +1375,60 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
     } else {
         None
     }
+}
+
+/// 再生リスト 1 行を描画する。順序番号 + サムネ小 + タイトル + チャンネル。
+/// クリックされたら true を返す。
+fn draw_playlist_row(ui: &mut egui::Ui, item: &playlist::PlaylistItem, position: usize) -> bool {
+    let row_h: f32 = 84.0;
+    let thumb_h = row_h - 8.0;
+    let thumb_w = thumb_h * 16.0 / 9.0;
+
+    let inner = ui.horizontal(|ui| {
+        ui.set_min_height(row_h);
+        ui.set_max_height(row_h);
+
+        // 順序番号（固定幅で揃える）。
+        ui.add_sized(
+            egui::vec2(32.0, row_h),
+            egui::Label::new(
+                egui::RichText::new(format!("{position}"))
+                    .color(egui::Color32::from_rgb(150, 150, 150))
+                    .monospace()
+                    .size(13.0),
+            ),
+        );
+
+        // サムネ。
+        ui.add(
+            egui::Image::new(format!(
+                "https://i.ytimg.com/vi/{}/mqdefault.jpg",
+                item.video_id
+            ))
+            .rounding(4.0)
+            .fit_to_exact_size(egui::vec2(thumb_w, thumb_h)),
+        );
+
+        // タイトル / チャンネル。
+        ui.vertical(|ui| {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(&item.title)
+                    .color(egui::Color32::WHITE)
+                    .strong(),
+            );
+            if !item.channel.is_empty() {
+                ui.label(
+                    egui::RichText::new(&item.channel)
+                        .color(egui::Color32::from_rgb(170, 170, 170))
+                        .small(),
+                );
+            }
+        });
+    });
+
+    let id = ui.id().with("plrow").with(&item.video_id).with(position);
+    ui.interact(inner.response.rect, id, egui::Sense::click()).clicked()
 }
 
 fn draw_overlay_header(ui: &mut egui::Ui, title: &str, busy: bool) -> bool {

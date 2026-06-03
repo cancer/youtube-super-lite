@@ -22,7 +22,6 @@ pub struct PlaylistItem {
     pub video_id: String,
     pub title: String,
     pub channel: String,
-    pub position: u64,
 }
 
 /// 背景スレッドからメインスレッドへの通知。
@@ -213,13 +212,11 @@ fn fetch_items_inner(access_token: &str, playlist_id: &str) -> Result<Vec<Playli
                     .as_str()
                     .unwrap_or("")
                     .to_string();
-                let position = snippet["position"].as_u64().unwrap_or(0);
 
                 items.push(PlaylistItem {
                     video_id,
                     title,
                     channel,
-                    position,
                 });
             }
         }
