@@ -790,56 +790,23 @@ impl Running {
                             egui::ScrollArea::vertical()
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                for item in recommend_items {
-                                    let resp = ui
-                                        .horizontal(|ui| {
-                                            ui.set_min_width(ui.available_width());
-                                            ui.vertical(|ui| {
-                                                ui.label(
-                                                    egui::RichText::new(&item.title)
-                                                        .color(egui::Color32::WHITE)
-                                                        .strong(),
-                                                );
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        egui::RichText::new(&item.channel)
-                                                            .color(egui::Color32::from_rgb(
-                                                                180, 180, 180,
-                                                            )),
-                                                    );
-                                                    if !item.duration.is_empty() {
-                                                        ui.label(
-                                                            egui::RichText::new(&item.duration)
-                                                                .color(egui::Color32::from_rgb(
-                                                                    150, 150, 150,
-                                                                )),
-                                                        );
-                                                    }
-                                                    if !item.view_count.is_empty() {
-                                                        ui.label(
-                                                            egui::RichText::new(&item.view_count)
-                                                                .color(egui::Color32::from_rgb(
-                                                                    150, 150, 150,
-                                                                )),
-                                                        );
-                                                    }
-                                                });
-                                            });
+                                    let cards: Vec<GridCard> = recommend_items
+                                        .iter()
+                                        .map(|item| GridCard {
+                                            video_id: item.video_id.clone(),
+                                            title: item.title.clone(),
+                                            channel: item.channel.clone(),
+                                            duration: item.duration.clone(),
+                                            meta: item.view_count.clone(),
                                         })
-                                        .response;
-
-                                    if resp.interact(egui::Sense::click()).clicked() {
-                                        pick_video =
-                                            Some(format!(
-                                                "https://www.youtube.com/watch?v={}",
-                                                item.video_id
-                                            ));
+                                        .collect();
+                                    if let Some(id) = draw_video_grid(ui, &cards) {
+                                        pick_video = Some(format!(
+                                            "https://www.youtube.com/watch?v={id}"
+                                        ));
                                         toggle_recommend = true;
                                     }
-
-                                    ui.separator();
-                                }
-                            });
+                                });
                         });
                     });
             }
@@ -875,47 +842,23 @@ impl Running {
                             egui::ScrollArea::vertical()
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                for item in sub_items {
-                                    let resp = ui
-                                        .horizontal(|ui| {
-                                            ui.set_min_width(ui.available_width());
-                                            ui.vertical(|ui| {
-                                                ui.label(
-                                                    egui::RichText::new(&item.title)
-                                                        .color(egui::Color32::WHITE)
-                                                        .strong(),
-                                                );
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        egui::RichText::new(&item.channel)
-                                                            .color(egui::Color32::from_rgb(
-                                                                180, 180, 180,
-                                                            )),
-                                                    );
-                                                    if !item.published.is_empty() {
-                                                        ui.label(
-                                                            egui::RichText::new(&item.published)
-                                                                .color(egui::Color32::from_rgb(
-                                                                    150, 150, 150,
-                                                                )),
-                                                        );
-                                                    }
-                                                });
-                                            });
+                                    let cards: Vec<GridCard> = sub_items
+                                        .iter()
+                                        .map(|item| GridCard {
+                                            video_id: item.video_id.clone(),
+                                            title: item.title.clone(),
+                                            channel: item.channel.clone(),
+                                            duration: String::new(),
+                                            meta: item.published.clone(),
                                         })
-                                        .response;
-
-                                    if resp.interact(egui::Sense::click()).clicked() {
+                                        .collect();
+                                    if let Some(id) = draw_video_grid(ui, &cards) {
                                         pick_video = Some(format!(
-                                            "https://www.youtube.com/watch?v={}",
-                                            item.video_id
+                                            "https://www.youtube.com/watch?v={id}"
                                         ));
                                         toggle_subs = true;
                                     }
-
-                                    ui.separator();
-                                }
-                            });
+                                });
                         });
                     });
             }
@@ -1271,6 +1214,117 @@ impl Running {
 /// チャットパネルの描画。閉じるボタンが押されたら true を返す。
 /// オーバーレイ共通のヘッダーを描画する。「✕ 閉じる」が押されたら true を返す。
 /// 1 行ぶんの高さで、左にタイトル＋スピナー、右に閉じるボタンを配置する。
+/// 動画グリッドのカード 1 つ分。
+///
+/// すべて owned String なのは、毎フレーム再構築される egui の immediate mode に合わせ、
+/// 呼び出し側 (recommend / subscriptions) の異なるデータ構造から統一的に渡せるようにするため。
+struct GridCard {
+    video_id: String,
+    title: String,
+    channel: String,
+    /// 再生時間（mm:ss など）。サムネ右下にバッジ表示。空文字なら非表示。
+    duration: String,
+    /// 視聴数 / 公開日などの追加メタ情報。空文字なら非表示。
+    meta: String,
+}
+
+const CARD_TARGET_WIDTH: f32 = 320.0;
+const CARD_GAP: f32 = 16.0;
+
+/// YouTube ホーム風の動画カードグリッドを描画する。クリックされたカードの video_id を返す。
+fn draw_video_grid(ui: &mut egui::Ui, cards: &[GridCard]) -> Option<String> {
+    let avail = ui.available_width();
+    let cols = (((avail + CARD_GAP) / (CARD_TARGET_WIDTH + CARD_GAP)).floor() as usize).max(1);
+    let card_w = (avail - CARD_GAP * (cols.saturating_sub(1) as f32)) / cols as f32;
+
+    let mut clicked: Option<String> = None;
+    for chunk in cards.chunks(cols) {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = CARD_GAP;
+            for card in chunk {
+                if let Some(id) = draw_video_card(ui, card, card_w) {
+                    clicked = Some(id);
+                }
+            }
+        });
+        ui.add_space(CARD_GAP);
+    }
+    clicked
+}
+
+/// 1 枚のカードを描画する。サムネ + 再生時間バッジ + タイトル + チャンネル + メタ。
+fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String> {
+    let thumb_h = w * 9.0 / 16.0;
+
+    let inner = ui.allocate_ui_with_layout(
+        egui::vec2(w, 0.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_min_width(w);
+            ui.set_max_width(w);
+
+            // サムネ画像（YouTube CDN の mqdefault.jpg を直接 URL ロード）。
+            let (thumb_rect, _) =
+                ui.allocate_exact_size(egui::vec2(w, thumb_h), egui::Sense::hover());
+            let thumb_url = format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", card.video_id);
+            egui::Image::new(thumb_url)
+                .rounding(8.0)
+                .fit_to_exact_size(egui::vec2(w, thumb_h))
+                .paint_at(ui, thumb_rect);
+
+            // 再生時間バッジ（サムネ右下に absolute 配置）。
+            if !card.duration.is_empty() {
+                let painter = ui.painter();
+                let galley = painter.layout_no_wrap(
+                    card.duration.clone(),
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::WHITE,
+                );
+                let pad = egui::vec2(6.0, 3.0);
+                let badge_size = galley.size() + pad * 2.0;
+                let margin = 6.0;
+                let badge_rect = egui::Rect::from_min_size(
+                    thumb_rect.right_bottom() - badge_size - egui::vec2(margin, margin),
+                    badge_size,
+                );
+                painter.rect_filled(badge_rect, 3.0, egui::Color32::from_black_alpha(204));
+                painter.galley(badge_rect.min + pad, galley, egui::Color32::WHITE);
+            }
+
+            ui.add_space(8.0);
+
+            ui.label(
+                egui::RichText::new(&card.title)
+                    .color(egui::Color32::WHITE)
+                    .strong(),
+            );
+            if !card.channel.is_empty() {
+                ui.label(
+                    egui::RichText::new(&card.channel)
+                        .color(egui::Color32::from_rgb(170, 170, 170))
+                        .small(),
+                );
+            }
+            if !card.meta.is_empty() {
+                ui.label(
+                    egui::RichText::new(&card.meta)
+                        .color(egui::Color32::from_rgb(170, 170, 170))
+                        .small(),
+                );
+            }
+        },
+    );
+
+    // カード全体をクリック可能に。
+    let id = ui.id().with("card").with(&card.video_id);
+    let resp = ui.interact(inner.response.rect, id, egui::Sense::click());
+    if resp.clicked() {
+        Some(card.video_id.clone())
+    } else {
+        None
+    }
+}
+
 fn draw_overlay_header(ui: &mut egui::Ui, title: &str, busy: bool) -> bool {
     let mut close = false;
     ui.horizontal(|ui| {
