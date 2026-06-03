@@ -56,6 +56,7 @@ There is **no test suite**. Verification is done by launching the app (window ap
 youtube-super-lite [OPTIONS] [URL]
   -v, --verbose       mpv の詳細ログを出力
       --debug-backend URL   認証バックエンドを上書き（デバッグ用。デフォルト: 本番Worker）
+      --enable-dev-tools    ローカル検証用 HTTP サーバを起動（後述の GUI 検証フロー）
   -h, --help          ヘルプを表示
 ```
 
@@ -193,10 +194,32 @@ The desktop app **never holds `client_secret`.** Only the browser consent step i
 
 ### GUI 検証フロー
 
+**推奨: `--enable-dev-tools` 経由**。アプリ内 HTTP サーバから back buffer を PNG で直接取れるので、フォーカス奪取・Accessibility 権限・スリープ中の黒画像といった `screencapture` 由来の落とし穴を全部回避できる。詳細な仕様は [README.md](README.md) の「開発者向けツール」節を参照。
+
+```sh
+./target/debug/youtube-super-lite --enable-dev-tools "<URL>" 2>/tmp/yt.stderr &
+APP_PID=$!
+# dev-tools サーバ起動 + 動画ロード完了まで待つ。短い動画なら 6〜10 秒で十分。
+# 「再生準備中」など中央オーバーレイの解除前にスクショを撮ると、それも含めて
+# 写るので問題ない（むしろアプリ状態が一目で分かる）。
+sleep 8
+PORT=$(grep -oE 'http://127.0.0.1:[0-9]+' /tmp/yt.stderr | head -1 | grep -oE '[0-9]+$')
+curl -sS -o /tmp/shot.png "http://127.0.0.1:$PORT/screenshot"
+# 検証後
+kill $APP_PID
+```
+
+- **真っ黒な PNG が返った場合は実際に画面が黒い**。状態は中央オーバーレイで可視化されているはずなので、本当に何も描かれていない＝アプリ異常のサイン（mpv が動いていない、redraw が止まっている等）。`screencapture` のときのような「スリープ中だから黒」「OS の合成抑制で黒」は dev-tools 経由では起きない（back buffer を直接読むため OS コンポジットの前段）。
+- **UI 操作の検証（クリック等）は dev-tools では未実装**。`POST /action/<name>` などは未実装なので、クリック検証は当面 `cliclick` フォールバック（後述）。
+
+#### フォールバック: `screencapture` / `cliclick`
+
+dev-tools サーバが起動しない（ポート競合等）、または UI 操作が必要なときの代替。
+
 1. アプリを `&` でバックグラウンド起動し PID を控える
 2. `osascript -e 'tell application "System Events" to set frontmost of (first process whose name is "youtube-super-lite") to true'` で前面化
 3. `cliclick m:x,y` で UI を起こす（auto-hide 解除）
 4. `screencapture -x -R<screen_x>,<screen_y>,<w>,<h> /tmp/shot.png` でキャプチャ
 5. 検証後は `kill $APP_PID` で停止
 
-`cliclick c:x,y` でクリック検証も可能だが、GUI 全体を占有するためテスト中はマシン操作不可。配布製品化フェーズでは `egui_kittest` 等の UI 単体テスト基盤を別途用意する想定（CLAUDE.md の UI スタック節参照）。
+注意点: `cliclick c:x,y` のクリック検証はマシン全体の入力を占有するため、テスト中はユーザーが操作不可。Accessibility 権限が必要（前述）。配布製品化フェーズでは `egui_kittest` 等の UI 単体テスト基盤を別途用意する想定（UI スタック節参照）。

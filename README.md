@@ -122,6 +122,7 @@ wrangler deploy                            # → https://<worker-name>.<account>
 youtube-super-lite [OPTIONS] [URL]
   -v, --verbose             mpv の詳細ログを出力（動作確認用）
       --debug-backend URL   認証バックエンドを上書き（デバッグ用、既定: 本番Worker）
+      --enable-dev-tools    ローカル HTTP サーバを起動して検証用 API を公開（後述）
   -h, --help                ヘルプを表示
 ```
 
@@ -135,6 +136,33 @@ youtube-super-lite [OPTIONS] [URL]
   - `↑` / `↓` 音量 ±5
   - `Esc` 開いているオーバーレイ（おすすめ・再生リスト・新着）を閉じる
 - 約3秒間マウス/キー操作がないと、URL欄・コントロール・マウスカーソルを自動的に隠す（動かすと再表示）。チャットパネルは恒常表示。
+
+## 開発者向けツール (`--enable-dev-tools`)
+
+`--enable-dev-tools` を付けて起動すると、`127.0.0.1` の OS 割当て ephemeral ポートで HTTP サーバが立ち上がり、検証用 API を公開する。フォーカス奪取や Accessibility 権限を必要とする `screencapture` / `cliclick` / `osascript` を経由せずに、アプリ自身が画面の状態を返せるようにすることが目的。
+
+- バインドアドレスは **常に `127.0.0.1`**（ループバック固定。LAN からは到達不能）
+- 起動時に stderr に `[dev-tools] http://127.0.0.1:NNNN` を出力するので、ポートはそこから取得する
+- 認証なし。`--enable-dev-tools` を付けたプロセスを動かしているローカルユーザーが自身のために使うことを前提とする
+
+### エンドポイント
+
+| メソッド | パス | 返り値 | 説明 |
+|----------|------|--------|------|
+| `GET` | `/screenshot` | `image/png` | 現在の back buffer を PNG で返す（物理ピクセル解像度、HiDPI ではウィンドウサイズの 2 倍） |
+
+スクショは egui の描画後・`swap_buffers` の直前に `glReadPixels` で取得するため、画面に映る内容（動画 + UI + ロード状態オーバーレイ）がそのままバイト列になる。動画未ロード時は中央に「動画を解決中…」「再生準備中…」「読み込み失敗 …」のいずれかが描画されるので、「真っ黒な画像」は実際に画面が黒い状態（つまりアプリの状態異常）を意味する。
+
+### 使用例
+
+```sh
+./target/debug/youtube-super-lite --enable-dev-tools "https://www.youtube.com/watch?v=..." 2>/tmp/yt.stderr &
+APP_PID=$!
+sleep 3
+PORT=$(grep -oE 'http://127.0.0.1:[0-9]+' /tmp/yt.stderr | head -1 | grep -oE '[0-9]+$')
+curl -sS -o /tmp/shot.png "http://127.0.0.1:$PORT/screenshot"
+kill $APP_PID
+```
 
 ## DASH 対応の仕組み
 
