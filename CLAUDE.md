@@ -189,7 +189,7 @@ The desktop app **never holds `client_secret`.** Only the browser consent step i
 #### Cargo / 依存関係
 - `libmpv2` は **6.x 固定**（4.x は Render API でクラッシュ）。
 - `egui_glow` は `features = ["winit"]`、`egui-winit` は `features = ["clipboard"]` を必須に（後者は明示的にクリップボード機能を有効化しないと Cmd+V でペーストできない）。
-- `egui_extras` は `features = ["image", "http"]`、`image` クレートは `features = ["png", "webp"]` でカスタム絵文字の PNG/WEBP に対応。
+- `egui_extras` は `features = ["image", "http"]`、`image` クレートは `features = ["png", "webp", "jpeg"]`。PNG/WEBP はカスタム絵文字、JPEG は YouTube 動画サムネ（`i.ytimg.com/.../mqdefault.jpg`）に必要。features から外すと該当画像が ⚠ で表示される。
 
 ### GUI 検証フロー
 
