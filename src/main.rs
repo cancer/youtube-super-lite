@@ -1364,15 +1364,17 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
             ui.set_max_width(w);
 
             // サムネ画像（YouTube CDN の mqdefault.jpg を直接 URL ロード）。
-            let (thumb_rect, _) =
-                ui.allocate_exact_size(egui::vec2(w, thumb_h), egui::Sense::hover());
+            // ui.add でレイアウトを進めると egui_extras の http loader が駆動される。
+            // Image::paint_at は未ロード時のロード要求を出さないので使わない。
             let thumb_url = format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", card.video_id);
-            egui::Image::new(thumb_url)
-                .rounding(8.0)
-                .fit_to_exact_size(egui::vec2(w, thumb_h))
-                .paint_at(ui, thumb_rect);
+            let thumb_resp = ui.add(
+                egui::Image::new(thumb_url)
+                    .rounding(8.0)
+                    .fit_to_exact_size(egui::vec2(w, thumb_h)),
+            );
+            let thumb_rect = thumb_resp.rect;
 
-            // 再生時間バッジ（サムネ右下に absolute 配置）。
+            // 再生時間バッジ（サムネ右下に重ね描き）。
             if !card.duration.is_empty() {
                 let painter = ui.painter();
                 let galley = painter.layout_no_wrap(
