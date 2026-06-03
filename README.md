@@ -150,8 +150,23 @@ youtube-super-lite [OPTIONS] [URL]
 | メソッド | パス | 返り値 | 説明 |
 |----------|------|--------|------|
 | `GET` | `/screenshot` | `image/png` | 現在の back buffer を PNG で返す（物理ピクセル解像度、HiDPI ではウィンドウサイズの 2 倍） |
+| `POST` | `/action/<name>` | `text/plain` | UI 操作の intent flag を立てる（マウス/キー操作の代替）。`<name>` が既知なら `200 ok`、未知なら `400 unknown action: ...` |
 
 スクショは egui の描画後・`swap_buffers` の直前に `glReadPixels` で取得するため、画面に映る内容（動画 + UI + ロード状態オーバーレイ）がそのままバイト列になる。動画未ロード時は中央に「動画を解決中…」「再生準備中…」「読み込み失敗 …」のいずれかが描画されるので、「真っ黒な画像」は実際に画面が黒い状態（つまりアプリの状態異常）を意味する。
+
+`/action/<name>` で受け付けるアクション一覧:
+
+| アクション名 | 効果 |
+|--------------|------|
+| `toggle_chat` | チャットパネルの表示切り替え |
+| `toggle_recommend` | おすすめ動画オーバーレイの表示切り替え |
+| `toggle_subs` | 登録チャンネル新着オーバーレイの表示切り替え（未取得なら自動取得） |
+| `toggle_playlist` | 再生リストオーバーレイの表示切り替え（未取得なら自動取得） |
+| `toggle_history` | 再生履歴オーバーレイの表示切り替え（未取得なら自動取得） |
+| `play_pause` | 再生 / 一時停止トグル（Space キー相当） |
+| `login` | OAuth ログイン開始 |
+| `like` | 現在再生中の動画に高評価 |
+| `close_overlay` | 最前面のオーバーレイを閉じる（Esc キー相当） |
 
 ### 使用例
 
@@ -160,7 +175,15 @@ youtube-super-lite [OPTIONS] [URL]
 APP_PID=$!
 sleep 3
 PORT=$(grep -oE 'http://127.0.0.1:[0-9]+' /tmp/yt.stderr | head -1 | grep -oE '[0-9]+$')
+
+# スクショ取得
 curl -sS -o /tmp/shot.png "http://127.0.0.1:$PORT/screenshot"
+
+# 履歴オーバーレイを開いてスクショ
+curl -sS -X POST "http://127.0.0.1:$PORT/action/toggle_history"
+sleep 1
+curl -sS -o /tmp/history.png "http://127.0.0.1:$PORT/screenshot"
+
 kill $APP_PID
 ```
 
