@@ -33,3 +33,6 @@ serde_json = "1"
 # Error handling
 anyhow = "1"
 dash-mpd = { version = "0.20.3", default-features = false }
+
+# --enable-dev-tools 時のローカル HTTP サーバ（screencapture / cliclick の代替）。
+tiny_http = "0.12"

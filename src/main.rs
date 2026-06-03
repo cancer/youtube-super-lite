@@ -1,5 +1,6 @@
 mod auth;
 mod chat;
+mod devtools;
 mod gl_quad;
 mod player;
 mod playlist;
@@ -273,6 +274,8 @@ struct Running {
     resolve_rx: Receiver<resolve::ResolveUpdate>,
     resolve_busy: bool,
     load_error: Option<String>,
+    // --- dev-tools (--enable-dev-tools 時のみ Some) ---
+    devtools_rx: Option<Receiver<devtools::Command>>,
 }
 
 impl Running {
@@ -1232,6 +1235,9 @@ impl Running {
         });
         self.egui_glow.paint(window);
 
+        // dev-tools のスクショ要求を処理（swap 前の back buffer から読み出す）。
+        self.handle_devtools_commands();
+
         let _ = self.gl_surface.swap_buffers(&self.gl_context);
 
         self.frames += 1;
@@ -1303,6 +1309,70 @@ impl Running {
                 self.start_like(id);
             }
         }
+    }
+
+    /// dev-tools サーバからの要求を 1 件処理する（swap 前に呼ぶこと）。
+    /// 要求が無ければ何もしない。複数たまっていても次の redraw で次が処理される。
+    fn handle_devtools_commands(&mut self) {
+        let Some(rx) = self.devtools_rx.as_ref() else {
+            return;
+        };
+        let Ok(cmd) = rx.try_recv() else {
+            return;
+        };
+        match cmd {
+            devtools::Command::Screenshot(reply) => {
+                let _ = reply.send(self.capture_framebuffer_png());
+            }
+        }
+    }
+
+    /// 現在の back buffer を PNG にエンコードして返す。
+    /// GL 読み出しはメインスレッド (= GL コンテキスト所属) のみで可能。
+    fn capture_framebuffer_png(&self) -> Vec<u8> {
+        use glow::HasContext;
+        let size = self.window.inner_size();
+        let (w, h) = (size.width as i32, size.height as i32);
+        if w <= 0 || h <= 0 {
+            return Vec::new();
+        }
+
+        let mut data = vec![0u8; (w * h * 4) as usize];
+        unsafe {
+            self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            self.gl.read_pixels(
+                0,
+                0,
+                w,
+                h,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(&mut data),
+            );
+        }
+
+        // OpenGL は左下原点、PNG は左上原点。上下反転して並べ直す。
+        let row = (w * 4) as usize;
+        let mut flipped = vec![0u8; data.len()];
+        for y in 0..h as usize {
+            let src = (h as usize - 1 - y) * row;
+            let dst = y * row;
+            flipped[dst..dst + row].copy_from_slice(&data[src..src + row]);
+        }
+
+        let buf: image::RgbaImage =
+            match image::ImageBuffer::from_raw(w as u32, h as u32, flipped) {
+                Some(b) => b,
+                None => return Vec::new(),
+            };
+        let mut png = Vec::new();
+        if buf
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .is_err()
+        {
+            return Vec::new();
+        }
+        png
     }
 }
 
@@ -1648,6 +1718,7 @@ struct App {
     initial_url: Option<String>,
     verbose: bool,
     backend: String,
+    enable_dev_tools: bool,
     state: Option<Running>,
 }
 
@@ -1657,12 +1728,14 @@ impl App {
         initial_url: Option<String>,
         verbose: bool,
         backend: String,
+        enable_dev_tools: bool,
     ) -> Self {
         Self {
             proxy,
             initial_url,
             verbose,
             backend,
+            enable_dev_tools,
             state: None,
         }
     }
@@ -1797,11 +1870,26 @@ impl App {
             resolve_rx,
             resolve_busy: false,
             load_error: None,
+            devtools_rx: None,
         };
 
         // 保存済みリフレッシュトークンがあれば自動ログインを試みる。
         if let Some(rt) = auth::load_refresh_token() {
             running.start_silent_login(rt);
+        }
+
+        // --enable-dev-tools 時のみ devtools サーバを起動。
+        if self.enable_dev_tools {
+            let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+            match devtools::start(cmd_tx, self.proxy.clone()) {
+                Ok(port) => {
+                    running.devtools_rx = Some(cmd_rx);
+                    eprintln!("[dev-tools] http://127.0.0.1:{port}");
+                }
+                Err(e) => {
+                    eprintln!("[dev-tools] サーバ起動失敗: {e}");
+                }
+            }
         }
 
         Ok(running)
@@ -1898,12 +1986,14 @@ struct CliArgs {
     url: Option<String>,
     verbose: bool,
     backend: String,
+    enable_dev_tools: bool,
 }
 
 fn parse_args() -> Result<CliArgs> {
     let mut verbose = false;
     let mut backend = auth::DEFAULT_BACKEND.to_string();
     let mut url: Option<String> = None;
+    let mut enable_dev_tools = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -1914,6 +2004,7 @@ fn parse_args() -> Result<CliArgs> {
                     .next()
                     .ok_or_else(|| anyhow!("--debug-backend に URL を指定してください"))?;
             }
+            "--enable-dev-tools" => enable_dev_tools = true,
             "-h" | "--help" => {
                 print_help();
                 std::process::exit(0);
@@ -1934,6 +2025,7 @@ fn parse_args() -> Result<CliArgs> {
         url,
         verbose,
         backend: backend.trim_end_matches('/').to_string(),
+        enable_dev_tools,
     })
 }
 
@@ -1946,6 +2038,8 @@ fn print_help() {
          Options:\n\
          \x20\x20-v, --verbose             mpv の詳細ログを出力\n\
          \x20\x20    --debug-backend URL   認証バックエンドを上書き（デバッグ用、デフォルト: {}）\n\
+         \x20\x20    --enable-dev-tools    デバッグ用のローカル HTTP サーバを起動\n\
+         \x20\x20                          (GET /screenshot 等。listen ポートは stderr に出力)\n\
          \x20\x20-h, --help                このヘルプを表示",
         auth::DEFAULT_BACKEND
     );
@@ -1966,7 +2060,7 @@ fn main() -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(proxy, args.url, args.verbose, args.backend);
+    let mut app = App::new(proxy, args.url, args.verbose, args.backend, args.enable_dev_tools);
     event_loop.run_app(&mut app)?;
     Ok(())
 }
