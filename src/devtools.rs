@@ -5,8 +5,9 @@
 //! Accessibility 権限の問題を回避し、`curl` だけで検証フローを回せるようにする。
 //!
 //! 提供エンドポイント:
-//! - `GET /screenshot`     — 現フレームを PNG で返す
-//! - `POST /action/<name>` — UI 操作の intent flag を立てる（GUI 自動操作の代替）
+//! - `GET /screenshot`         — 現フレームを PNG で返す
+//! - `POST /action/<name>`     — UI 操作の intent flag を立てる（GUI 自動操作の代替）
+//! - `POST /click?x=&y=`       — 指定座標（/screenshot と同じ物理px）に左クリックを合成注入
 //!
 //! `<name>` は: `toggle_chat`, `toggle_recommend`, `toggle_subs`, `toggle_playlist`,
 //! `toggle_history`, `play_pause`, `login`, `like`, `close_overlay`。
@@ -32,6 +33,8 @@ pub enum Command {
     /// メインスレッドが「次フレームでフラグを処理する」ところまで保証し、
     /// 実際の UI 変化（オーバーレイ表示など）は次の paint で起きる。
     Action(String, Sender<bool>),
+    /// 指定座標（/screenshot と同じ物理ピクセル）に左クリックを合成注入する。
+    Click { x: f32, y: f32, reply: Sender<bool> },
 }
 
 /// dev-tools HTTP サーバを起動し、listen ポートを返す。
@@ -66,8 +69,10 @@ fn handle(
     let url = req.url().to_string();
     let method = req.method().clone();
 
-    match (method, url.as_str()) {
+    let path_only = url.split('?').next().unwrap_or(&url);
+    match (method, path_only) {
         (Method::Get, "/screenshot") => handle_screenshot(req, cmd_tx, proxy),
+        (Method::Post, "/click") => handle_click(req, cmd_tx, proxy, &url),
         (Method::Post, path) if path.starts_with("/action/") => {
             let name = path.trim_start_matches("/action/").to_string();
             handle_action(req, cmd_tx, proxy, name);
@@ -102,6 +107,49 @@ fn handle_action(
                 Response::from_string(format!("unknown action: {name}\n"))
                     .with_status_code(400),
             );
+        }
+        Err(_) => {
+            let _ = req.respond(Response::from_string("timeout").with_status_code(504));
+        }
+    }
+}
+
+fn handle_click(
+    req: tiny_http::Request,
+    cmd_tx: &Sender<Command>,
+    proxy: &winit::event_loop::EventLoopProxy<crate::UserEvent>,
+    url: &str,
+) {
+    // クエリ `?x=<px>&y=<px>` を取り出す（/screenshot と同じ物理ピクセル座標）。
+    let mut x: Option<f32> = None;
+    let mut y: Option<f32> = None;
+    if let Some(q) = url.split('?').nth(1) {
+        for pair in q.split('&') {
+            let mut it = pair.splitn(2, '=');
+            match (it.next(), it.next()) {
+                (Some("x"), Some(v)) => x = v.parse().ok(),
+                (Some("y"), Some(v)) => y = v.parse().ok(),
+                _ => {}
+            }
+        }
+    }
+    let (Some(x), Some(y)) = (x, y) else {
+        let _ = req.respond(
+            Response::from_string("usage: POST /click?x=<px>&y=<px>\n").with_status_code(400),
+        );
+        return;
+    };
+
+    let (tx, rx) = channel();
+    if cmd_tx.send(Command::Click { x, y, reply: tx }).is_err() {
+        let _ = req.respond(Response::from_string("dev-tools shutdown").with_status_code(503));
+        return;
+    }
+    let _ = proxy.send_event(crate::UserEvent::Background);
+
+    match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(_) => {
+            let _ = req.respond(Response::from_string("ok\n").with_status_code(200));
         }
         Err(_) => {
             let _ = req.respond(Response::from_string("timeout").with_status_code(504));

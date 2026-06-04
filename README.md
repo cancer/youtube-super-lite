@@ -151,6 +151,7 @@ youtube-super-lite [OPTIONS] [URL]
 |----------|------|--------|------|
 | `GET` | `/screenshot` | `image/png` | 現在の back buffer を PNG で返す（物理ピクセル解像度、HiDPI ではウィンドウサイズの 2 倍） |
 | `POST` | `/action/<name>` | `text/plain` | UI 操作の intent flag を立てる（マウス/キー操作の代替）。`<name>` が既知なら `200 ok`、未知なら `400 unknown action: ...` |
+| `POST` | `/click?x=<px>&y=<px>` | `text/plain` | 指定座標（`/screenshot` と同じ物理ピクセル）に左クリックを合成注入。動画クリックでの再生/一時停止やボタン操作の検証に使える |
 
 スクショは egui の描画後・`swap_buffers` の直前に `glReadPixels` で取得するため、画面に映る内容（動画 + UI + ロード状態オーバーレイ）がそのままバイト列になる。動画未ロード時は中央に「動画を解決中…」「再生準備中…」「読み込み失敗 …」のいずれかが描画されるので、「真っ黒な画像」は実際に画面が黒い状態（つまりアプリの状態異常）を意味する。
 

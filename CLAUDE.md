@@ -210,7 +210,8 @@ kill $APP_PID
 ```
 
 - **真っ黒な PNG が返った場合は実際に画面が黒い**。状態は中央オーバーレイで可視化されているはずなので、本当に何も描かれていない＝アプリ異常のサイン（mpv が動いていない、redraw が止まっている等）。`screencapture` のときのような「スリープ中だから黒」「OS の合成抑制で黒」は dev-tools 経由では起きない（back buffer を直接読むため OS コンポジットの前段）。
-- **UI 操作の検証は `POST /action/<name>` で intent flag を立てられる**。利用可能アクション: `toggle_chat` / `toggle_recommend` / `toggle_subs` / `toggle_playlist` / `toggle_history` / `play_pause` / `login` / `like` / `close_overlay`。任意座標へのクリックはまだ未対応なので、座標指定が必要な検証は `cliclick` フォールバックを使う。
+- **UI 操作の検証は `POST /action/<name>` で intent flag を立てられる**。利用可能アクション: `toggle_chat` / `toggle_recommend` / `toggle_subs` / `toggle_playlist` / `toggle_history` / `play_pause` / `login` / `like` / `close_overlay`。
+- **任意座標のクリックは `POST /click?x=<px>&y=<px>`**（座標は `/screenshot` と同じ物理ピクセル）。egui に合成ポインタ（移動→押下→離す）を注入するので、動画クリックでの再生/一時停止やボタンも検証できる。`cliclick` フォールバックは不要。
 
 ```sh
 # 例: 履歴オーバーレイを開いてスクショ

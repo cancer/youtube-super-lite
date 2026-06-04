@@ -1467,6 +1467,12 @@ impl Running {
                         });
                     });
                 });
+
+            // 動画領域（egui のパネル/オーバーレイ以外）のクリックで再生/一時停止をトグルする。
+            // is_pointer_over_area() が false ＝ どの egui エリアにも乗っていない＝動画上。
+            if ctx.input(|i| i.pointer.primary_clicked()) && !ctx.is_pointer_over_area() {
+                player.set_paused(!paused);
+            }
         });
         self.egui_glow.paint(window);
 
@@ -1574,7 +1580,37 @@ impl Running {
                 let known = self.apply_devtools_action(&name);
                 let _ = reply.send(known);
             }
+            devtools::Command::Click { x, y, reply } => {
+                self.inject_click(x, y);
+                let _ = reply.send(true);
+            }
         }
+    }
+
+    /// dev-tools の `POST /click` を受け、指定座標（物理px）へ左クリックを合成して egui に注入する。
+    /// 次フレームの egui_glow.run でボタン/動画クリック等として処理される。
+    fn inject_click(&mut self, x: f32, y: f32) {
+        // /screenshot は物理ピクセル。egui のイベントは論理ポイントなので scale_factor で割る。
+        let ppp = self.window.scale_factor() as f32;
+        let pos = egui::pos2(x / ppp, y / ppp);
+        let modifiers = egui::Modifiers::default();
+        let events = &mut self.egui_glow.egui_winit.egui_input_mut().events;
+        events.push(egui::Event::PointerMoved(pos));
+        events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers,
+        });
+        events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers,
+        });
+        // 操作扱いにして UI を表示し、次フレームを描画させる。
+        self.last_activity = Instant::now();
+        self.window.request_redraw();
     }
 
     /// dev-tools の `POST /action/<name>` を受けて intent flag を立てる。
