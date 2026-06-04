@@ -137,6 +137,10 @@ impl Player {
     pub fn duration(&self) -> f64 {
         self.mpv.get_property("duration").unwrap_or(0.0)
     }
+    /// シーク可能か（VOD/DVR あり = true、DVR なしライブ = false）。
+    pub fn seekable(&self) -> bool {
+        self.mpv.get_property("seekable").unwrap_or(false)
+    }
     pub fn volume(&self) -> f64 {
         self.mpv.get_property("volume").unwrap_or(100.0)
     }

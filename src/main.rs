@@ -897,6 +897,7 @@ impl Running {
         let paused = self.player.paused();
         let time_pos = self.player.time_pos();
         let duration = self.player.duration();
+        let seekable_stream = self.player.seekable();
         let volume = self.player.volume();
         let muted = self.player.muted();
         let title = self.player.media_title();
@@ -1518,8 +1519,10 @@ impl Running {
                     ui.vertical(|ui| {
                         // シークバー (フル幅、上)
                         let mut pos = time_pos;
-                        let seekable = duration > 0.0;
-                        if seek_bar(ui, &mut pos, duration, seekable).changed() {
+                        let seekable = seekable_stream;
+                        // 動画読込済みでシーク不可 ＝ DVR なしライブとみなしてバーを 100% 固定。
+                        let live_fixed = !seekable_stream && url_set;
+                        if seek_bar(ui, &mut pos, duration, seekable, live_fixed).changed() {
                             player.set_time_pos(pos);
                         }
 
@@ -2002,7 +2005,13 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
 
 /// 本家風シークバー: 細い赤線 + ホバー時にハンドル円。クリック / ドラッグで pos を更新。
 /// pos が変更されたら Response.changed() = true を返す。
-fn seek_bar(ui: &mut egui::Ui, pos: &mut f64, duration: f64, seekable: bool) -> egui::Response {
+fn seek_bar(
+    ui: &mut egui::Ui,
+    pos: &mut f64,
+    duration: f64,
+    seekable: bool,
+    live_fixed: bool,
+) -> egui::Response {
     let desired_size = egui::vec2(ui.available_width(), 16.0);
     let sense = if seekable {
         egui::Sense::click_and_drag()
@@ -2022,7 +2031,10 @@ fn seek_bar(ui: &mut egui::Ui, pos: &mut f64, duration: f64, seekable: bool) -> 
     let painter = ui.painter();
     painter.rect_filled(bar_rect, 2.0, egui::Color32::from_white_alpha(64));
 
-    let progress = if duration > 0.0 {
+    // DVR なしライブは常に最先端＝100% 固定。それ以外は再生位置 / 全体。
+    let progress = if live_fixed {
+        1.0
+    } else if duration > 0.0 {
         (*pos / duration).clamp(0.0, 1.0) as f32
     } else {
         0.0
@@ -2034,7 +2046,7 @@ fn seek_bar(ui: &mut egui::Ui, pos: &mut f64, duration: f64, seekable: bool) -> 
     );
     painter.rect_filled(progress_rect, 2.0, red);
 
-    if response.hovered() || response.dragged() {
+    if seekable && (response.hovered() || response.dragged()) {
         let handle_x = bar_rect.left() + bar_rect.width() * progress;
         painter.circle_filled(egui::pos2(handle_x, rect.center().y), 7.0, red);
     }
