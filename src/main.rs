@@ -94,6 +94,96 @@ fn format_time(secs: f64) -> String {
     }
 }
 
+/// 画質（最大の縦解像度）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Quality {
+    Auto,
+    P2160,
+    P1440,
+    P1080,
+    P720,
+    P480,
+    P360,
+}
+
+impl Quality {
+    const ALL: [Quality; 7] = [
+        Quality::Auto,
+        Quality::P2160,
+        Quality::P1440,
+        Quality::P1080,
+        Quality::P720,
+        Quality::P480,
+        Quality::P360,
+    ];
+    fn height(self) -> Option<u32> {
+        match self {
+            Quality::Auto => None,
+            Quality::P2160 => Some(2160),
+            Quality::P1440 => Some(1440),
+            Quality::P1080 => Some(1080),
+            Quality::P720 => Some(720),
+            Quality::P480 => Some(480),
+            Quality::P360 => Some(360),
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Quality::Auto => "自動",
+            Quality::P2160 => "2160p",
+            Quality::P1440 => "1440p",
+            Quality::P1080 => "1080p",
+            Quality::P720 => "720p",
+            Quality::P480 => "480p",
+            Quality::P360 => "360p",
+        }
+    }
+}
+
+/// 映像コーデック。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Codec {
+    Auto,
+    H264,
+    Vp9,
+    Av1,
+}
+
+impl Codec {
+    const ALL: [Codec; 4] = [Codec::Auto, Codec::H264, Codec::Vp9, Codec::Av1];
+    /// yt-dlp フォーマットフィルタの vcodec 条件。
+    fn vfilter(self) -> &'static str {
+        match self {
+            Codec::Auto => "",
+            Codec::H264 => "[vcodec^=avc1]",
+            Codec::Vp9 => "[vcodec^=vp09]",
+            Codec::Av1 => "[vcodec^=av01]",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Codec::Auto => "自動",
+            Codec::H264 => "H.264",
+            Codec::Vp9 => "VP9",
+            Codec::Av1 => "AV1",
+        }
+    }
+}
+
+/// 画質・コーデック指定から yt-dlp の `-f` フォーマット文字列を組み立てる。
+/// 厳しい条件 → 緩い条件 → 既定 の順でフォールバックし、必ず再生できるようにする。
+fn build_ytdlp_format(quality: Quality, codec: Codec) -> String {
+    let hf = quality
+        .height()
+        .map(|h| format!("[height<={h}]"))
+        .unwrap_or_default();
+    let cf = codec.vfilter();
+    if hf.is_empty() && cf.is_empty() {
+        return "bestvideo+bestaudio/best".to_string();
+    }
+    format!("bestvideo{hf}{cf}+bestaudio/bestvideo{hf}+bestaudio/best{hf}/bestvideo+bestaudio/best")
+}
+
 /// 指定パス候補のいずれかからフォントを読み込む。
 fn load_font_from(paths: &[&str]) -> Option<Vec<u8>> {
     for p in paths {
@@ -246,6 +336,9 @@ struct Running {
     // 最後に操作（マウス/キー）があった時刻と、現在 UI を表示しているか。
     last_activity: Instant,
     ui_visible: bool,
+    // 画質・コーデック指定（yt-dlp のフォーマット選択に使う）。
+    quality: Quality,
+    codec: Codec,
     // --- 認証 / API ---
     proxy: EventLoopProxy<UserEvent>,
     backend: String,
@@ -357,8 +450,9 @@ impl Running {
         self.resolve_busy = true;
         let tx = self.resolve_tx.clone();
         let proxy = self.proxy.clone();
+        let format = build_ytdlp_format(self.quality, self.codec);
         std::thread::spawn(move || {
-            resolve::resolve(&url, &tx);
+            resolve::resolve(&url, &format, &tx);
             let _ = proxy.send_event(UserEvent::Background);
         });
     }
@@ -870,6 +964,9 @@ impl Running {
         // loading オーバーレイの spinner をアニメさせるため、closure 内で立てる。
         let mut loading_spinning = false;
         let mut pick_video: Option<String> = None;
+        // 画質・コーデックの選択（コンボボックスで書き換え、run 後に変更検出）。
+        let mut sel_quality = self.quality;
+        let mut sel_codec = self.codec;
         self.egui_glow.run(window, |ctx| {
             // キーボードショートカットは UI 非表示中も有効（URL 欄入力中のみ無効）。
             if !ctx.wants_keyboard_input() {
@@ -1462,6 +1559,23 @@ impl Running {
                                         egui::RichText::new("🔊")
                                             .color(egui::Color32::WHITE),
                                     );
+
+                                    // 画質・コーデック（変更で現在の動画を取り直す）。
+                                    ui.add_space(12.0);
+                                    egui::ComboBox::from_id_salt("codec_combo")
+                                        .selected_text(format!("コーデック: {}", sel_codec.label()))
+                                        .show_ui(ui, |ui| {
+                                            for c in Codec::ALL {
+                                                ui.selectable_value(&mut sel_codec, c, c.label());
+                                            }
+                                        });
+                                    egui::ComboBox::from_id_salt("quality_combo")
+                                        .selected_text(format!("画質: {}", sel_quality.label()))
+                                        .show_ui(ui, |ui| {
+                                            for q in Quality::ALL {
+                                                ui.selectable_value(&mut sel_quality, q, q.label());
+                                            }
+                                        });
                                 },
                             );
                         });
@@ -1510,6 +1624,16 @@ impl Running {
             // URL 手入力時は再生リストの動画一覧をリセット（一覧は保持）。
             self.playlist_items.clear();
             self.playlist_items_title.clear();
+        }
+
+        // 画質・コーデックが変更されたら、再生中の YouTube 動画を新指定で取り直す。
+        if sel_quality != self.quality || sel_codec != self.codec {
+            self.quality = sel_quality;
+            self.codec = sel_codec;
+            if !self.current_url.is_empty() && resolve::is_youtube_url(&self.current_url) {
+                let u = self.current_url.clone();
+                self.start_resolve(u);
+            }
         }
         if toggle_chat {
             self.chat_visible = !self.chat_visible;
@@ -2186,6 +2310,8 @@ impl App {
             verbose: self.verbose,
             last_activity: Instant::now(),
             ui_visible: true,
+            quality: Quality::Auto,
+            codec: Codec::Auto,
             proxy: self.proxy.clone(),
             backend,
             tokens: None,

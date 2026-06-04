@@ -32,8 +32,9 @@ pub enum ResolveUpdate {
 }
 
 /// 指定 URL を yt-dlp で解決し、結果を `tx` に送る。背景スレッドで呼び出す。
-pub fn resolve(url: &str, tx: &Sender<ResolveUpdate>) {
-    match resolve_inner(url) {
+/// `format` は yt-dlp の `-f` 指定（画質/コーデック）。
+pub fn resolve(url: &str, format: &str, tx: &Sender<ResolveUpdate>) {
+    match resolve_inner(url, format) {
         Ok(r) => {
             let _ = tx.send(ResolveUpdate::Ready(r));
         }
@@ -43,15 +44,9 @@ pub fn resolve(url: &str, tx: &Sender<ResolveUpdate>) {
     }
 }
 
-fn resolve_inner(url: &str) -> Result<Resolved> {
+fn resolve_inner(url: &str, format: &str) -> Result<Resolved> {
     let output = Command::new("yt-dlp")
-        .args([
-            "--no-warnings",
-            "-g",
-            "-f",
-            "bestvideo+bestaudio/best",
-            url,
-        ])
+        .args(["--no-warnings", "-g", "-f", format, url])
         .output()?;
 
     if !output.status.success() {
