@@ -1425,14 +1425,6 @@ impl Running {
 
                 // 機能ナビとアカウント。アカウントは右端に寄せる。
                 ui.horizontal(|ui| {
-                    // チャット表示切り替え（チャットが接続中 or メッセージがあるとき）。
-                    if !chat_status.is_empty() {
-                        let label = if chat_visible { "💬 チャット非表示" } else { "💬 チャット表示" };
-                        if ui.button(label).clicked() {
-                            toggle_chat = true;
-                        }
-                    }
-
                     if !recommend_items.is_empty() {
                         if ui.button("📋 おすすめ").clicked() {
                             toggle_recommend = true;
@@ -1477,38 +1469,19 @@ impl Running {
                         },
                     );
                 });
+
+                // 動画タイトル（上部に表示）。高評価ボタンは下部コントローラーへ。
+                if !title.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&title)
+                            .color(egui::Color32::WHITE)
+                            .size(16.0)
+                            .strong(),
+                    );
+                }
             });
 
-            // 動画下情報パネル: タイトル + 高評価ボタン。
-            // controls より「先に」bottom で登録するため controls の上に積まれる。
-            // resolve_busy / load_error の表示は中央の loading オーバーレイに移譲済み。
-            if !title.is_empty() {
-                egui::TopBottomPanel::bottom("video_info")
-                    .frame(
-                        egui::Frame::none()
-                            .fill(egui::Color32::TRANSPARENT)
-                            .inner_margin(egui::Margin::symmetric(16.0, 8.0)),
-                    )
-                    .show(ctx, |ui| {
-                        ui.label(
-                            egui::RichText::new(&title)
-                                .color(egui::Color32::WHITE)
-                                .size(16.0)
-                                .strong(),
-                        );
-                        ui.horizontal(|ui| {
-                            let can_like = logged_in && !auth_busy && video_id.is_some();
-                            if ui
-                                .add_enabled(can_like, egui::Button::new("👍 高評価"))
-                                .on_hover_text("この動画に高評価を付けます")
-                                .clicked()
-                            {
-                                like_clicked = true;
-                            }
-                        });
-                    });
-            }
-
+            // コントローラーを UI 最下部に置く（タイトル/高評価は上部 urlbar へ移動済み）。
             egui::TopBottomPanel::bottom("controls")
                 .frame(
                     egui::Frame::none()
@@ -1552,6 +1525,25 @@ impl Running {
                                 .color(egui::Color32::WHITE)
                                 .size(13.0),
                             );
+
+                            // 高評価（コントローラーの一部）。
+                            let can_like = logged_in && !auth_busy && video_id.is_some();
+                            if ui
+                                .add_enabled(can_like, egui::Button::new("👍 高評価"))
+                                .on_hover_text("この動画に高評価を付けます")
+                                .clicked()
+                            {
+                                like_clicked = true;
+                            }
+
+                            // チャット表示切り替え（接続中 or メッセージがあるとき）。
+                            if !chat_status.is_empty() {
+                                let label =
+                                    if chat_visible { "💬 チャット非表示" } else { "💬 チャット表示" };
+                                if ui.button(label).clicked() {
+                                    toggle_chat = true;
+                                }
+                            }
 
                             // 右寄せ: 音量
                             ui.with_layout(
