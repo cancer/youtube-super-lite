@@ -143,6 +143,12 @@ impl Player {
     pub fn set_volume(&self, v: f64) {
         let _ = self.mpv.set_property("volume", v);
     }
+    pub fn muted(&self) -> bool {
+        self.mpv.get_property("mute").unwrap_or(false)
+    }
+    pub fn set_muted(&self, m: bool) {
+        let _ = self.mpv.set_property("mute", m);
+    }
     pub fn media_title(&self) -> String {
         self.mpv
             .get_property::<String>("media-title")

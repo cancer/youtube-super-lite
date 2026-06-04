@@ -896,6 +896,7 @@ impl Running {
         let time_pos = self.player.time_pos();
         let duration = self.player.duration();
         let volume = self.player.volume();
+        let muted = self.player.muted();
         let title = self.player.media_title();
 
         // 一定時間操作がなければ UI を隠す。表示状態が変わったらカーソルも合わせる。
@@ -1555,10 +1556,15 @@ impl Running {
                                     if volume_bar(ui, &mut vol, 130.0).changed() {
                                         player.set_volume(vol);
                                     }
-                                    ui.label(
-                                        egui::RichText::new("🔊")
-                                            .color(egui::Color32::WHITE),
-                                    );
+                                    // スピーカーアイコン: クリックでミュート切替。
+                                    let icon = if muted { "🔇" } else { "🔊" };
+                                    let spk = egui::Button::new(
+                                        egui::RichText::new(icon).color(egui::Color32::WHITE),
+                                    )
+                                    .frame(false);
+                                    if ui.add(spk).on_hover_text("ミュート切替").clicked() {
+                                        player.set_muted(!muted);
+                                    }
 
                                     // 画質・コーデック（変更で現在の動画を取り直す）。
                                     ui.add_space(12.0);
