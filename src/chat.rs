@@ -30,6 +30,9 @@ pub enum ChatRun {
 pub struct ChatMessage {
     pub author: String,
     pub runs: Vec<ChatRun>,
+    /// 仮想スクロール（show_viewport）用に、描画時に実測した行高をキャッシュする。
+    /// 0.0 = 未実測。チャット欄は幅固定なので一度測れば安定する。
+    pub cached_height: std::cell::Cell<f32>,
 }
 
 /// 背景スレッドからメインスレッドへの通知。
@@ -422,7 +425,11 @@ fn parse_text_message(renderer: &Value) -> Option<ChatMessage> {
     if runs.is_empty() {
         return None;
     }
-    Some(ChatMessage { author, runs })
+    Some(ChatMessage {
+        author,
+        runs,
+        cached_height: std::cell::Cell::new(0.0),
+    })
 }
 
 /// message.runs[] を ChatRun の列に変換する。

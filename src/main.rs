@@ -1714,6 +1714,10 @@ impl Running {
                 self.inject_click(x, y);
                 let _ = reply.send(true);
             }
+            devtools::Command::Type { text, enter, reply } => {
+                self.inject_type(&text, enter);
+                let _ = reply.send(true);
+            }
         }
     }
 
@@ -1739,6 +1743,33 @@ impl Running {
             modifiers,
         });
         // 操作扱いにして UI を表示し、次フレームを描画させる。
+        self.last_activity = Instant::now();
+        self.window.request_redraw();
+    }
+
+    /// dev-tools の `POST /type`：フォーカス中のウィジェットへ貼り付け、必要なら Enter を送る。
+    fn inject_type(&mut self, text: &str, enter: bool) {
+        let modifiers = egui::Modifiers::default();
+        let events = &mut self.egui_glow.egui_winit.egui_input_mut().events;
+        if !text.is_empty() {
+            events.push(egui::Event::Paste(text.to_string()));
+        }
+        if enter {
+            events.push(egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            });
+            events.push(egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers,
+            });
+        }
         self.last_activity = Instant::now();
         self.window.request_redraw();
     }
@@ -2153,36 +2184,76 @@ fn draw_chat(ui: &mut egui::Ui, messages: &[chat::ChatMessage], status: &str) ->
     });
     ui.separator();
 
+    // 仮想スクロール: 幅固定なので各メッセージ高さは安定。実測値をキャッシュし、
+    // 可視範囲に重なるメッセージだけを描画する（毎フレーム全件 for を避ける）。
     egui::ScrollArea::vertical()
         .stick_to_bottom(true)
-        .show(ui, |ui| {
-            // テキスト・カスタム絵文字画像が1行内で混在するため間隔を詰める。
+        .auto_shrink([false, false])
+        .show_viewport(ui, |ui, viewport| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            for msg in messages {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        egui::RichText::new(&msg.author)
-                            .color(egui::Color32::from_rgb(100, 180, 255))
-                            .strong(),
-                    );
-                    for run in &msg.runs {
-                        match run {
-                            chat::ChatRun::Text(t) => {
-                                ui.label(
-                                    egui::RichText::new(t).color(egui::Color32::WHITE),
-                                );
-                            }
-                            chat::ChatRun::Image { url, alt } => {
-                                // インライン絵文字サイズ（行の高さに合わせる）。
-                                let size = ui.text_style_height(&egui::TextStyle::Body);
-                                let img = egui::Image::new(url)
-                                    .max_height(size)
-                                    .fit_to_original_size(1.0);
-                                ui.add(img).on_hover_text(alt);
+            let width = ui.available_width();
+            let row_gap = ui.spacing().item_spacing.y;
+            // 未実測メッセージの推定高さ（最初の表示時に実測へ置き換わる）。
+            let est = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
+            let origin = ui.min_rect().min;
+
+            // 各メッセージの先頭 y オフセット（累積）と総高さ。
+            let mut offsets = Vec::with_capacity(messages.len() + 1);
+            let mut acc = 0.0_f32;
+            for m in messages {
+                offsets.push(acc);
+                let h = m.cached_height.get();
+                acc += (if h > 0.0 { h } else { est }) + row_gap;
+            }
+            offsets.push(acc);
+            // スクロールバー用に総高さを確保。
+            ui.allocate_space(egui::vec2(width, acc));
+            if messages.is_empty() {
+                return;
+            }
+
+            // 可視範囲 [viewport.min.y, viewport.max.y] に重なるメッセージだけ描画。
+            let first = offsets
+                .partition_point(|&o| o <= viewport.min.y)
+                .saturating_sub(1)
+                .min(messages.len() - 1);
+            let mut i = first;
+            while i < messages.len() && offsets[i] < viewport.max.y {
+                let msg = &messages[i];
+                let cached = msg.cached_height.get();
+                // 折返しで伸びても収まるよう、推定/実測に余裕を足した箱を与える。
+                let box_h = if cached > 0.0 { cached } else { est } + 40.0;
+                let rect = egui::Rect::from_min_size(
+                    origin + egui::vec2(0.0, offsets[i]),
+                    egui::vec2(width, box_h),
+                );
+                let resp = ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(&msg.author)
+                                .color(egui::Color32::from_rgb(100, 180, 255))
+                                .strong(),
+                        );
+                        for run in &msg.runs {
+                            match run {
+                                chat::ChatRun::Text(t) => {
+                                    ui.label(egui::RichText::new(t).color(egui::Color32::WHITE));
+                                }
+                                chat::ChatRun::Image { url, alt } => {
+                                    let size = ui.text_style_height(&egui::TextStyle::Body);
+                                    let img = egui::Image::new(url)
+                                        .max_height(size)
+                                        .fit_to_original_size(1.0);
+                                    ui.add(img).on_hover_text(alt);
+                                }
                             }
                         }
-                    }
+                    });
                 });
+                // 実測高さをキャッシュ → 次フレームのオフセットに反映される。
+                msg.cached_height.set(resp.response.rect.height());
+                i += 1;
             }
         });
     close

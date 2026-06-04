@@ -20,6 +20,7 @@
 //!   の reply Sender に書き戻す
 
 use anyhow::{anyhow, Result};
+use std::io::Read;
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
 use std::time::Duration;
@@ -35,6 +36,12 @@ pub enum Command {
     Action(String, Sender<bool>),
     /// 指定座標（/screenshot と同じ物理ピクセル）に左クリックを合成注入する。
     Click { x: f32, y: f32, reply: Sender<bool> },
+    /// フォーカス中のウィジェットへテキストを貼り付け、必要なら Enter を送る（検証用）。
+    Type {
+        text: String,
+        enter: bool,
+        reply: Sender<bool>,
+    },
 }
 
 /// dev-tools HTTP サーバを起動し、listen ポートを返す。
@@ -73,6 +80,7 @@ fn handle(
     match (method, path_only) {
         (Method::Get, "/screenshot") => handle_screenshot(req, cmd_tx, proxy),
         (Method::Post, "/click") => handle_click(req, cmd_tx, proxy, &url),
+        (Method::Post, "/type") => handle_type(req, cmd_tx, proxy, &url),
         (Method::Post, path) if path.starts_with("/action/") => {
             let name = path.trim_start_matches("/action/").to_string();
             handle_action(req, cmd_tx, proxy, name);
@@ -147,6 +155,40 @@ fn handle_click(
     }
     let _ = proxy.send_event(crate::UserEvent::Background);
 
+    match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(_) => {
+            let _ = req.respond(Response::from_string("ok\n").with_status_code(200));
+        }
+        Err(_) => {
+            let _ = req.respond(Response::from_string("timeout").with_status_code(504));
+        }
+    }
+}
+
+fn handle_type(
+    mut req: tiny_http::Request,
+    cmd_tx: &Sender<Command>,
+    proxy: &winit::event_loop::EventLoopProxy<crate::UserEvent>,
+    url: &str,
+) {
+    // 貼り付けるテキストはリクエストボディ（クエリ encode を避ける）。enter はクエリ。
+    let enter = url.contains("enter=1");
+    let mut text = String::new();
+    let _ = req.as_reader().read_to_string(&mut text);
+
+    let (tx, rx) = channel();
+    if cmd_tx
+        .send(Command::Type {
+            text,
+            enter,
+            reply: tx,
+        })
+        .is_err()
+    {
+        let _ = req.respond(Response::from_string("dev-tools shutdown").with_status_code(503));
+        return;
+    }
+    let _ = proxy.send_event(crate::UserEvent::Background);
     match rx.recv_timeout(Duration::from_secs(5)) {
         Ok(_) => {
             let _ = req.respond(Response::from_string("ok\n").with_status_code(200));
