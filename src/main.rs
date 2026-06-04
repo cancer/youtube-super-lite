@@ -69,9 +69,11 @@ fn open_in_browser(url: &str) {
     }
     #[cfg(target_os = "windows")]
     {
-        // cmd の start。第1引数の "" は start のウィンドウタイトル指定。
-        let _ = std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
+        // `cmd /C start "" <url>` は URL 中の `&`（OAuth URL に多数ある）を cmd が
+        // コマンド区切りと解釈して URL が途中で切れてしまう。rundll32 の
+        // FileProtocolHandler は URL を単一引数として受け取るため安全に既定ブラウザで開ける。
+        let _ = std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
             .spawn();
     }
     #[cfg(target_os = "macos")]
