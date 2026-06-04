@@ -13,3 +13,7 @@
 # 秘密情報（OAuth クライアント / トークン）
 /client_secret.json
 /auth.json
+
+# デバッグ用 stderr キャプチャ
+/dev*.txt
+/devstderr.txt
