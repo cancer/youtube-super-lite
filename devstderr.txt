@@ -1,0 +1,4 @@
+[dev-tools] http://127.0.0.1:59997
+[auto-hwdec] GPU 使用率の監視を開始
+[mark_watched] skip: not logged in (current_url=https://www.youtube.com/watch?v=dQw4w9WgXcQ)
+[auto-hwdec] GPU 負荷低下 → HW デコードへ復帰

@@ -20,8 +20,11 @@ mod imp {
     use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::System::Performance::{
         PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW,
-        PdhOpenQueryW, PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE, PDH_HCOUNTER, PDH_HQUERY,
+        PdhOpenQueryW, PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE,
     };
+    // windows 0.58 では PDH ハンドルは型エイリアスではなく素の isize。
+    type PdhQuery = isize;
+    type PdhCounter = isize;
 
     /// SW へ切替を要求する閾値（%）と、その状態を維持する継続時間。
     const SWITCH_TO_SW_THRESHOLD: f64 = 80.0;
@@ -74,8 +77,8 @@ mod imp {
     }
 
     fn run_loop(tx: mpsc::Sender<HwdecDecision>, stop_rx: mpsc::Receiver<()>) {
-        let mut query: PDH_HQUERY = Default::default();
-        let mut counter: PDH_HCOUNTER = Default::default();
+        let mut query: PdhQuery = Default::default();
+        let mut counter: PdhCounter = Default::default();
 
         // SAFETY: PDH API はハンドルアウトパラメータ経由。失敗時は NULL ハンドルにならず
         // ERROR_SUCCESS 以外を返す。失敗時は監視そのものを諦める。
@@ -144,7 +147,7 @@ mod imp {
     /// `\GPU Engine(*)\Utilization Percentage` の全インスタンスを集めて、
     /// **engine_type ごとに合計したうちの最大値** を「GPU 全体使用率」として返す。
     /// 単一 instance の合計だと 100% を超えるので適切に丸めない。
-    unsafe fn sample(query: PDH_HQUERY, counter: PDH_HCOUNTER) -> Option<f64> {
+    unsafe fn sample(query: PdhQuery, counter: PdhCounter) -> Option<f64> {
         if PdhCollectQueryData(query) != ERROR_SUCCESS.0 {
             return None;
         }

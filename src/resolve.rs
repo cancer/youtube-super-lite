@@ -97,6 +97,10 @@ fn fetch_title(url: &str) -> Option<String> {
     let output = Command::new("yt-dlp")
         .args([
             "--no-warnings",
+            // Windows(日本語ロケール)の frozen yt-dlp はパイプ出力時に cp932 で出すため、
+            // UTF-8 を強制する。これがないとタイトルが文字化け（豆腐）する。
+            "--encoding",
+            "UTF-8",
             "--skip-download",
             "--print",
             "%(title)s",

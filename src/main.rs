@@ -2028,6 +2028,7 @@ struct App {
     verbose: bool,
     backend: String,
     enable_dev_tools: bool,
+    initial_volume: Option<f64>,
     state: Option<Running>,
 }
 
@@ -2038,6 +2039,7 @@ impl App {
         verbose: bool,
         backend: String,
         enable_dev_tools: bool,
+        initial_volume: Option<f64>,
     ) -> Self {
         Self {
             proxy,
@@ -2045,6 +2047,7 @@ impl App {
             verbose,
             backend,
             enable_dev_tools,
+            initial_volume,
             state: None,
         }
     }
@@ -2109,6 +2112,10 @@ impl App {
         let player = player::Player::new(gl.clone(), gl_display.clone(), self.verbose, move || {
             let _ = proxy_for_mpv.send_event(UserEvent::MpvRedraw);
         })?;
+        // デバッグ用の初期音量指定（例: --volume 0 で無音起動）。
+        if let Some(v) = self.initial_volume {
+            player.set_volume(v);
+        }
         let quad = gl_quad::FullscreenQuad::new(gl.clone())?;
 
         // 認証まわりの初期化。
@@ -2313,6 +2320,7 @@ struct CliArgs {
     verbose: bool,
     backend: String,
     enable_dev_tools: bool,
+    volume: Option<f64>,
 }
 
 fn parse_args() -> Result<CliArgs> {
@@ -2320,6 +2328,14 @@ fn parse_args() -> Result<CliArgs> {
     let mut backend = auth::DEFAULT_BACKEND.to_string();
     let mut url: Option<String> = None;
     let mut enable_dev_tools = false;
+    let mut volume: Option<f64> = None;
+
+    let parse_volume = |s: &str| -> Result<f64> {
+        let v: f64 = s
+            .parse()
+            .map_err(|_| anyhow!("--volume の値が不正です: {s}"))?;
+        Ok(v.clamp(0.0, 130.0))
+    };
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -2331,6 +2347,16 @@ fn parse_args() -> Result<CliArgs> {
                     .ok_or_else(|| anyhow!("--debug-backend に URL を指定してください"))?;
             }
             "--enable-dev-tools" => enable_dev_tools = true,
+            // 初期音量（デバッグ用。例: --volume 0 で無音起動）。`--volume=0` 形式も可。
+            "--volume" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow!("--volume に値を指定してください"))?;
+                volume = Some(parse_volume(&v)?);
+            }
+            s if s.starts_with("--volume=") => {
+                volume = Some(parse_volume(&s["--volume=".len()..])?);
+            }
             "-h" | "--help" => {
                 print_help();
                 std::process::exit(0);
@@ -2352,6 +2378,7 @@ fn parse_args() -> Result<CliArgs> {
         verbose,
         backend: backend.trim_end_matches('/').to_string(),
         enable_dev_tools,
+        volume,
     })
 }
 
@@ -2366,6 +2393,7 @@ fn print_help() {
          \x20\x20    --debug-backend URL   認証バックエンドを上書き（デバッグ用、デフォルト: {}）\n\
          \x20\x20    --enable-dev-tools    デバッグ用のローカル HTTP サーバを起動\n\
          \x20\x20                          (GET /screenshot 等。listen ポートは stderr に出力)\n\
+         \x20\x20    --volume N            初期音量 0-130（デバッグ用。例: --volume 0 で無音）\n\
          \x20\x20-h, --help                このヘルプを表示",
         auth::DEFAULT_BACKEND
     );
@@ -2392,6 +2420,7 @@ fn main() -> Result<()> {
         args.verbose,
         args.backend,
         args.enable_dev_tools,
+        args.volume,
     );
     event_loop.run_app(&mut app)?;
     Ok(())
