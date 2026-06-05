@@ -2120,9 +2120,12 @@ fn draw_video_grid(ui: &mut egui::Ui, cards: &[GridCard]) -> Option<String> {
 
 /// 1 枚のカードを描画する。サムネ + 再生時間バッジ + タイトル + チャンネル + メタ。
 fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String> {
-    // サムネ枠は 4:3。YouTube の hqdefault.jpg が 480×360 (4:3) なので、枠も 4:3 に
-    // 合わせると aspect 維持のまま横幅いっぱいに収まり右側の余白が出ない。
-    let thumb_h = w * 3.0 / 4.0;
+    // サムネ枠は 16:9。hqdefault.jpg は動画によって 320×180(16:9) だったり
+    // 480×360(4:3) だったりと寸法が一定しないため、aspect 維持だと枠と画像がずれて
+    // 隙間が出る（右に余白／下に余白）。枠を 16:9 に固定し、下の Image 側で
+    // maintain_aspect_ratio(false) にして必ず枠を埋める（大半の 16:9 サムネは無歪み、
+    // 少数の 4:3 のみ横に伸びるが隙間ゼロ・バッジは実画像の右下に乗る）。
+    let thumb_h = w * 9.0 / 16.0;
 
     let inner = ui.allocate_ui_with_layout(
         egui::vec2(w, 0.0),
@@ -2142,6 +2145,10 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
             let thumb_resp = ui.add(
                 egui::Image::new(thumb_url)
                     .rounding(8.0)
+                    // 枠(4:3)を必ず埋める。maintain_aspect_ratio 既定(true)だと、hqdefault が
+                    // 4:3 でない動画で枠より小さく描画され、確保 rect 下端と画像下端がずれて
+                    // 再生時間バッジが画像の外（枠の下）に浮く。false で枠＝画像にして防ぐ。
+                    .maintain_aspect_ratio(false)
                     .fit_to_exact_size(egui::vec2(w, thumb_h)),
             );
             let thumb_rect = thumb_resp.rect;
