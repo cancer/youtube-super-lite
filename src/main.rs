@@ -366,8 +366,11 @@ struct Running {
     recommend_rx: Receiver<recommend::RecommendUpdate>,
     recommend_visible: bool,
     recommend_status: String,
-    // --- 登録チャンネル一覧 ---
+    // --- 登録チャンネルタブ ---
+    /// 左のチャンネルリスト。
     sub_channels: Vec<subscriptions::SubChannel>,
+    /// 右ペイン既定: 全登録チャンネルの新着フィード。
+    sub_feed: Vec<subscriptions::SubVideo>,
     sub_tx: Sender<subscriptions::SubUpdate>,
     sub_rx: Receiver<subscriptions::SubUpdate>,
     sub_visible: bool,
@@ -641,23 +644,29 @@ impl Running {
         });
     }
 
-    /// 登録チャンネル一覧の更新を取り込む。
+    /// 登録チャンネルタブの更新を取り込む（新着フィード + チャンネルリスト）。
     fn poll_subs(&mut self) {
         while let Ok(update) = self.sub_rx.try_recv() {
-            self.sub_busy = false;
             match update {
+                subscriptions::SubUpdate::Feed(items) => {
+                    // 新着フィードの取得完了でスピナーを止める（こちらが右ペイン主役）。
+                    self.sub_busy = false;
+                    self.sub_status = format!("新着 ({} 件)", items.len());
+                    self.sub_feed = items;
+                }
                 subscriptions::SubUpdate::Channels(channels) => {
-                    self.sub_status = format!("登録チャンネル ({} 件)", channels.len());
                     self.sub_channels = channels;
                 }
                 subscriptions::SubUpdate::Error(e) => {
+                    self.sub_busy = false;
                     self.sub_status = format!("取得エラー: {e}");
                 }
             }
         }
     }
 
-    /// 登録チャンネル一覧を背景スレッドで取得する。
+    /// 登録チャンネルタブのデータを背景スレッドで取得する。
+    /// 新着フィード（右ペイン既定）とチャンネルリスト（左）を並行取得する。
     fn start_subs(&mut self) {
         let Some(tokens) = &self.tokens else {
             self.sub_status = "先にログインしてください".to_string();
@@ -667,10 +676,21 @@ impl Running {
             return;
         }
         self.sub_busy = true;
-        self.sub_status = "登録チャンネルを取得中…".to_string();
+        self.sub_status = "新着を取得中…".to_string();
         self.sub_visible = true;
 
         let access_token = tokens.access_token.clone();
+
+        // 1. 新着フィード（InnerTube FEsubscriptions）。
+        let tx = self.sub_tx.clone();
+        let proxy = self.proxy.clone();
+        let token = access_token.clone();
+        std::thread::spawn(move || {
+            subscriptions::fetch_subscription_feed(&token, &tx);
+            let _ = proxy.send_event(UserEvent::Background);
+        });
+
+        // 2. 左のチャンネルリスト（Data API subscriptions.list）。
         let tx = self.sub_tx.clone();
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
@@ -975,6 +995,7 @@ impl Running {
         let recommend_status = self.recommend_status.clone();
 
         let sub_channels = &self.sub_channels;
+        let sub_feed = &self.sub_feed;
         let sub_visible = self.sub_visible;
         let sub_status = self.sub_status.clone();
         let sub_busy = self.sub_busy;
@@ -1017,6 +1038,7 @@ impl Running {
         let mut toggle_playlist = pending.toggle_playlist;
         let mut pick_playlist: Option<(String, String)> = None; // (id, title)
         let mut pick_channel: Option<(String, String)> = None; // (channel_id, title)
+        let mut sub_back_to_feed = false; // チャンネル絞り込み → 新着一覧へ戻る
         let mut playlist_back = false;
         let devtools_close_overlay = pending.close_overlay;
         let devtools_play_pause = pending.play_pause;
@@ -1208,46 +1230,65 @@ impl Running {
 
                                 ui.separator();
 
-                                // --- 右ペイン: 選択チャンネルの動画カード ---
+                                // --- 右ペイン ---
+                                // 既定: 全登録チャンネルの新着一覧。
+                                // チャンネル選択時: そのチャンネルのアップロード一覧に絞り込み。
                                 ui.vertical(|ui| {
-                                    if !channel_visible {
-                                        ui.add_space(8.0);
-                                        ui.label(
-                                            egui::RichText::new(
-                                                "← チャンネルを選択してください",
-                                            )
-                                            .color(egui::Color32::GRAY),
-                                        );
-                                        return;
-                                    }
-
+                                    // ヘッダー（チャンネル選択時のみ「← 新着」を出す）。
                                     ui.horizontal(|ui| {
+                                        if channel_visible
+                                            && ui.button("← 新着").clicked()
+                                        {
+                                            sub_back_to_feed = true;
+                                        }
+                                        let header = if channel_visible {
+                                            &channel_status
+                                        } else {
+                                            &sub_status
+                                        };
                                         ui.label(
-                                            egui::RichText::new(&channel_status)
+                                            egui::RichText::new(header)
                                                 .color(egui::Color32::WHITE)
                                                 .heading(),
                                         );
-                                        if channel_busy {
+                                        if (channel_visible && channel_busy)
+                                            || (!channel_visible && sub_busy)
+                                        {
                                             ui.spinner();
                                         }
                                     });
                                     ui.add_space(4.0);
 
+                                    let cards: Vec<GridCard> = if channel_visible {
+                                        channel_videos
+                                            .iter()
+                                            .map(|item| GridCard {
+                                                video_id: item.video_id.clone(),
+                                                title: item.title.clone(),
+                                                channel: item.channel.clone(),
+                                                duration: String::new(),
+                                                meta: String::new(),
+                                                channel_icon: String::new(),
+                                            })
+                                            .collect()
+                                    } else {
+                                        sub_feed
+                                            .iter()
+                                            .map(|item| GridCard {
+                                                video_id: item.video_id.clone(),
+                                                title: item.title.clone(),
+                                                channel: item.channel.clone(),
+                                                duration: item.duration.clone(),
+                                                meta: item.meta.clone(),
+                                                channel_icon: item.channel_icon.clone(),
+                                            })
+                                            .collect()
+                                    };
+
                                     egui::ScrollArea::vertical()
-                                        .id_source("channel_videos")
+                                        .id_source("subs_right_pane")
                                         .auto_shrink([false, false])
                                         .show(ui, |ui| {
-                                            let cards: Vec<GridCard> = channel_videos
-                                                .iter()
-                                                .map(|item| GridCard {
-                                                    video_id: item.video_id.clone(),
-                                                    title: item.title.clone(),
-                                                    channel: item.channel.clone(),
-                                                    duration: String::new(),
-                                                    meta: String::new(),
-                                                    channel_icon: String::new(),
-                                                })
-                                                .collect();
                                             if let Some(id) = draw_video_grid(ui, &cards) {
                                                 pick_video = Some(format!(
                                                     "https://www.youtube.com/watch?v={id}"
@@ -1842,6 +1883,10 @@ impl Running {
                 channel_id.clone()
             };
             self.start_channel_uploads(uploads_id, title);
+        }
+        if sub_back_to_feed {
+            // チャンネル絞り込みを解除して新着一覧へ戻す。
+            self.channel_visible = false;
         }
         if playlist_back {
             self.playlist_items.clear();
@@ -2590,6 +2635,7 @@ impl App {
             sub_tx,
             sub_rx,
             sub_visible: false,
+            sub_feed: Vec::new(),
             sub_status: String::new(),
             sub_busy: false,
             history_items: Vec::new(),
