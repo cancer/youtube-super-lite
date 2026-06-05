@@ -389,6 +389,13 @@ struct Running {
     playlist_visible: bool,
     playlist_status: String,
     playlist_busy: bool,
+    // --- チャンネル動画（登録チャンネルから開くアップロード一覧。再生リストではないのでカードUI）---
+    channel_videos: Vec<playlist::PlaylistItem>,
+    channel_tx: Sender<playlist::PlaylistUpdate>,
+    channel_rx: Receiver<playlist::PlaylistUpdate>,
+    channel_visible: bool,
+    channel_status: String,
+    channel_busy: bool,
     // --- ストリーム解決（yt-dlp）---
     resolve_tx: Sender<resolve::ResolveUpdate>,
     resolve_rx: Receiver<resolve::ResolveUpdate>,
@@ -798,6 +805,49 @@ impl Running {
         });
     }
 
+    fn poll_channel(&mut self) {
+        while let Ok(update) = self.channel_rx.try_recv() {
+            self.channel_busy = false;
+            match update {
+                playlist::PlaylistUpdate::Items { title, items } => {
+                    self.channel_status = format!("{title} ({} 件)", items.len());
+                    self.channel_videos = items;
+                }
+                playlist::PlaylistUpdate::Error(e) => {
+                    self.channel_status = format!("取得エラー: {e}");
+                }
+                // チャンネルのアップロード取得では Playlists は来ない。
+                playlist::PlaylistUpdate::Playlists(_) => {}
+            }
+        }
+    }
+
+    /// 登録チャンネルのアップロード動画一覧をカード UI 用に背景スレッドで取得する。
+    /// 内部的にはアップロード再生リスト(UU…)を `fetch_playlist_items` で取るが、
+    /// これは「再生リスト」ではないので すべて再生/シャッフル は出さず、専用オーバーレイで
+    /// カードグリッド表示する。
+    fn start_channel_uploads(&mut self, uploads_id: String, title: String) {
+        let Some(tokens) = &self.tokens else {
+            self.channel_status = "先にログインしてください".to_string();
+            return;
+        };
+        if self.channel_busy {
+            return;
+        }
+        self.channel_busy = true;
+        self.channel_visible = true;
+        self.channel_videos.clear();
+        self.channel_status = format!("{title} を読み込み中…");
+
+        let access_token = tokens.access_token.clone();
+        let tx = self.channel_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            playlist::fetch_playlist_items(&access_token, &uploads_id, &title, &tx);
+            let _ = proxy.send_event(UserEvent::Background);
+        });
+    }
+
     /// ライブチャットのポーリングを停止する。
     fn stop_chat(&mut self) {
         if let Some(stopper) = self.chat_stop.take() {
@@ -855,6 +905,7 @@ impl Running {
         self.poll_subs();
         self.poll_history();
         self.poll_playlist();
+        self.poll_channel();
         self.poll_gpu_usage();
         self.poll_resolve();
 
@@ -940,6 +991,11 @@ impl Running {
         let playlist_status = self.playlist_status.clone();
         let playlist_busy = self.playlist_busy;
 
+        let channel_videos = &self.channel_videos;
+        let channel_visible = self.channel_visible;
+        let channel_status = self.channel_status.clone();
+        let channel_busy = self.channel_busy;
+
         let resolve_busy = self.resolve_busy;
         let load_error = self.load_error.clone();
         // 中央オーバーレイ判定用: URL がまだ一度も渡されていない初期状態では
@@ -962,6 +1018,8 @@ impl Running {
         let mut pick_playlist: Option<(String, String)> = None; // (id, title)
         let mut pick_channel: Option<(String, String)> = None; // (channel_id, title)
         let mut playlist_back = false;
+        let mut toggle_channel = false; // チャンネル動画オーバーレイを閉じる
+        let mut channel_back = false; // チャンネル動画 → 登録チャンネル一覧へ戻る
         let devtools_close_overlay = pending.close_overlay;
         let devtools_play_pause = pending.play_pause;
         // loading オーバーレイの spinner をアニメさせるため、closure 内で立てる。
@@ -991,7 +1049,9 @@ impl Running {
                     }
                     // Escape で最前面のオーバーレイを閉じる。dev-tools の close_overlay も同じ経路。
                     if i.key_pressed(egui::Key::Escape) || devtools_close_overlay {
-                        if playlist_visible {
+                        if channel_visible {
+                            toggle_channel = true;
+                        } else if playlist_visible {
                             toggle_playlist = true;
                         } else if history_visible {
                             toggle_history = true;
@@ -1120,6 +1180,71 @@ impl Running {
                                             ));
                                         }
                                         ui.add_space(6.0);
+                                    }
+                                });
+                        });
+                    });
+            }
+
+            // チャンネル動画一覧（登録チャンネルから開くアップロード一覧）。
+            // 「再生リスト」ではないので すべて再生/シャッフル は出さず、カードグリッドで表示する。
+            if channel_visible {
+                let screen = ctx.screen_rect();
+                egui::Area::new(egui::Id::new("channel_overlay"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(screen.min)
+                    .show(ctx, |ui| {
+                        let frame = egui::Frame::none()
+                            .fill(egui::Color32::from_black_alpha(230))
+                            .inner_margin(16.0);
+                        frame.show(ui, |ui| {
+                            let inner = screen.size() - egui::vec2(32.0, 32.0);
+                            ui.set_min_size(inner);
+                            ui.set_max_size(inner);
+
+                            // ヘッダー（← 登録チャンネルへ戻る・タイトル・スピナー・閉じる）。
+                            ui.horizontal(|ui| {
+                                if ui.button("← 登録チャンネル").clicked() {
+                                    channel_back = true;
+                                }
+                                ui.label(
+                                    egui::RichText::new(&channel_status)
+                                        .color(egui::Color32::WHITE)
+                                        .heading(),
+                                );
+                                if channel_busy {
+                                    ui.spinner();
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.button("閉じる").clicked() {
+                                            toggle_channel = true;
+                                        }
+                                    },
+                                );
+                            });
+                            ui.separator();
+
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    let cards: Vec<GridCard> = channel_videos
+                                        .iter()
+                                        .map(|item| GridCard {
+                                            video_id: item.video_id.clone(),
+                                            title: item.title.clone(),
+                                            channel: item.channel.clone(),
+                                            duration: String::new(),
+                                            meta: String::new(),
+                                            channel_icon: String::new(),
+                                        })
+                                        .collect();
+                                    if let Some(id) = draw_video_grid(ui, &cards) {
+                                        pick_video = Some(format!(
+                                            "https://www.youtube.com/watch?v={id}"
+                                        ));
+                                        toggle_channel = true;
                                     }
                                 });
                         });
@@ -1694,7 +1819,7 @@ impl Running {
         if let Some((pl_id, pl_title)) = pick_playlist {
             self.start_playlist_items(pl_id, pl_title);
         }
-        // 登録チャンネルをクリック → そのチャンネルのアップロード再生リスト(UU…)を開く。
+        // 登録チャンネルをクリック → そのチャンネルのアップロード一覧をカード UI で開く。
         if let Some((channel_id, title)) = pick_channel {
             let uploads_id = if channel_id.starts_with("UC") && channel_id.len() > 2 {
                 format!("UU{}", &channel_id[2..])
@@ -1702,10 +1827,15 @@ impl Running {
                 channel_id.clone()
             };
             self.sub_visible = false;
-            self.playlist_visible = true;
-            self.playlist_items.clear();
-            self.playlist_items_title.clear();
-            self.start_playlist_items(uploads_id, title);
+            self.start_channel_uploads(uploads_id, title);
+        }
+        if toggle_channel {
+            self.channel_visible = false;
+        }
+        if channel_back {
+            // チャンネル動画 → 登録チャンネル一覧へ戻る。
+            self.channel_visible = false;
+            self.sub_visible = true;
         }
         if playlist_back {
             self.playlist_items.clear();
@@ -2409,6 +2539,8 @@ impl App {
         let (history_tx, history_rx) = std::sync::mpsc::channel();
         // 再生リストの初期化。
         let (playlist_tx, playlist_rx) = std::sync::mpsc::channel();
+        // チャンネル動画一覧の初期化。
+        let (channel_tx, channel_rx) = std::sync::mpsc::channel();
         // yt-dlp ストリーム解決の初期化。
         let (resolve_tx, resolve_rx) = std::sync::mpsc::channel();
 
@@ -2468,6 +2600,12 @@ impl App {
             playlist_visible: false,
             playlist_status: String::new(),
             playlist_busy: false,
+            channel_videos: Vec::new(),
+            channel_tx,
+            channel_rx,
+            channel_visible: false,
+            channel_status: String::new(),
+            channel_busy: false,
             resolve_tx,
             resolve_rx,
             resolve_busy: false,
