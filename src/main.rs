@@ -651,7 +651,7 @@ impl Running {
                 subscriptions::SubUpdate::Feed(items) => {
                     // 新着フィードの取得完了でスピナーを止める（こちらが右ペイン主役）。
                     self.sub_busy = false;
-                    self.sub_status = format!("新着 ({} 件)", items.len());
+                    self.sub_status = "新着".to_string();
                     self.sub_feed = items;
                 }
                 subscriptions::SubUpdate::Channels(channels) => {
@@ -830,7 +830,7 @@ impl Running {
             self.channel_busy = false;
             match update {
                 playlist::PlaylistUpdate::Items { title, items } => {
-                    self.channel_status = format!("{title} ({} 件)", items.len());
+                    self.channel_status = title;
                     self.channel_videos = items;
                 }
                 playlist::PlaylistUpdate::Error(e) => {
@@ -2075,7 +2075,7 @@ struct GridCard {
 }
 
 const CARD_TARGET_WIDTH: f32 = 320.0;
-const CARD_GAP: f32 = 16.0;
+const CARD_GAP: f32 = 8.0;
 
 /// YouTube ホーム風の動画カードグリッドを描画する。クリックされたカードの video_id を返す。
 fn draw_video_grid(ui: &mut egui::Ui, cards: &[GridCard]) -> Option<String> {
@@ -2108,6 +2108,8 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
         |ui| {
             ui.set_min_width(w);
             ui.set_max_width(w);
+            // サムネ → テキストの縦隙間を詰める（egui 既定の item_spacing.y は広め）。
+            ui.spacing_mut().item_spacing.y = 0.0;
 
             // サムネ画像（YouTube CDN の hqdefault.jpg を直接 URL ロード）。
             // 表示サイズは論理 320×180 だが Retina 2x で物理 640×360 必要。
@@ -2141,19 +2143,22 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
                 painter.galley(badge_rect.min + pad, galley, egui::Color32::WHITE);
             }
 
-            ui.add_space(8.0);
+            // サムネ直下にタイトルを置く。わずかな余白だけ空ける。
+            ui.add_space(4.0);
 
             // YouTube 風レイアウト: 左にチャンネルアイコン（丸）、右に
             // タイトル / チャンネル名 / 視聴数・公開時刻 を縦に積む。
             // horizontal で並べることで、テキスト側の wrap 幅が確定する。
             const ICON_SIZE: f32 = 36.0;
-            const ICON_GAP: f32 = 8.0;
+            const ICON_GAP: f32 = 6.0;
             let text_w = if card.channel_icon.is_empty() {
                 w
             } else {
                 w - ICON_SIZE - ICON_GAP
             };
             ui.horizontal_top(|ui| {
+                // 既定の item_spacing.x ぶん余計に空くのを防ぎ、ICON_GAP だけで詰める。
+                ui.spacing_mut().item_spacing.x = 0.0;
                 if !card.channel_icon.is_empty() {
                     ui.add(
                         egui::Image::new(&card.channel_icon)
@@ -2164,6 +2169,8 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
                 }
                 ui.vertical(|ui| {
                     ui.set_max_width(text_w);
+                    // タイトル/チャンネル名/メタ の行間を詰める。
+                    ui.spacing_mut().item_spacing.y = 1.0;
                     // wrap_mode を明示しないと horizontal layout 配下では Extend に
                     // なって 1 行に伸び、カード幅を超えて他カードに食い込む。
                     ui.add(
