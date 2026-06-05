@@ -1018,8 +1018,6 @@ impl Running {
         let mut pick_playlist: Option<(String, String)> = None; // (id, title)
         let mut pick_channel: Option<(String, String)> = None; // (channel_id, title)
         let mut playlist_back = false;
-        let mut toggle_channel = false; // チャンネル動画オーバーレイを閉じる
-        let mut channel_back = false; // チャンネル動画 → 登録チャンネル一覧へ戻る
         let devtools_close_overlay = pending.close_overlay;
         let devtools_play_pause = pending.play_pause;
         // loading オーバーレイの spinner をアニメさせるため、closure 内で立てる。
@@ -1049,9 +1047,7 @@ impl Running {
                     }
                     // Escape で最前面のオーバーレイを閉じる。dev-tools の close_overlay も同じ経路。
                     if i.key_pressed(egui::Key::Escape) || devtools_close_overlay {
-                        if channel_visible {
-                            toggle_channel = true;
-                        } else if playlist_visible {
+                        if playlist_visible {
                             toggle_playlist = true;
                         } else if history_visible {
                             toggle_history = true;
@@ -1132,121 +1128,135 @@ impl Running {
                             }
                             ui.separator();
 
-                            if sub_channels.is_empty() && !sub_busy {
-                                ui.label(
-                                    egui::RichText::new("登録チャンネルがありません")
-                                        .color(egui::Color32::GRAY),
-                                );
-                            }
-
-                            egui::ScrollArea::vertical()
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    for ch in sub_channels {
-                                        let resp = ui
-                                            .horizontal(|ui| {
-                                                // 行全体をクリック対象にする。
-                                                ui.set_min_width(ui.available_width());
-                                                if ch.icon.is_empty() {
-                                                    ui.add_space(28.0);
-                                                } else {
-                                                    ui.add(
-                                                        egui::Image::new(&ch.icon)
-                                                            .fit_to_exact_size(egui::vec2(
-                                                                28.0, 28.0,
-                                                            ))
-                                                            .rounding(egui::Rounding::same(14.0)),
-                                                    );
-                                                }
-                                                ui.add_space(8.0);
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        egui::RichText::new(&ch.title)
-                                                            .color(egui::Color32::WHITE),
-                                                    )
-                                                    .truncate()
-                                                    .selectable(false),
-                                                );
-                                            })
-                                            .response;
-                                        if resp
-                                            .interact(egui::Sense::click())
-                                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                            .clicked()
-                                        {
-                                            pick_channel = Some((
-                                                ch.channel_id.clone(),
-                                                ch.title.clone(),
-                                            ));
-                                        }
-                                        ui.add_space(6.0);
-                                    }
-                                });
-                        });
-                    });
-            }
-
-            // チャンネル動画一覧（登録チャンネルから開くアップロード一覧）。
-            // 「再生リスト」ではないので すべて再生/シャッフル は出さず、カードグリッドで表示する。
-            if channel_visible {
-                let screen = ctx.screen_rect();
-                egui::Area::new(egui::Id::new("channel_overlay"))
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(screen.min)
-                    .show(ctx, |ui| {
-                        let frame = egui::Frame::none()
-                            .fill(egui::Color32::from_black_alpha(230))
-                            .inner_margin(16.0);
-                        frame.show(ui, |ui| {
-                            let inner = screen.size() - egui::vec2(32.0, 32.0);
-                            ui.set_min_size(inner);
-                            ui.set_max_size(inner);
-
-                            // ヘッダー（← 登録チャンネルへ戻る・タイトル・スピナー・閉じる）。
-                            ui.horizontal(|ui| {
-                                if ui.button("← 登録チャンネル").clicked() {
-                                    channel_back = true;
-                                }
-                                ui.label(
-                                    egui::RichText::new(&channel_status)
-                                        .color(egui::Color32::WHITE)
-                                        .heading(),
-                                );
-                                if channel_busy {
-                                    ui.spinner();
-                                }
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
+                            // 左: 登録チャンネルリスト（狭いカラム、常時表示）。
+                            // 右: 選択したチャンネルのアップロード動画をカード UI で表示。
+                            // 「再生リスト」ではないので すべて再生/シャッフル は出さない。
+                            const CHANNEL_LIST_WIDTH: f32 = 240.0;
+                            ui.horizontal_top(|ui| {
+                                // --- 左ペイン: チャンネルリスト ---
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(CHANNEL_LIST_WIDTH, ui.available_height()),
+                                    egui::Layout::top_down(egui::Align::Min),
                                     |ui| {
-                                        if ui.button("閉じる").clicked() {
-                                            toggle_channel = true;
+                                        ui.set_min_width(CHANNEL_LIST_WIDTH);
+                                        ui.set_max_width(CHANNEL_LIST_WIDTH);
+
+                                        if sub_channels.is_empty() && !sub_busy {
+                                            ui.label(
+                                                egui::RichText::new("登録チャンネルがありません")
+                                                    .color(egui::Color32::GRAY),
+                                            );
                                         }
+
+                                        egui::ScrollArea::vertical()
+                                            .id_source("subs_channel_list")
+                                            .auto_shrink([false, false])
+                                            .show(ui, |ui| {
+                                                for ch in sub_channels {
+                                                    let resp = ui
+                                                        .horizontal(|ui| {
+                                                            ui.set_min_width(
+                                                                ui.available_width(),
+                                                            );
+                                                            if ch.icon.is_empty() {
+                                                                ui.add_space(28.0);
+                                                            } else {
+                                                                ui.add(
+                                                                    egui::Image::new(&ch.icon)
+                                                                        .fit_to_exact_size(
+                                                                            egui::vec2(
+                                                                                28.0, 28.0,
+                                                                            ),
+                                                                        )
+                                                                        .rounding(
+                                                                            egui::Rounding::same(
+                                                                                14.0,
+                                                                            ),
+                                                                        ),
+                                                                );
+                                                            }
+                                                            ui.add_space(8.0);
+                                                            ui.add(
+                                                                egui::Label::new(
+                                                                    egui::RichText::new(
+                                                                        &ch.title,
+                                                                    )
+                                                                    .color(egui::Color32::WHITE),
+                                                                )
+                                                                .truncate()
+                                                                .selectable(false),
+                                                            );
+                                                        })
+                                                        .response;
+                                                    if resp
+                                                        .interact(egui::Sense::click())
+                                                        .on_hover_cursor(
+                                                            egui::CursorIcon::PointingHand,
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        pick_channel = Some((
+                                                            ch.channel_id.clone(),
+                                                            ch.title.clone(),
+                                                        ));
+                                                    }
+                                                    ui.add_space(6.0);
+                                                }
+                                            });
                                     },
                                 );
-                            });
-                            ui.separator();
 
-                            egui::ScrollArea::vertical()
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    let cards: Vec<GridCard> = channel_videos
-                                        .iter()
-                                        .map(|item| GridCard {
-                                            video_id: item.video_id.clone(),
-                                            title: item.title.clone(),
-                                            channel: item.channel.clone(),
-                                            duration: String::new(),
-                                            meta: String::new(),
-                                            channel_icon: String::new(),
-                                        })
-                                        .collect();
-                                    if let Some(id) = draw_video_grid(ui, &cards) {
-                                        pick_video = Some(format!(
-                                            "https://www.youtube.com/watch?v={id}"
-                                        ));
-                                        toggle_channel = true;
+                                ui.separator();
+
+                                // --- 右ペイン: 選択チャンネルの動画カード ---
+                                ui.vertical(|ui| {
+                                    if !channel_visible {
+                                        ui.add_space(8.0);
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "← チャンネルを選択してください",
+                                            )
+                                            .color(egui::Color32::GRAY),
+                                        );
+                                        return;
                                     }
+
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(&channel_status)
+                                                .color(egui::Color32::WHITE)
+                                                .heading(),
+                                        );
+                                        if channel_busy {
+                                            ui.spinner();
+                                        }
+                                    });
+                                    ui.add_space(4.0);
+
+                                    egui::ScrollArea::vertical()
+                                        .id_source("channel_videos")
+                                        .auto_shrink([false, false])
+                                        .show(ui, |ui| {
+                                            let cards: Vec<GridCard> = channel_videos
+                                                .iter()
+                                                .map(|item| GridCard {
+                                                    video_id: item.video_id.clone(),
+                                                    title: item.title.clone(),
+                                                    channel: item.channel.clone(),
+                                                    duration: String::new(),
+                                                    meta: String::new(),
+                                                    channel_icon: String::new(),
+                                                })
+                                                .collect();
+                                            if let Some(id) = draw_video_grid(ui, &cards) {
+                                                pick_video = Some(format!(
+                                                    "https://www.youtube.com/watch?v={id}"
+                                                ));
+                                                toggle_subs = true;
+                                            }
+                                        });
                                 });
+                            });
                         });
                     });
             }
@@ -1791,6 +1801,10 @@ impl Running {
         }
         if toggle_subs {
             self.sub_visible = !self.sub_visible;
+            // 閉じるときは右ペイン（チャンネル動画）もリセットしてリスト主体に戻す。
+            if !self.sub_visible {
+                self.channel_visible = false;
+            }
             // 表示時かつ未取得なら取得開始。
             if self.sub_visible && self.sub_channels.is_empty() && !self.sub_busy {
                 self.start_subs();
@@ -1819,23 +1833,15 @@ impl Running {
         if let Some((pl_id, pl_title)) = pick_playlist {
             self.start_playlist_items(pl_id, pl_title);
         }
-        // 登録チャンネルをクリック → そのチャンネルのアップロード一覧をカード UI で開く。
+        // 登録チャンネルをクリック → 右ペインにそのチャンネルのアップロード一覧（カード UI）を出す。
+        // 登録チャンネルリストは左に残したままにする。
         if let Some((channel_id, title)) = pick_channel {
             let uploads_id = if channel_id.starts_with("UC") && channel_id.len() > 2 {
                 format!("UU{}", &channel_id[2..])
             } else {
                 channel_id.clone()
             };
-            self.sub_visible = false;
             self.start_channel_uploads(uploads_id, title);
-        }
-        if toggle_channel {
-            self.channel_visible = false;
-        }
-        if channel_back {
-            // チャンネル動画 → 登録チャンネル一覧へ戻る。
-            self.channel_visible = false;
-            self.sub_visible = true;
         }
         if playlist_back {
             self.playlist_items.clear();
