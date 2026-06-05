@@ -2120,7 +2120,9 @@ fn draw_video_grid(ui: &mut egui::Ui, cards: &[GridCard]) -> Option<String> {
 
 /// 1 枚のカードを描画する。サムネ + 再生時間バッジ + タイトル + チャンネル + メタ。
 fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String> {
-    let thumb_h = w * 9.0 / 16.0;
+    // サムネ枠は 4:3。YouTube の hqdefault.jpg が 480×360 (4:3) なので、枠も 4:3 に
+    // 合わせると aspect 維持のまま横幅いっぱいに収まり右側の余白が出ない。
+    let thumb_h = w * 3.0 / 4.0;
 
     let inner = ui.allocate_ui_with_layout(
         egui::vec2(w, 0.0),
