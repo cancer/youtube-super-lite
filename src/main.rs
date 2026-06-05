@@ -61,6 +61,8 @@ const CHAT_MAX_MESSAGES: usize = 200;
 
 /// チャットサイドパネルの幅（display points）。動画描画領域の計算にも使う。
 const CHAT_PANEL_WIDTH: f32 = 320.0;
+/// 登録チャンネル一覧サイドパネル（左）の幅（display points）。
+const CHANNEL_PANEL_WIDTH: f32 = 280.0;
 
 /// 既定ブラウザで URL を開く。
 fn open_in_browser(url: &str) {
@@ -366,8 +368,8 @@ struct Running {
     recommend_rx: Receiver<recommend::RecommendUpdate>,
     recommend_visible: bool,
     recommend_status: String,
-    // --- 登録チャンネル新着 ---
-    sub_items: Vec<subscriptions::SubVideo>,
+    // --- 登録チャンネル一覧 ---
+    sub_channels: Vec<subscriptions::SubChannel>,
     sub_tx: Sender<subscriptions::SubUpdate>,
     sub_rx: Receiver<subscriptions::SubUpdate>,
     sub_visible: bool,
@@ -634,14 +636,14 @@ impl Running {
         });
     }
 
-    /// 登録チャンネル新着の更新を取り込む。
+    /// 登録チャンネル一覧の更新を取り込む。
     fn poll_subs(&mut self) {
         while let Ok(update) = self.sub_rx.try_recv() {
             self.sub_busy = false;
             match update {
-                subscriptions::SubUpdate::Items(items) => {
-                    self.sub_status = format!("新着動画 ({} 件)", items.len());
-                    self.sub_items = items;
+                subscriptions::SubUpdate::Channels(channels) => {
+                    self.sub_status = format!("登録チャンネル ({} 件)", channels.len());
+                    self.sub_channels = channels;
                 }
                 subscriptions::SubUpdate::Error(e) => {
                     self.sub_status = format!("取得エラー: {e}");
@@ -650,7 +652,7 @@ impl Running {
         }
     }
 
-    /// 登録チャンネルの新着動画を背景スレッドで取得する。
+    /// 登録チャンネル一覧を背景スレッドで取得する。
     fn start_subs(&mut self) {
         let Some(tokens) = &self.tokens else {
             self.sub_status = "先にログインしてください".to_string();
@@ -660,16 +662,14 @@ impl Running {
             return;
         }
         self.sub_busy = true;
-        self.sub_status = "新着動画を取得中…".to_string();
+        self.sub_status = "登録チャンネルを取得中…".to_string();
         self.sub_visible = true;
 
         let access_token = tokens.access_token.clone();
         let tx = self.sub_tx.clone();
         let proxy = self.proxy.clone();
-        // dev-tools 起動中（--enable-dev-tools）のときのみタイミングログを出す。
-        let log_timings = self.devtools_rx.is_some();
         std::thread::spawn(move || {
-            subscriptions::fetch_subscription_feed(&access_token, &tx, log_timings);
+            subscriptions::fetch_subscribed_channels(&access_token, &tx);
             let _ = proxy.send_event(UserEvent::Background);
         });
     }
@@ -872,11 +872,12 @@ impl Running {
         let scale = self.window.scale_factor() as f32;
         let chat_panel_w: i32 = (CHAT_PANEL_WIDTH * scale) as i32;
         let chat_visible_now = self.chat_visible && !self.chat_messages.is_empty();
-        let video_w = if chat_visible_now {
-            (w - chat_panel_w).max(1)
-        } else {
-            w
-        };
+        let chat_w = if chat_visible_now { chat_panel_w } else { 0 };
+        // 登録チャンネル一覧は左サイドパネル。表示中は動画を左ぶん詰める。
+        let subs_panel_w: i32 = (CHANNEL_PANEL_WIDTH * scale) as i32;
+        let subs_w = if self.sub_visible { subs_panel_w } else { 0 };
+        let video_x = subs_w;
+        let video_w = (w - subs_w - chat_w).max(1);
 
         // 背景を黒でクリア（動画が描かれない領域のため）。
         unsafe {
@@ -891,7 +892,7 @@ impl Running {
         // egui の Y 軸はウィンドウ上から下、OpenGL は下から上なので、
         // チャットが右側なら動画ビューポートは (0, 0, video_w, h) で左下原点から左半分を覆う。
         self.player.render(video_w, h);
-        self.quad.draw(self.player.texture(), (0, 0, video_w, h));
+        self.quad.draw(self.player.texture(), (video_x, 0, video_w, h));
 
         // 現在の再生状態を Player から取得。
         let paused = self.player.paused();
@@ -925,7 +926,7 @@ impl Running {
         let recommend_visible = self.recommend_visible;
         let recommend_status = self.recommend_status.clone();
 
-        let sub_items = &self.sub_items;
+        let sub_channels = &self.sub_channels;
         let sub_visible = self.sub_visible;
         let sub_status = self.sub_status.clone();
         let sub_busy = self.sub_busy;
@@ -1053,56 +1054,51 @@ impl Running {
                     });
             }
 
-            // 登録チャンネル新着オーバーレイ。
+            // 登録チャンネル一覧（左サイドパネル。動画は左ぶん詰めて重ねない）。
             if sub_visible {
-                let screen = ctx.screen_rect();
-                egui::Area::new(egui::Id::new("subs_overlay"))
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(screen.min)
+                egui::SidePanel::left("subs_panel")
+                    .resizable(false)
+                    .exact_width(CHANNEL_PANEL_WIDTH)
+                    .frame(egui::Frame::none().fill(egui::Color32::from_rgb(20, 20, 20)))
                     .show(ctx, |ui| {
-                        let frame = egui::Frame::none()
-                            .fill(egui::Color32::from_black_alpha(220))
-                            .inner_margin(16.0);
-                        frame.show(ui, |ui| {
-                            // Frame の inner_margin (16) を考慮して内部コンテンツサイズを固定。
-                            let inner = screen.size() - egui::vec2(32.0, 32.0);
-                            ui.set_min_size(inner);
-                            ui.set_max_size(inner);
+                        if draw_overlay_header(ui, &sub_status, sub_busy) {
+                            toggle_subs = true;
+                        }
+                        ui.separator();
 
-                            if draw_overlay_header(ui, &sub_status, sub_busy) {
-                                toggle_subs = true;
-                            }
-                            ui.separator();
+                        if sub_channels.is_empty() && !sub_busy {
+                            ui.label(
+                                egui::RichText::new("登録チャンネルがありません")
+                                    .color(egui::Color32::GRAY),
+                            );
+                        }
 
-                            if sub_items.is_empty() && !sub_busy {
-                                ui.label(
-                                    egui::RichText::new("新着動画がありません")
-                                        .color(egui::Color32::GRAY),
-                                );
-                            }
-
-                            egui::ScrollArea::vertical()
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    let cards: Vec<GridCard> = sub_items
-                                        .iter()
-                                        .map(|item| GridCard {
-                                            video_id: item.video_id.clone(),
-                                            title: item.title.clone(),
-                                            channel: item.channel.clone(),
-                                            duration: item.duration.clone(),
-                                            meta: item.meta.clone(),
-                                            channel_icon: item.channel_icon.clone(),
-                                        })
-                                        .collect();
-                                    if let Some(id) = draw_video_grid(ui, &cards) {
-                                        pick_video = Some(format!(
-                                            "https://www.youtube.com/watch?v={id}"
-                                        ));
-                                        toggle_subs = true;
-                                    }
-                                });
-                        });
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for ch in sub_channels {
+                                    ui.horizontal(|ui| {
+                                        if ch.icon.is_empty() {
+                                            ui.add_space(28.0);
+                                        } else {
+                                            ui.add(
+                                                egui::Image::new(&ch.icon)
+                                                    .fit_to_exact_size(egui::vec2(28.0, 28.0))
+                                                    .rounding(egui::Rounding::same(14.0)),
+                                            );
+                                        }
+                                        ui.add_space(8.0);
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(&ch.title)
+                                                    .color(egui::Color32::WHITE),
+                                            )
+                                            .truncate(),
+                                        );
+                                    });
+                                    ui.add_space(6.0);
+                                }
+                            });
                     });
             }
 
@@ -1435,7 +1431,7 @@ impl Running {
                         if ui.button("📃 再生リスト").clicked() {
                             toggle_playlist = true;
                         }
-                        if ui.button("📺 新着").on_hover_text("登録チャンネルの新着動画").clicked() {
+                        if ui.button("📺 登録チャンネル").on_hover_text("登録チャンネル一覧").clicked() {
                             toggle_subs = true;
                         }
                         if ui.button("🕘 履歴").on_hover_text("再生履歴").clicked() {
@@ -1647,7 +1643,7 @@ impl Running {
         if toggle_subs {
             self.sub_visible = !self.sub_visible;
             // 表示時かつ未取得なら取得開始。
-            if self.sub_visible && self.sub_items.is_empty() && !self.sub_busy {
+            if self.sub_visible && self.sub_channels.is_empty() && !self.sub_busy {
                 self.start_subs();
             }
         }
@@ -2415,7 +2411,7 @@ impl App {
             recommend_rx,
             recommend_visible: false,
             recommend_status: String::new(),
-            sub_items: Vec::new(),
+            sub_channels: Vec::new(),
             sub_tx,
             sub_rx,
             sub_visible: false,
