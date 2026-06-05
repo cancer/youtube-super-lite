@@ -2120,11 +2120,8 @@ fn draw_video_grid(ui: &mut egui::Ui, cards: &[GridCard]) -> Option<String> {
 
 /// 1 枚のカードを描画する。サムネ + 再生時間バッジ + タイトル + チャンネル + メタ。
 fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String> {
-    // サムネ枠は 16:9。hqdefault.jpg は動画によって 320×180(16:9) だったり
-    // 480×360(4:3) だったりと寸法が一定しないため、aspect 維持だと枠と画像がずれて
-    // 隙間が出る（右に余白／下に余白）。枠を 16:9 に固定し、下の Image 側で
-    // maintain_aspect_ratio(false) にして必ず枠を埋める（大半の 16:9 サムネは無歪み、
-    // 少数の 4:3 のみ横に伸びるが隙間ゼロ・バッジは実画像の右下に乗る）。
+    // サムネ枠は 16:9。サムネ URL は常に 16:9 の mqdefault.jpg を使うので、aspect 維持の
+    // まま枠を隙間なく埋められる（hqdefault は動画により 4:3/16:9 が混在し枠とずれる）。
     let thumb_h = w * 9.0 / 16.0;
 
     let inner = ui.allocate_ui_with_layout(
@@ -2136,19 +2133,16 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
             // サムネ → テキストの縦隙間を詰める（egui 既定の item_spacing.y は広め）。
             ui.spacing_mut().item_spacing.y = 0.0;
 
-            // サムネ画像（YouTube CDN の hqdefault.jpg を直接 URL ロード）。
-            // 表示サイズは論理 320×180 だが Retina 2x で物理 640×360 必要。
-            // mqdefault.jpg は 320×180 なので Retina ではぼやける。hqdefault.jpg は 480×360
-            // でほぼ十分（古い 16:9 動画は上下に黒帯が入るが視覚的にはほぼ気にならない）。
-            // ui.add でレイアウトを進めると egui_extras の http loader が駆動される。
-            let thumb_url = format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", card.video_id);
+            // サムネ画像。mqdefault.jpg は常に 16:9 (320×180) で寸法が安定しているため、
+            // 16:9 枠に aspect 維持で隙間なく収まり、歪まず、再生時間バッジも実画像の右下に乗る。
+            // （hqdefault は動画により 480×360(4:3) と 320×180(16:9) が混在し、枠とずれて
+            //   右や下に余白が出たり、強制 fill すると縦に潰れる問題があった。）
+            // 320px はカード幅とほぼ等倍。HiDPI ではやや甘くなるが歪み回避を優先する。
+            // ui.add でレイアウトを進めると画像ローダ（image_cache）が駆動される。
+            let thumb_url = format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", card.video_id);
             let thumb_resp = ui.add(
                 egui::Image::new(thumb_url)
                     .rounding(8.0)
-                    // 枠(4:3)を必ず埋める。maintain_aspect_ratio 既定(true)だと、hqdefault が
-                    // 4:3 でない動画で枠より小さく描画され、確保 rect 下端と画像下端がずれて
-                    // 再生時間バッジが画像の外（枠の下）に浮く。false で枠＝画像にして防ぐ。
-                    .maintain_aspect_ratio(false)
                     .fit_to_exact_size(egui::vec2(w, thumb_h)),
             );
             let thumb_rect = thumb_resp.rect;
