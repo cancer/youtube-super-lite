@@ -960,6 +960,7 @@ impl Running {
         let mut toggle_history = pending.toggle_history;
         let mut toggle_playlist = pending.toggle_playlist;
         let mut pick_playlist: Option<(String, String)> = None; // (id, title)
+        let mut pick_channel: Option<(String, String)> = None; // (channel_id, title)
         let mut playlist_back = false;
         let devtools_close_overlay = pending.close_overlay;
         let devtools_play_pause = pending.play_pause;
@@ -1082,25 +1083,42 @@ impl Running {
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     for ch in sub_channels {
-                                        ui.horizontal(|ui| {
-                                            if ch.icon.is_empty() {
-                                                ui.add_space(28.0);
-                                            } else {
+                                        let resp = ui
+                                            .horizontal(|ui| {
+                                                // 行全体をクリック対象にする。
+                                                ui.set_min_width(ui.available_width());
+                                                if ch.icon.is_empty() {
+                                                    ui.add_space(28.0);
+                                                } else {
+                                                    ui.add(
+                                                        egui::Image::new(&ch.icon)
+                                                            .fit_to_exact_size(egui::vec2(
+                                                                28.0, 28.0,
+                                                            ))
+                                                            .rounding(egui::Rounding::same(14.0)),
+                                                    );
+                                                }
+                                                ui.add_space(8.0);
                                                 ui.add(
-                                                    egui::Image::new(&ch.icon)
-                                                        .fit_to_exact_size(egui::vec2(28.0, 28.0))
-                                                        .rounding(egui::Rounding::same(14.0)),
+                                                    egui::Label::new(
+                                                        egui::RichText::new(&ch.title)
+                                                            .color(egui::Color32::WHITE),
+                                                    )
+                                                    .truncate()
+                                                    .selectable(false),
                                                 );
-                                            }
-                                            ui.add_space(8.0);
-                                            ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(&ch.title)
-                                                        .color(egui::Color32::WHITE),
-                                                )
-                                                .truncate(),
-                                            );
-                                        });
+                                            })
+                                            .response;
+                                        if resp
+                                            .interact(egui::Sense::click())
+                                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                            .clicked()
+                                        {
+                                            pick_channel = Some((
+                                                ch.channel_id.clone(),
+                                                ch.title.clone(),
+                                            ));
+                                        }
                                         ui.add_space(6.0);
                                     }
                                 });
@@ -1675,6 +1693,19 @@ impl Running {
         }
         if let Some((pl_id, pl_title)) = pick_playlist {
             self.start_playlist_items(pl_id, pl_title);
+        }
+        // 登録チャンネルをクリック → そのチャンネルのアップロード再生リスト(UU…)を開く。
+        if let Some((channel_id, title)) = pick_channel {
+            let uploads_id = if channel_id.starts_with("UC") && channel_id.len() > 2 {
+                format!("UU{}", &channel_id[2..])
+            } else {
+                channel_id.clone()
+            };
+            self.sub_visible = false;
+            self.playlist_visible = true;
+            self.playlist_items.clear();
+            self.playlist_items_title.clear();
+            self.start_playlist_items(uploads_id, title);
         }
         if playlist_back {
             self.playlist_items.clear();
