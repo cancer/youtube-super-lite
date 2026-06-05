@@ -997,7 +997,6 @@ impl Running {
         let sub_channels = &self.sub_channels;
         let sub_feed = &self.sub_feed;
         let sub_visible = self.sub_visible;
-        let sub_status = self.sub_status.clone();
         let sub_busy = self.sub_busy;
 
         let history_items = &self.history_items;
@@ -1145,7 +1144,9 @@ impl Running {
                             ui.set_min_size(inner);
                             ui.set_max_size(inner);
 
-                            if draw_overlay_header(ui, &sub_status, sub_busy) {
+                            // 見出しテキスト（「新着」）は不要。閉じるボタンと
+                            // ローディングのスピナーだけ出す。
+                            if draw_overlay_header(ui, "", sub_busy) {
                                 toggle_subs = true;
                             }
                             ui.separator();
@@ -1234,30 +1235,24 @@ impl Running {
                                 // 既定: 全登録チャンネルの新着一覧。
                                 // チャンネル選択時: そのチャンネルのアップロード一覧に絞り込み。
                                 ui.vertical(|ui| {
-                                    // ヘッダー（チャンネル選択時のみ「← 新着」を出す）。
-                                    ui.horizontal(|ui| {
-                                        if channel_visible
-                                            && ui.button("← 新着").clicked()
-                                        {
-                                            sub_back_to_feed = true;
-                                        }
-                                        let header = if channel_visible {
-                                            &channel_status
-                                        } else {
-                                            &sub_status
-                                        };
-                                        ui.label(
-                                            egui::RichText::new(header)
-                                                .color(egui::Color32::WHITE)
-                                                .heading(),
-                                        );
-                                        if (channel_visible && channel_busy)
-                                            || (!channel_visible && sub_busy)
-                                        {
-                                            ui.spinner();
-                                        }
-                                    });
-                                    ui.add_space(4.0);
+                                    // 新着モードでは見出しを出さない（タブ自体が新着なので冗長）。
+                                    // チャンネル絞り込み時のみ「← 新着」とチャンネル名を出す。
+                                    if channel_visible {
+                                        ui.horizontal(|ui| {
+                                            if ui.button("← 新着").clicked() {
+                                                sub_back_to_feed = true;
+                                            }
+                                            ui.label(
+                                                egui::RichText::new(&channel_status)
+                                                    .color(egui::Color32::WHITE)
+                                                    .heading(),
+                                            );
+                                            if channel_busy {
+                                                ui.spinner();
+                                            }
+                                        });
+                                        ui.add_space(4.0);
+                                    }
 
                                     let cards: Vec<GridCard> = if channel_visible {
                                         channel_videos
