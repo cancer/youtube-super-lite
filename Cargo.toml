@@ -19,7 +19,8 @@ egui = "0.29"
 egui_glow = { version = "0.29", features = ["winit"] }
 egui-winit = { version = "0.29", features = ["clipboard"] }
 # URL からの画像読み込み（カスタム絵文字 = PNG/WEBP、動画サムネ = JPEG）。
-egui_extras = { version = "0.29", default-features = false, features = ["image", "http"] }
+# http feature は外す: HTTP 取得は自前の image_cache::DiskImageCache が永続キャッシュ付きで担う。
+egui_extras = { version = "0.29", default-features = false, features = ["image"] }
 image = { version = "0.25", default-features = false, features = ["png", "webp", "jpeg"] }
 
 # mpv bindings (maintained fork of libmpv-rs)

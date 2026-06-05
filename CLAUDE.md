@@ -190,7 +190,8 @@ The desktop app **never holds `client_secret`.** Only the browser consent step i
 #### Cargo / 依存関係
 - `libmpv2` は **6.x 固定**（4.x は Render API でクラッシュ）。
 - `egui_glow` は `features = ["winit"]`、`egui-winit` は `features = ["clipboard"]` を必須に（後者は明示的にクリップボード機能を有効化しないと Cmd+V でペーストできない）。
-- `egui_extras` は `features = ["image", "http"]`、`image` クレートは `features = ["png", "webp", "jpeg"]`。PNG/WEBP はカスタム絵文字、JPEG は YouTube 動画サムネ（`i.ytimg.com/.../mqdefault.jpg`）に必要。features から外すと該当画像が ⚠ で表示される。
+- `egui_extras` は `features = ["image"]`（**`"http"` は外してある**）、`image` クレートは `features = ["png", "webp", "jpeg"]`。PNG/WEBP はカスタム絵文字、JPEG は YouTube 動画サムネ（`i.ytimg.com/.../hqdefault.jpg`）に必要。features から外すと該当画像が ⚠ で表示される。
+- HTTP 画像（サムネ/チャンネルアイコン/カスタム絵文字）の取得は egui_extras の ehttp ローダではなく **[src/image_cache.rs](src/image_cache.rs) の自前 `BytesLoader`（`DiskImageCache`）** が担う。永続ディスクキャッシュ + メモリキャッシュ + 同時取得数制限（固定ワーカ 6 本）付き。`install_image_loaders` の **後** に `ctx.add_bytes_loader` で登録する（`try_load_bytes` は後入れ優先 `.rev()` 走査なので自前ローダが先に当たる）。キャッシュ先は Windows `%LOCALAPPDATA%\YouTubeSuperLite\image-cache\`、macOS `~/Library/Caches/YouTubeSuperLite/images/`。ファイル名は URL の FNV-1a 64bit hex（`DefaultHasher` は実行毎にシードが変わり不可）。失効は総容量 LRU のみ（ディスク 256MB / メモリ 64MB）。`Image::new(url)` の呼び出し側は変更不要。
 
 ### GUI 検証フロー
 
