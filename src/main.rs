@@ -2120,8 +2120,7 @@ fn draw_video_grid(ui: &mut egui::Ui, cards: &[GridCard]) -> Option<String> {
 
 /// 1 枚のカードを描画する。サムネ + 再生時間バッジ + タイトル + チャンネル + メタ。
 fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String> {
-    // サムネ枠は 16:9。サムネ URL は常に 16:9 の mqdefault.jpg を使うので、aspect 維持の
-    // まま枠を隙間なく埋められる（hqdefault は動画により 4:3/16:9 が混在し枠とずれる）。
+    // サムネ枠は 16:9 固定（カードサイズを揃え、バッジ位置を安定させる）。
     let thumb_h = w * 9.0 / 16.0;
 
     let inner = ui.allocate_ui_with_layout(
@@ -2133,19 +2132,31 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
             // サムネ → テキストの縦隙間を詰める（egui 既定の item_spacing.y は広め）。
             ui.spacing_mut().item_spacing.y = 0.0;
 
-            // サムネ画像。mqdefault.jpg は常に 16:9 (320×180) で寸法が安定しているため、
-            // 16:9 枠に aspect 維持で隙間なく収まり、歪まず、再生時間バッジも実画像の右下に乗る。
-            // （hqdefault は動画により 480×360(4:3) と 320×180(16:9) が混在し、枠とずれて
-            //   右や下に余白が出たり、強制 fill すると縦に潰れる問題があった。）
-            // 320px はカード幅とほぼ等倍。HiDPI ではやや甘くなるが歪み回避を優先する。
-            // ui.add でレイアウトを進めると画像ローダ（image_cache）が駆動される。
+            // サムネ画像。サムネのアスペクト比は保証されない（mqdefault は 16:9(320×180)、
+            // 動画自体が 4:3 のものは内側に黒帯が焼き込まれている等）。どんな比でも歪ませず、
+            // 16:9 枠の中央にアスペクト維持で配置し、余った領域は黒帯にする防御的レイアウト。
+            //   - 16:9 画像 → 枠いっぱい
+            //   - 4:3 等 → 左右に黒帯（センタリング）
+            // ソースは 16:9 に素直な mqdefault を使う（hqdefault は 480×360 の 4:3 固定で、
+            // 16:9 動画でも上下黒帯が焼き込まれており 16:9 枠だと絵が黒に浮く）。
             let thumb_url = format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", card.video_id);
-            let thumb_resp = ui.add(
-                egui::Image::new(thumb_url)
-                    .rounding(8.0)
-                    .fit_to_exact_size(egui::vec2(w, thumb_h)),
-            );
-            let thumb_rect = thumb_resp.rect;
+            // 16:9 フレームを確保（cursor もこの分だけ進む）。
+            let (frame_rect, _) =
+                ui.allocate_exact_size(egui::vec2(w, thumb_h), egui::Sense::hover());
+            // 黒背景（足りない領域がそのまま黒帯になる）。
+            ui.painter()
+                .rect_filled(frame_rect, 8.0, egui::Color32::BLACK);
+            // 実画像をアスペクト維持でフレーム内にセンタリング描画。
+            let image = egui::Image::new(thumb_url)
+                .maintain_aspect_ratio(true)
+                .rounding(8.0);
+            // ロード済みなら実比から内接サイズを得てセンタリング。未ロード時はフレーム全体
+            // （paint_at がローディングスピナーを中央に出す）。
+            let thumb_rect = image
+                .load_and_calc_size(ui, frame_rect.size())
+                .map(|sz| egui::Rect::from_center_size(frame_rect.center(), sz))
+                .unwrap_or(frame_rect);
+            image.paint_at(ui, thumb_rect);
 
             // 再生時間バッジ（サムネ右下に重ね描き）。
             if !card.duration.is_empty() {
