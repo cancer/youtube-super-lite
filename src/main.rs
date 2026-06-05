@@ -61,8 +61,6 @@ const CHAT_MAX_MESSAGES: usize = 200;
 
 /// チャットサイドパネルの幅（display points）。動画描画領域の計算にも使う。
 const CHAT_PANEL_WIDTH: f32 = 320.0;
-/// 登録チャンネル一覧サイドパネル（左）の幅（display points）。
-const CHANNEL_PANEL_WIDTH: f32 = 280.0;
 
 /// 既定ブラウザで URL を開く。
 fn open_in_browser(url: &str) {
@@ -872,12 +870,11 @@ impl Running {
         let scale = self.window.scale_factor() as f32;
         let chat_panel_w: i32 = (CHAT_PANEL_WIDTH * scale) as i32;
         let chat_visible_now = self.chat_visible && !self.chat_messages.is_empty();
-        let chat_w = if chat_visible_now { chat_panel_w } else { 0 };
-        // 登録チャンネル一覧は左サイドパネル。表示中は動画を左ぶん詰める。
-        let subs_panel_w: i32 = (CHANNEL_PANEL_WIDTH * scale) as i32;
-        let subs_w = if self.sub_visible { subs_panel_w } else { 0 };
-        let video_x = subs_w;
-        let video_w = (w - subs_w - chat_w).max(1);
+        let video_w = if chat_visible_now {
+            (w - chat_panel_w).max(1)
+        } else {
+            w
+        };
 
         // 背景を黒でクリア（動画が描かれない領域のため）。
         unsafe {
@@ -892,7 +889,7 @@ impl Running {
         // egui の Y 軸はウィンドウ上から下、OpenGL は下から上なので、
         // チャットが右側なら動画ビューポートは (0, 0, video_w, h) で左下原点から左半分を覆う。
         self.player.render(video_w, h);
-        self.quad.draw(self.player.texture(), (video_x, 0, video_w, h));
+        self.quad.draw(self.player.texture(), (0, 0, video_w, h));
 
         // 現在の再生状態を Player から取得。
         let paused = self.player.paused();
@@ -1054,51 +1051,60 @@ impl Running {
                     });
             }
 
-            // 登録チャンネル一覧（左サイドパネル。動画は左ぶん詰めて重ねない）。
+            // 登録チャンネル一覧（タブ＝全画面オーバーレイ。ファーストビューには重ねない）。
             if sub_visible {
-                egui::SidePanel::left("subs_panel")
-                    .resizable(false)
-                    .exact_width(CHANNEL_PANEL_WIDTH)
-                    .frame(egui::Frame::none().fill(egui::Color32::from_rgb(20, 20, 20)))
+                let screen = ctx.screen_rect();
+                egui::Area::new(egui::Id::new("subs_overlay"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(screen.min)
                     .show(ctx, |ui| {
-                        if draw_overlay_header(ui, &sub_status, sub_busy) {
-                            toggle_subs = true;
-                        }
-                        ui.separator();
+                        let frame = egui::Frame::none()
+                            .fill(egui::Color32::from_black_alpha(230))
+                            .inner_margin(16.0);
+                        frame.show(ui, |ui| {
+                            let inner = screen.size() - egui::vec2(32.0, 32.0);
+                            ui.set_min_size(inner);
+                            ui.set_max_size(inner);
 
-                        if sub_channels.is_empty() && !sub_busy {
-                            ui.label(
-                                egui::RichText::new("登録チャンネルがありません")
-                                    .color(egui::Color32::GRAY),
-                            );
-                        }
+                            if draw_overlay_header(ui, &sub_status, sub_busy) {
+                                toggle_subs = true;
+                            }
+                            ui.separator();
 
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                for ch in sub_channels {
-                                    ui.horizontal(|ui| {
-                                        if ch.icon.is_empty() {
-                                            ui.add_space(28.0);
-                                        } else {
+                            if sub_channels.is_empty() && !sub_busy {
+                                ui.label(
+                                    egui::RichText::new("登録チャンネルがありません")
+                                        .color(egui::Color32::GRAY),
+                                );
+                            }
+
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    for ch in sub_channels {
+                                        ui.horizontal(|ui| {
+                                            if ch.icon.is_empty() {
+                                                ui.add_space(28.0);
+                                            } else {
+                                                ui.add(
+                                                    egui::Image::new(&ch.icon)
+                                                        .fit_to_exact_size(egui::vec2(28.0, 28.0))
+                                                        .rounding(egui::Rounding::same(14.0)),
+                                                );
+                                            }
+                                            ui.add_space(8.0);
                                             ui.add(
-                                                egui::Image::new(&ch.icon)
-                                                    .fit_to_exact_size(egui::vec2(28.0, 28.0))
-                                                    .rounding(egui::Rounding::same(14.0)),
+                                                egui::Label::new(
+                                                    egui::RichText::new(&ch.title)
+                                                        .color(egui::Color32::WHITE),
+                                                )
+                                                .truncate(),
                                             );
-                                        }
-                                        ui.add_space(8.0);
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(&ch.title)
-                                                    .color(egui::Color32::WHITE),
-                                            )
-                                            .truncate(),
-                                        );
-                                    });
-                                    ui.add_space(6.0);
-                                }
-                            });
+                                        });
+                                        ui.add_space(6.0);
+                                    }
+                                });
+                        });
                     });
             }
 
