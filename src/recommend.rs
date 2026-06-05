@@ -15,6 +15,8 @@ pub struct VideoItem {
     pub channel: String,
     pub duration: String,
     pub view_count: String,
+    /// レスポンスが返すサムネ URL（最大サイズ、16:9クロップ済み）。空なら video_id から組み立て。
+    pub thumbnail: String,
 }
 
 /// 背景スレッドからメインスレッドへの通知。
@@ -84,6 +86,7 @@ fn parse_video_item(renderer: &Value) -> Option<VideoItem> {
         .as_str()
         .unwrap_or("")
         .to_string();
+    let thumbnail = crate::subscriptions::pick_largest_thumbnail(renderer.get("thumbnail"));
 
     Some(VideoItem {
         video_id,
@@ -91,6 +94,7 @@ fn parse_video_item(renderer: &Value) -> Option<VideoItem> {
         channel,
         duration,
         view_count,
+        thumbnail,
     })
 }
 

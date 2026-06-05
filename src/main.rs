@@ -1141,6 +1141,7 @@ impl Running {
                                             duration: item.duration.clone(),
                                             meta: item.view_count.clone(),
                                             channel_icon: String::new(),
+                                            thumbnail: item.thumbnail.clone(),
                                         })
                                         .collect();
                                     if let Some(id) = draw_video_grid(ui, &cards) {
@@ -1289,6 +1290,8 @@ impl Running {
                                                 duration: String::new(),
                                                 meta: String::new(),
                                                 channel_icon: String::new(),
+                                                // Data API の playlistItems には未保持 → video_id から組み立て。
+                                                thumbnail: String::new(),
                                             })
                                             .collect()
                                     } else {
@@ -1301,6 +1304,7 @@ impl Running {
                                                 duration: item.duration.clone(),
                                                 meta: item.meta.clone(),
                                                 channel_icon: item.channel_icon.clone(),
+                                                thumbnail: item.thumbnail.clone(),
                                             })
                                             .collect()
                                     };
@@ -1361,6 +1365,7 @@ impl Running {
                                             duration: item.duration.clone(),
                                             meta: item.view_count.clone(),
                                             channel_icon: String::new(),
+                                            thumbnail: item.thumbnail.clone(),
                                         })
                                         .collect();
                                     if let Some(id) = draw_video_grid(ui, &cards) {
@@ -2092,6 +2097,9 @@ struct GridCard {
     meta: String,
     /// チャンネルアイコン URL。空ならアイコン非表示。
     channel_icon: String,
+    /// サムネ URL。InnerTube/レスポンス由来の最大サイズ（16:9クロップ済み）。
+    /// 空なら draw_video_card が video_id から mqdefault を組み立てる。
+    thumbnail: String,
 }
 
 const CARD_TARGET_WIDTH: f32 = 320.0;
@@ -2137,9 +2145,14 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
             // 16:9 枠の中央にアスペクト維持で配置し、余った領域は黒帯にする防御的レイアウト。
             //   - 16:9 画像 → 枠いっぱい
             //   - 4:3 等 → 左右に黒帯（センタリング）
-            // ソースは 16:9 に素直な mqdefault を使う（hqdefault は 480×360 の 4:3 固定で、
-            // 16:9 動画でも上下黒帯が焼き込まれており 16:9 枠だと絵が黒に浮く）。
-            let thumb_url = format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", card.video_id);
+            // サムネ URL は InnerTube/レスポンス由来のもの（card.thumbnail）を優先する。
+            // YouTube が用意した URL は sqp で 16:9 にクロップ済みなので比を推測せずに済む。
+            // 無い場合のみ video_id から mqdefault(16:9 320×180) を組み立てる。
+            let thumb_url = if card.thumbnail.is_empty() {
+                format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", card.video_id)
+            } else {
+                card.thumbnail.clone()
+            };
             // 16:9 フレームを確保（cursor もこの分だけ進む）。
             let (frame_rect, _) =
                 ui.allocate_exact_size(egui::vec2(w, thumb_h), egui::Sense::hover());

@@ -33,6 +33,8 @@ pub struct HistoryItem {
     pub duration: String,
     /// 視聴回数の表示（例 "4.6万回視聴"）。空文字なら非表示。
     pub view_count: String,
+    /// InnerTube が返すサムネ URL（最大サイズ、16:9クロップ済み）。空なら video_id から組み立て。
+    pub thumbnail: String,
 }
 
 pub enum HistoryUpdate {
@@ -110,6 +112,9 @@ fn fetch_inner(access_token: &str) -> Result<Vec<HistoryItem>> {
         // lines[0] がチャンネル名、lines[1] が視聴回数。runs か simpleText のどちらか。
         let channel = extract_line(tile, 0);
         let view_count = extract_line(tile, 1);
+        let thumbnail = crate::subscriptions::pick_largest_thumbnail(
+            tile.pointer("/header/tileHeaderRenderer/thumbnail"),
+        );
 
         out.push(HistoryItem {
             video_id: video_id.to_string(),
@@ -117,6 +122,7 @@ fn fetch_inner(access_token: &str) -> Result<Vec<HistoryItem>> {
             channel,
             duration,
             view_count,
+            thumbnail,
         });
     }
     Ok(out)

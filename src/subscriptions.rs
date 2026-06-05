@@ -36,6 +36,9 @@ pub struct SubVideo {
     pub meta: String,
     /// チャンネルアイコン URL。空のこともある。
     pub channel_icon: String,
+    /// InnerTube が返すサムネ URL（最大サイズ。実体は 16:9 にクロップ済み）。
+    /// 空なら呼び出し側で video_id から組み立てる。
+    pub thumbnail: String,
 }
 
 /// 登録チャンネル 1 件（左のチャンネルリスト用）。
@@ -203,6 +206,11 @@ fn extract_videos(v: &Value) -> Result<Vec<SubVideo>> {
                 .get(channel_id)
                 .cloned()
                 .unwrap_or_default();
+            // InnerTube が用意したサムネ URL（最大サイズ）。これを使えばアスペクト比を
+            // 推測せずに済む（サーバが 16:9 にクロップ済み）。
+            let thumbnail = pick_largest_thumbnail(
+                tile.pointer("/header/tileHeaderRenderer/thumbnail"),
+            );
 
             out.push(SubVideo {
                 video_id: video_id.to_string(),
@@ -211,10 +219,29 @@ fn extract_videos(v: &Value) -> Result<Vec<SubVideo>> {
                 duration,
                 meta,
                 channel_icon,
+                thumbnail,
             });
         }
     }
     Ok(out)
+}
+
+/// `thumbnail` オブジェクト（`{ "thumbnails": [ {url,width,height}, ... ] }`）から
+/// 最大サイズ（配列末尾）の URL を取り出す。protocol-relative は https を補う。
+/// 取れなければ空文字。
+pub fn pick_largest_thumbnail(thumb: Option<&Value>) -> String {
+    let url = thumb
+        .and_then(|t| t.get("thumbnails"))
+        .and_then(|a| a.as_array())
+        .and_then(|a| a.last())
+        .and_then(|t| t.get("url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("");
+    if url.starts_with("//") {
+        format!("https:{url}")
+    } else {
+        url.to_string()
+    }
 }
 
 /// tab の `endpoint.browseEndpoint.params` から channel ID を取り出す。
