@@ -166,7 +166,7 @@ impl Player {
     }
 
     /// HW デコードの設定を動的に変更する。`"auto"` で HW 利用、`"no"` で SW 強制。
-    /// `--auto-hwdec-fallback` 経由で GPU 使用率が高い時に呼ばれる。
+    /// GPU 使用率監視（gpu_usage）から、使用率が高い時に呼ばれる。
     pub fn set_hwdec(&self, mode: &str) {
         let _ = self.mpv.set_property("hwdec", mode);
     }

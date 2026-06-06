@@ -434,7 +434,7 @@ struct Running {
     /// dev-tools の `POST /action/<name>` で立てられた intent flag を redraw 開始時に吸い上げる。
     /// 既存の UI クリック由来の flag と同じローカル変数に OR される。
     devtools_pending: DevToolsPending,
-    /// `--auto-hwdec-fallback` 時のみ Some。GPU 使用率を見て mpv の hwdec を切り替える。
+    /// 常時 Some（Windows のみ。他 OS は None）。GPU 使用率を見て mpv の hwdec を切り替える。
     gpu_monitor: Option<gpu_usage::Monitor>,
 }
 
@@ -2582,7 +2582,6 @@ struct App {
     backend: String,
     enable_dev_tools: bool,
     initial_volume: Option<f64>,
-    auto_hwdec_fallback: bool,
     state: Option<Running>,
 }
 
@@ -2594,7 +2593,6 @@ impl App {
         backend: String,
         enable_dev_tools: bool,
         initial_volume: Option<f64>,
-        auto_hwdec_fallback: bool,
     ) -> Self {
         Self {
             proxy,
@@ -2603,7 +2601,6 @@ impl App {
             backend,
             enable_dev_tools,
             initial_volume,
-            auto_hwdec_fallback,
             state: None,
         }
     }
@@ -2790,15 +2787,11 @@ impl App {
             }
         }
 
-        // GPU 使用率の監視は **`--auto-hwdec-fallback` 指定時のみ**。
-        // 既定で動かすと、PDH の `\GPU Engine(*)` を1秒間隔で走査する負荷に加え、
-        // 全プロセス合算の過大カウントで「高負荷」を誤判定して mpv をソフトデコードに
-        // 倒し、CPU が張り付いて PC 全体が重くなることがある（既定は HW デコード固定で軽い）。
-        if self.auto_hwdec_fallback {
-            if let Some(m) = gpu_usage::start_monitoring() {
-                running.gpu_monitor = Some(m);
-                eprintln!("[auto-hwdec] GPU 使用率の監視を開始");
-            }
+        // 外部アプリ (ゲーム等) に GPU を譲るため、GPU 使用率の監視を常時起動する。
+        // 現状 Windows のみで動作し、それ以外のプラットフォームでは NOP。
+        if let Some(m) = gpu_usage::start_monitoring() {
+            running.gpu_monitor = Some(m);
+            eprintln!("[auto-hwdec] GPU 使用率の監視を開始");
         }
 
         Ok(running)
@@ -2897,7 +2890,6 @@ struct CliArgs {
     backend: String,
     enable_dev_tools: bool,
     volume: Option<f64>,
-    auto_hwdec_fallback: bool,
 }
 
 fn parse_args() -> Result<CliArgs> {
@@ -2906,7 +2898,6 @@ fn parse_args() -> Result<CliArgs> {
     let mut url: Option<String> = None;
     let mut enable_dev_tools = false;
     let mut volume: Option<f64> = None;
-    let mut auto_hwdec_fallback = false;
 
     let parse_volume = |s: &str| -> Result<f64> {
         let v: f64 = s
@@ -2925,10 +2916,6 @@ fn parse_args() -> Result<CliArgs> {
                     .ok_or_else(|| anyhow!("--debug-backend に URL を指定してください"))?;
             }
             "--enable-dev-tools" => enable_dev_tools = true,
-            // 外部アプリ（ゲーム等）に GPU を譲るため GPU 使用率を監視し、高負荷時に
-            // mpv をソフトデコードへ自動フォールバックする（既定オフ。オンにすると
-            // PDH 走査の負荷と誤判定の副作用がある）。
-            "--auto-hwdec-fallback" => auto_hwdec_fallback = true,
             // 初期音量（デバッグ用。例: --volume 0 で無音起動）。`--volume=0` 形式も可。
             "--volume" => {
                 let v = args
@@ -2961,7 +2948,6 @@ fn parse_args() -> Result<CliArgs> {
         backend: backend.trim_end_matches('/').to_string(),
         enable_dev_tools,
         volume,
-        auto_hwdec_fallback,
     })
 }
 
@@ -2977,7 +2963,6 @@ fn print_help() {
          \x20\x20    --enable-dev-tools    デバッグ用のローカル HTTP サーバを起動\n\
          \x20\x20                          (GET /screenshot 等。listen ポートは stderr に出力)\n\
          \x20\x20    --volume N            初期音量 0-130（デバッグ用。例: --volume 0 で無音）\n\
-         \x20\x20    --auto-hwdec-fallback GPU高負荷時にソフトデコードへ自動切替（既定オフ）\n\
          \x20\x20-h, --help                このヘルプを表示",
         auth::DEFAULT_BACKEND
     );
@@ -3005,7 +2990,6 @@ fn main() -> Result<()> {
         args.backend,
         args.enable_dev_tools,
         args.volume,
-        args.auto_hwdec_fallback,
     );
     event_loop.run_app(&mut app)?;
     Ok(())
