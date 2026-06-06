@@ -38,7 +38,12 @@
 - ＝「Vulkan 一択」ではない。
 
 ## 段階移行（各フェーズで動く状態を保つ。egui 版は P4 まで温存）
-- **P0 コア分離**: main.rs の描画(egui/GL)とロジック(intent/poll/load等)を分離し、UI 非依存の Controller を切り出す。
+- **P0 コア分離** ✅ **完了 (commit 8dbf923)**: `src/controller.rs` を新設し、UI 非依存の状態とロジック
+  （mpv 制御・認証/API・yt-dlp 解決・各種 poll/start・mark_watched・GPU 監視）を `controller::Controller` へ集約。
+  `Running` は egui/OpenGL/window と DevTools 入力のみを保持し、`self.core` 経由で Controller を駆動する。
+  redraw は「poll群 → GL描画 → 状態スナップショット → egui で intent 収集 → intent 適用(core 呼び出し)」の構造。
+  機能差分なし（debug ビルド・起動・登録チャンネル取得/カード描画を実機確認）。
+  次フェーズ着手前のメモ: intent はまだ redraw 内のローカル変数で受け渡している。必要なら後続で `Intent` enum に形式化。
 - **P1 mpv 埋め込み実証**: 素の Win32 窓に mpv(D3D11)で再生。**OpenGL を一切作らずに再生でき、起動時に他アプリが
   カクつかない**ことを実測（本移行の核の検証）。最悪「mpv 子窓＋透過オーバーレイ窓」でも成立。
 - **P2 2D レイヤ＋合成**: DirectComposition で「動画視覚＋透過2D視覚」。最小コントローラを重ねて自動非表示＋入力振り分け検証。
