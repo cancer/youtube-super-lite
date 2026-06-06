@@ -5,7 +5,7 @@
 //! 移行する際も、この Controller をそのまま別フロントエンドから駆動できるようにするのが狙い。
 
 use anyhow::Result;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::AtomicI64;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use winit::event_loop::EventLoopProxy;
@@ -93,6 +93,78 @@ pub struct Controller {
 }
 
 impl Controller {
+    /// プレイヤー・wake 用 proxy・API バックエンド URL から Controller を構築する。
+    /// 各 API 用のチャンネルは内部で生成する。GL 合成版・wid 埋め込み版どちらの
+    /// `Player` でも同じく駆動できる（描画方式に依存しない）。
+    pub fn new(player: player::Player, proxy: EventLoopProxy<UserEvent>, backend: String) -> Self {
+        let (auth_tx, auth_rx) = std::sync::mpsc::channel();
+        let (chat_tx, chat_rx) = std::sync::mpsc::channel();
+        let (recommend_tx, recommend_rx) = std::sync::mpsc::channel();
+        let (sub_tx, sub_rx) = std::sync::mpsc::channel();
+        let (history_tx, history_rx) = std::sync::mpsc::channel();
+        let (playlist_tx, playlist_rx) = std::sync::mpsc::channel();
+        let (channel_tx, channel_rx) = std::sync::mpsc::channel();
+        let (resolve_tx, resolve_rx) = std::sync::mpsc::channel();
+        Self {
+            player,
+            proxy,
+            current_url: String::new(),
+            quality: Quality::Auto,
+            codec: Codec::Auto,
+            player_offset_ms: Arc::new(AtomicI64::new(0)),
+            backend,
+            load_error: None,
+            tokens: None,
+            channel: None,
+            auth_status: "未ログイン".to_string(),
+            auth_busy: false,
+            auth_tx,
+            auth_rx,
+            chat_messages: Vec::new(),
+            chat_tx,
+            chat_rx,
+            chat_stop: None,
+            chat_status: String::new(),
+            chat_visible: false,
+            recommend_items: Vec::new(),
+            recommend_tx,
+            recommend_rx,
+            recommend_visible: false,
+            recommend_status: String::new(),
+            sub_channels: Vec::new(),
+            sub_feed: Vec::new(),
+            sub_tx,
+            sub_rx,
+            sub_visible: false,
+            sub_status: String::new(),
+            sub_busy: false,
+            history_items: Vec::new(),
+            history_tx,
+            history_rx,
+            history_visible: false,
+            history_status: String::new(),
+            history_busy: false,
+            playlist_lists: Vec::new(),
+            playlist_items: Vec::new(),
+            playlist_items_title: String::new(),
+            playlist_tx,
+            playlist_rx,
+            playlist_visible: false,
+            playlist_status: String::new(),
+            playlist_busy: false,
+            channel_videos: Vec::new(),
+            channel_tx,
+            channel_rx,
+            channel_visible: false,
+            channel_status: String::new(),
+            channel_busy: false,
+            resolve_tx,
+            resolve_rx,
+            resolve_busy: false,
+            gpu_monitor: None,
+        }
+    }
+
     /// 動画を読み込む。YouTube URL は背景で yt-dlp 解決してから mpv に渡す。
     pub fn load(&mut self, url: &str) {
         let url = url.trim().to_string();

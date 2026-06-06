@@ -24,8 +24,14 @@ use std::sync::Arc;
 /// 動画プレイヤー。
 pub struct Player {
     mpv: &'static Mpv,
-    render_context: RenderContext<'static>,
+    /// OpenGL 合成バックエンド（egui 版）。`None` の場合は mpv が `wid` 経由で
+    /// D3D11 に自前描画する埋め込みモード（ネイティブ版）で、GL は一切使わない。
+    gl: Option<GlBackend>,
+}
 
+/// mpv の OpenGL Render API で動画を自前 FBO/テクスチャに描く egui 用バックエンド。
+struct GlBackend {
+    render_context: RenderContext<'static>,
     gl: Arc<glow::Context>,
     fbo: glow::NativeFramebuffer,
     texture: glow::NativeTexture,
@@ -79,36 +85,65 @@ impl Player {
 
         Ok(Self {
             mpv,
-            render_context,
-            gl,
-            fbo,
-            texture,
-            size: (16, 16),
+            gl: Some(GlBackend {
+                render_context,
+                gl,
+                fbo,
+                texture,
+                size: (16, 16),
+            }),
         })
+    }
+
+    /// 埋め込みモードで初期化する（ネイティブ版）。OpenGL を一切作らず、mpv 自身が
+    /// `wid`（ウィンドウハンドル）に対し `vo=gpu-next` `gpu-api=d3d11` で直接描画する。
+    /// 動画フレームの提示は mpv が内部スレッドで行うため `render()`/`texture()` は使わない。
+    #[allow(dead_code)] // ネイティブ版エントリ（後続フェーズ）から使用する。
+    pub fn new_embedded(wid: i64, verbose: bool) -> Result<Self> {
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_property("wid", wid)?;
+            init.set_property("vo", "gpu-next")?;
+            init.set_property("gpu-api", "d3d11")?;
+            // YouTube URL の解決はアプリ側で行うので ytdl は無効化（egui 版と同じ）。
+            init.set_property("ytdl", false)?;
+            // hwdec は mpv 既定のまま（明示設定しない）。
+            if verbose {
+                init.set_property("terminal", true)?;
+                init.set_property("msg-level", "all=status")?;
+            }
+            Ok(())
+        })
+        .map_err(|e| anyhow!("mpv init (embedded) failed: {e}"))?;
+        let mpv: &'static Mpv = Box::leak(Box::new(mpv));
+        Ok(Self { mpv, gl: None })
     }
 
     /// 動画フレームを内部テクスチャに描画する。
     /// 要求サイズが現在の FBO サイズと異なる場合は再生成する。
     pub fn render(&mut self, width: i32, height: i32) {
+        // 埋め込みモード（gl=None）では mpv が自前で描画するので何もしない。
+        let Some(backend) = self.gl.as_mut() else {
+            return;
+        };
         if width <= 0 || height <= 0 {
             return;
         }
-        if self.size != (width, height) {
+        if backend.size != (width, height) {
             unsafe {
-                self.gl.delete_framebuffer(self.fbo);
-                self.gl.delete_texture(self.texture);
-                let (fbo, texture) = create_fbo_texture(&self.gl, width, height)
+                backend.gl.delete_framebuffer(backend.fbo);
+                backend.gl.delete_texture(backend.texture);
+                let (fbo, texture) = create_fbo_texture(&backend.gl, width, height)
                     .expect("FBO/texture recreate failed");
-                self.fbo = fbo;
-                self.texture = texture;
+                backend.fbo = fbo;
+                backend.texture = texture;
             }
-            self.size = (width, height);
+            backend.size = (width, height);
         }
 
         // mpv の render に渡す FBO ID は i32。glow の NativeFramebuffer は NonZeroU32 内包なので
         // u32 に取り出してキャスト。flip=true は OpenGL の Y 軸方向を mpv に伝える。
-        let fbo_id: u32 = native_fbo_id(self.fbo);
-        if let Err(e) = self
+        let fbo_id: u32 = native_fbo_id(backend.fbo);
+        if let Err(e) = backend
             .render_context
             .render::<()>(fbo_id as i32, width, height, true)
         {
@@ -118,7 +153,10 @@ impl Player {
 
     /// 動画テクスチャを取得する（UI 層が合成に使う）。
     pub fn texture(&self) -> glow::NativeTexture {
-        self.texture
+        self.gl
+            .as_ref()
+            .expect("texture() は GL 合成モード専用（埋め込みモードでは呼ばない）")
+            .texture
     }
 
     // --- mpv プロパティアクセス（薄いラッパー）---
@@ -201,9 +239,11 @@ impl Player {
 
 impl Drop for Player {
     fn drop(&mut self) {
-        unsafe {
-            self.gl.delete_framebuffer(self.fbo);
-            self.gl.delete_texture(self.texture);
+        if let Some(backend) = &self.gl {
+            unsafe {
+                backend.gl.delete_framebuffer(backend.fbo);
+                backend.gl.delete_texture(backend.texture);
+            }
         }
     }
 }

@@ -16,8 +16,8 @@ mod subscriptions;
 use anyhow::{anyhow, bail, Result};
 use std::num::NonZeroU32;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -2112,25 +2112,9 @@ impl App {
         }
         let quad = gl_quad::FullscreenQuad::new(gl.clone())?;
 
-        // 認証まわりの初期化。
-        let backend = self.backend.clone();
-        let (auth_tx, auth_rx) = std::sync::mpsc::channel();
-        let auth_status = "未ログイン".to_string();
-
-        // チャットまわりの初期化。
-        let (chat_tx, chat_rx) = std::sync::mpsc::channel();
-        // おすすめ動画の初期化。
-        let (recommend_tx, recommend_rx) = std::sync::mpsc::channel();
-        // 登録チャンネル新着の初期化。
-        let (sub_tx, sub_rx) = std::sync::mpsc::channel();
-        // 再生履歴の初期化。
-        let (history_tx, history_rx) = std::sync::mpsc::channel();
-        // 再生リストの初期化。
-        let (playlist_tx, playlist_rx) = std::sync::mpsc::channel();
-        // チャンネル動画一覧の初期化。
-        let (channel_tx, channel_rx) = std::sync::mpsc::channel();
-        // yt-dlp ストリーム解決の初期化。
-        let (resolve_tx, resolve_rx) = std::sync::mpsc::channel();
+        // UI 非依存の Controller（mpv 制御・API・各種状態）を構築する。
+        // チャンネル類は Controller::new 内で生成する。
+        let core = controller::Controller::new(player, self.proxy.clone(), self.backend.clone());
 
         let mut running = Running {
             egui_glow,
@@ -2146,64 +2130,7 @@ impl App {
             ui_visible: true,
             devtools_rx: None,
             devtools_pending: DevToolsPending::default(),
-            core: controller::Controller {
-                player,
-                proxy: self.proxy.clone(),
-                current_url: String::new(),
-                quality: Quality::Auto,
-                codec: Codec::Auto,
-                player_offset_ms: Arc::new(AtomicI64::new(0)),
-                backend,
-                load_error: None,
-                tokens: None,
-                channel: None,
-                auth_status,
-                auth_busy: false,
-                auth_tx,
-                auth_rx,
-                chat_messages: Vec::new(),
-                chat_tx,
-                chat_rx,
-                chat_stop: None,
-                chat_status: String::new(),
-                chat_visible: false,
-                recommend_items: Vec::new(),
-                recommend_tx,
-                recommend_rx,
-                recommend_visible: false,
-                recommend_status: String::new(),
-                sub_channels: Vec::new(),
-                sub_feed: Vec::new(),
-                sub_tx,
-                sub_rx,
-                sub_visible: false,
-                sub_status: String::new(),
-                sub_busy: false,
-                history_items: Vec::new(),
-                history_tx,
-                history_rx,
-                history_visible: false,
-                history_status: String::new(),
-                history_busy: false,
-                playlist_lists: Vec::new(),
-                playlist_items: Vec::new(),
-                playlist_items_title: String::new(),
-                playlist_tx,
-                playlist_rx,
-                playlist_visible: false,
-                playlist_status: String::new(),
-                playlist_busy: false,
-                channel_videos: Vec::new(),
-                channel_tx,
-                channel_rx,
-                channel_visible: false,
-                channel_status: String::new(),
-                channel_busy: false,
-                resolve_tx,
-                resolve_rx,
-                resolve_busy: false,
-                gpu_monitor: None,
-            },
+            core,
         };
 
         // 保存済みリフレッシュトークンがあれば自動ログインを試みる。
