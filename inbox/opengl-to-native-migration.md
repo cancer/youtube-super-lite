@@ -54,7 +54,17 @@
   残: 「ブラウザで YouTube 再生中に probe を起動してカクつきが消えるか」の主観確認は実機で要観察
   （原因＝OpenGL bring-up は排除済み）。`wid` 直接埋め込みで成立したため、子HWND＋透過窓フォールバックは不要。
   使い方: `cargo run --bin mpv_d3d11_probe [-- <file|url>]`。
-- **P2 2D レイヤ＋合成**: DirectComposition で「動画視覚＋透過2D視覚」。最小コントローラを重ねて自動非表示＋入力振り分け検証。
+- **P2 2D レイヤ＋合成** ✅ **完了（probe 実装）**: `src/bin/overlay_probe.rs` を新設。
+  合成方式の判断: libmpv2 の render API は OpenGL/SW のみで、mpv の D3D11 出力を DirectComposition の
+  visual へ直接バインドする公開 API が無い。よって計画想定の **「mpv 子窓＋透過オーバーレイ窓」** 構成を採用:
+  - ベース窓 = mpv を `wid` で D3D11 埋め込み（P1 と同じ、OpenGL 不使用）
+  - オーバーレイ窓 = WS_EX_LAYERED トップレベル透過窓。GDI で最小コントローラ帯を描画（カラーキーで透過）
+  検証 3 点を実装: ①動画上に透過 2D を重ねる ②無操作 3 秒で自動非表示／カーソル移動で再表示
+  （タイマで GetCursorPos 監視）③入力振り分け（WM_NCHITTEST: 帯=HTCLIENT でオーバーレイ受領、
+  それ以外=HTTRANSPARENT で動画へ透過。帯クリックで mpv pause トグル）。ビルド成功・8 秒起動・正常終了 exit 0。
+  残: 重なり表示/自動非表示/クリック振り分けの**見た目の確認は実機観察が必要**。
+  製品版は透過 2D を Direct2D + DirectComposition に置換予定（本 probe はレイヤ合成・自動非表示・
+  入力振り分けの**モデル検証**が目的）。使い方: `cargo run --bin overlay_probe -- <file|url>`。
 - **P3 UI 移植**: コントローラ全部、URL 欄(IME)、タイトル、一覧系（全画面2D＋サムネグリッド。image_cache がバイト供給→WICデコード）、チャット（左右分割）。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
