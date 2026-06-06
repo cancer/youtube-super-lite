@@ -73,8 +73,14 @@
     を描画。実測: `WIC: サムネイルをデコードしました` / `帯中心ピクセル BGRA=(255,255,255,255)`(alpha>0=描画成功)。
     Cargo features 追加: System_Com / Foundation_Numerics / Direct2D(+Common) / DirectWrite / Imaging / Dxgi_Common。
     使い方: `cargo run --bin d2d_overlay_probe -- <video|url> [thumbnail.jpg]`。
-  - 残り P3 本体（数週規模）: コントローラ全機能、URL欄+IME(DirectWrite/TSF)、一覧系のサムネグリッド仮想化
-    （image_cache→WICデコード）、チャット左右分割。Controller(P0) を駆動する形で順次移植。
+  - **P3b 実動コントローラ** ✅ **完了**: 同 `d2d_overlay_probe` を発展。mpv の再生状態
+    (time-pos/duration/pause) を `get_property` で読み、Direct2D で再生/一時停止ボタン(グリフ)・
+    シークバー(トラック/進捗/ノブ)・時間表示(mm:ss/mm:ss)を描画。WM_LBUTTONDOWN でボタン=pause トグル／
+    シークバー=絶対シーク(`seek <pct> absolute-percent`)に振り分け（hit-test 矩形を render で保存）。
+    実測: `time-pos=3.80 duration=4.87 pause=false`（ライブ取得・前進を確認）、帯ピクセル alpha>0。
+  - 残り P3 本体（数週規模）: URL欄+IME(DirectWrite/TSF)、タイトル/その他コントロール、
+    一覧系のサムネグリッド仮想化（image_cache→WICデコード）、チャット左右分割。
+    Controller(P0) を駆動する実フロントエンド(ネイティブ版エントリ)に統合して順次移植。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 

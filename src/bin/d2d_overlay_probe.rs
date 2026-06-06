@@ -1,10 +1,10 @@
-//! P3a 描画基盤実証バイナリ: 透過オーバーレイを Direct2D + DirectWrite + WIC で描く。
+//! P3a/P3b 実証バイナリ: 透過オーバーレイを Direct2D + DirectWrite + WIC で描く実動コントローラ。
 //!
-//! inbox/opengl-to-native-migration.md の P3 の最初の一歩。P2(overlay_probe) の GDI 描画を
-//! Direct2D に置換し、製品 UI で必要になる 2D 描画スタックを実証する。検証 3 点:
-//!   1. アンチエイリアスされた角丸矩形（コントローラ帯） … Direct2D
-//!   2. 日本語テキスト                                   … DirectWrite
-//!   3. JPEG サムネイルのデコード＆表示                  … WIC → Direct2D Bitmap
+//! inbox/opengl-to-native-migration.md の P3。P2(overlay_probe) の GDI 描画を Direct2D に置換し、
+//! 製品 UI で必要になる 2D 描画スタックを実証する。
+//! P3a（描画基盤）: ①AA 角丸矩形(Direct2D) ②日本語テキスト(DirectWrite) ③JPEG デコード(WIC→Bitmap)。
+//! P3b（実動コントローラ）: mpv の再生状態(time-pos/duration/pause)を読み、再生/一時停止ボタン・
+//!   シークバー(トラック/進捗/ノブ)・時間表示を描画し、クリックでトグル/絶対シークする。
 //! すべて per-pixel alpha（半透明）で mpv(D3D11)動画の上に重ねる。
 //!
 //! 合成方式: P2 と同じ「mpv 子窓(D3D11) ＋ 透過オーバーレイ窓」。オーバーレイは
@@ -43,6 +43,9 @@ struct ProbeState {
     idle_ticks: u32,
     visible: bool,
     bar: RECT,
+    /// 再生/一時停止ボタン・シークバーのクリック判定用矩形（オーバーレイクライアント座標）。
+    btn: RECT,
+    seek: RECT,
     // Direct2D / DirectWrite / WIC
     factory: Option<ID2D1Factory>,
     dc_rt: Option<ID2D1DCRenderTarget>,
@@ -56,7 +59,7 @@ struct ProbeState {
     dib_w: i32,
     dib_h: i32,
     dib_bits: usize, // *mut u8 を usize で保持
-    diag_done: bool,
+    frames: u32,
 }
 
 #[cfg(windows)]
@@ -72,6 +75,21 @@ const TICK_MS: u32 = 200;
 const HIDE_AFTER_MS: u32 = 3000;
 #[cfg(windows)]
 const BAR_H: i32 = 72;
+
+/// 秒数を mm:ss / h:mm:ss にする。
+#[cfg(windows)]
+fn fmt_time(secs: f64) -> String {
+    if !secs.is_finite() || secs < 0.0 {
+        return "--:--".to_string();
+    }
+    let t = secs as u64;
+    let (h, m, s) = (t / 3600, (t % 3600) / 60, t % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m:02}:{s:02}")
+    }
+}
 
 #[cfg(windows)]
 fn main() -> anyhow::Result<()> {
@@ -370,17 +388,18 @@ unsafe fn ensure_dib(w: i32, h: i32) {
 unsafe fn render() {
     use windows::core::w;
     use windows::Win32::Foundation::{COLORREF, POINT, RECT, SIZE};
-    use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
+    use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_POINT_2F, D2D_RECT_F};
     use windows::Win32::Graphics::Direct2D::{
-        D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
+        D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_ROUNDED_RECT,
+        D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
     };
     use windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL;
     use windows::Win32::Graphics::Gdi::{ClientToScreen, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION};
     use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 
-    let (base, overlay, bar, paused) = STATE.with(|s| {
+    let (base, overlay, bar) = STATE.with(|s| {
         let s = s.borrow();
-        (s.base, s.overlay, s.bar, s.paused)
+        (s.base, s.overlay, s.bar)
     });
     let (Some(base), Some(overlay)) = (base, overlay) else {
         return;
@@ -448,8 +467,24 @@ unsafe fn render() {
         );
     }
 
-    // サムネイル（WIC デコード結果）を帯の左に描く。
-    let mut text_left = bar_f.left + 16.0;
+    // --- 実動コントローラ: mpv の再生状態を読んで描画 ---
+    let mpv = STATE.with(|s| s.borrow().mpv);
+    let (pos, dur, paused, _title) = if let Some(m) = mpv {
+        (
+            m.get_property::<f64>("time-pos").unwrap_or(0.0),
+            m.get_property::<f64>("duration").unwrap_or(0.0),
+            m.get_property::<bool>("pause").unwrap_or(false),
+            m.get_property::<String>("media-title").unwrap_or_default(),
+        )
+    } else {
+        (0.0, 0.0, false, String::new())
+    };
+    STATE.with(|s| s.borrow_mut().paused = paused);
+
+    let cy = (bar_f.top + bar_f.bottom) / 2.0;
+    let mut x = bar_f.left + 12.0;
+
+    // サムネイル（WIC デコード結果。あれば左端に「アートワーク」として）。
     if let Some(bmp) = &bitmap {
         let size = bmp.GetSize();
         let th = (BAR_H - 28) as f32;
@@ -459,10 +494,10 @@ unsafe fn render() {
             th * 16.0 / 9.0
         };
         let dst = D2D_RECT_F {
-            left: bar_f.left + 8.0,
-            top: bar_f.top + 6.0,
-            right: bar_f.left + 8.0 + tw,
-            bottom: bar_f.top + 6.0 + th,
+            left: x,
+            top: cy - th / 2.0,
+            right: x + tw,
+            bottom: cy + th / 2.0,
         };
         dc_rt.DrawBitmap(
             bmp,
@@ -471,49 +506,160 @@ unsafe fn render() {
             windows::Win32::Graphics::Direct2D::D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
             None,
         );
-        text_left = dst.right + 14.0;
+        x = dst.right + 14.0;
     }
 
-    // 日本語テキスト（DirectWrite）。
-    if let Ok(text_brush) = dc_rt.CreateSolidColorBrush(
+    // 白ブラシ（グリフ/ノブ/時間テキスト）。
+    let white = dc_rt
+        .CreateSolidColorBrush(
+            &D2D1_COLOR_F {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            },
+            None,
+        )
+        .ok();
+
+    // 再生/一時停止ボタン（DirectWrite グリフ）。
+    let bs = 36.0;
+    let btn_f = D2D_RECT_F {
+        left: x,
+        top: cy - bs / 2.0,
+        right: x + bs,
+        bottom: cy + bs / 2.0,
+    };
+    if let Some(b) = &white {
+        let glyph: Vec<u16> = (if paused { "▶" } else { "⏸" }).encode_utf16().collect();
+        let gr = D2D_RECT_F {
+            left: btn_f.left + 4.0,
+            top: btn_f.top + 2.0,
+            right: btn_f.right,
+            bottom: btn_f.bottom,
+        };
+        dc_rt.DrawText(
+            &glyph,
+            &text_format,
+            &gr,
+            b,
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
+    }
+    x = btn_f.right + 16.0;
+
+    // シークバー: トラック → 進捗 → ノブ。右端に時間テキスト分を確保。
+    let time_str: Vec<u16> = format!("{} / {}", fmt_time(pos), fmt_time(dur))
+        .encode_utf16()
+        .collect();
+    let time_w = 160.0;
+    let seek_l = x;
+    let seek_r = (bar_f.right - 16.0 - time_w).max(seek_l + 24.0);
+    let track_h = 6.0;
+    let frac = if dur > 0.0 {
+        (pos / dur).clamp(0.0, 1.0) as f32
+    } else {
+        0.0
+    };
+    let knob_x = seek_l + (seek_r - seek_l) * frac;
+    if let Ok(track_brush) = dc_rt.CreateSolidColorBrush(
         &D2D1_COLOR_F {
-            r: 1.0,
-            g: 1.0,
+            r: 0.45,
+            g: 0.45,
+            b: 0.5,
+            a: 0.9,
+        },
+        None,
+    ) {
+        dc_rt.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F {
+                    left: seek_l,
+                    top: cy - track_h / 2.0,
+                    right: seek_r,
+                    bottom: cy + track_h / 2.0,
+                },
+                radiusX: 3.0,
+                radiusY: 3.0,
+            },
+            &track_brush,
+        );
+    }
+    if let Ok(prog_brush) = dc_rt.CreateSolidColorBrush(
+        &D2D1_COLOR_F {
+            r: 0.30,
+            g: 0.60,
             b: 1.0,
             a: 1.0,
         },
         None,
     ) {
+        dc_rt.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F {
+                    left: seek_l,
+                    top: cy - track_h / 2.0,
+                    right: knob_x.max(seek_l),
+                    bottom: cy + track_h / 2.0,
+                },
+                radiusX: 3.0,
+                radiusY: 3.0,
+            },
+            &prog_brush,
+        );
+    }
+    if let Some(b) = &white {
+        dc_rt.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: D2D_POINT_2F { x: knob_x, y: cy },
+                radiusX: 8.0,
+                radiusY: 8.0,
+            },
+            b,
+        );
+        // 時間テキスト（右）。
         let layout = D2D_RECT_F {
-            left: text_left,
-            top: bar_f.top + 10.0,
-            right: w as f32 - 20.0,
-            bottom: bar_f.bottom,
+            left: seek_r + 12.0,
+            top: cy - 14.0,
+            right: bar_f.right - 8.0,
+            bottom: cy + 14.0,
         };
-        let line: Vec<u16> = if paused {
-            "⏸ 一時停止中 ｜ 日本語テキスト描画 (DirectWrite) ｜ 帯クリックで再生/一時停止"
-        } else {
-            "▶ 再生中 ｜ 日本語テキスト描画 (DirectWrite) ｜ 帯クリックで再生/一時停止"
-        }
-        .encode_utf16()
-        .collect();
         dc_rt.DrawText(
-            &line,
+            &time_str,
             &text_format,
             &layout,
-            &text_brush,
+            b,
             D2D1_DRAW_TEXT_OPTIONS_NONE,
             DWRITE_MEASURING_MODE_NATURAL,
         );
-        let _ = w!("");
     }
+
+    // 入力用にボタン/シーク矩形を保存（オーバーレイクライアント座標）。
+    STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        s.btn = RECT {
+            left: btn_f.left as i32,
+            top: btn_f.top as i32,
+            right: btn_f.right as i32,
+            bottom: btn_f.bottom as i32,
+        };
+        s.seek = RECT {
+            left: seek_l as i32,
+            top: (cy - 12.0) as i32,
+            right: seek_r as i32,
+            bottom: (cy + 12.0) as i32,
+        };
+    });
+    let _ = w!("");
 
     let _ = dc_rt.EndDraw(None, None);
 
     // 検証: 帯中心のピクセル(BGRA premultiplied)を 1 回だけ読み出してログ。
     STATE.with(|s| {
         let mut s = s.borrow_mut();
-        if !s.diag_done && dib_bits != 0 {
+        s.frames = s.frames.saturating_add(1);
+        if s.frames == 2 && dib_bits != 0 {
             let px = (w / 2).clamp(0, w - 1);
             let py = ((bar.top + h) / 2).clamp(0, h - 1);
             let off = ((py * w + px) * 4) as usize;
@@ -523,7 +669,14 @@ unsafe fn render() {
             let r = *p.add(off + 2);
             let a = *p.add(off + 3);
             eprintln!("[d2d] 帯中心ピクセル BGRA=({b},{g},{r},{a})  alpha>0 なら Direct2D 描画成功");
-            s.diag_done = true;
+        }
+        if s.frames == 20 {
+            if let Some(m) = s.mpv {
+                let pos = m.get_property::<f64>("time-pos").unwrap_or(-1.0);
+                let dur = m.get_property::<f64>("duration").unwrap_or(-1.0);
+                let pause = m.get_property::<bool>("pause").unwrap_or(false);
+                eprintln!("[d2d] mpv state(再生中): time-pos={pos:.2} duration={dur:.2} pause={pause}");
+            }
         }
     });
 
@@ -622,8 +775,7 @@ unsafe extern "system" fn overlay_wndproc(
 ) -> LRESULT {
     use windows::Win32::Graphics::Gdi::ScreenToClient;
     use windows::Win32::UI::WindowsAndMessaging::{
-        DefWindowProcW, GetWindowLongPtrW, GWLP_USERDATA, HTCLIENT, HTTRANSPARENT, WM_LBUTTONDOWN,
-        WM_NCHITTEST,
+        DefWindowProcW, HTCLIENT, HTTRANSPARENT, WM_LBUTTONDOWN, WM_NCHITTEST,
     };
     match msg {
         WM_NCHITTEST => {
@@ -642,15 +794,30 @@ unsafe extern "system" fn overlay_wndproc(
             }
         }
         WM_LBUTTONDOWN => {
-            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Mpv;
-            if !ptr.is_null() {
-                let mpv = &*ptr;
-                let paused = STATE.with(|s| {
-                    let mut s = s.borrow_mut();
-                    s.paused = !s.paused;
-                    s.paused
-                });
-                let _ = mpv.set_property("pause", paused);
+            // lparam はオーバーレイのクライアント座標（=描画座標）。
+            let cx = (lparam.0 & 0xFFFF) as i16 as i32;
+            let cy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let (mpv, btn, seek) = STATE.with(|s| {
+                let s = s.borrow();
+                (s.mpv, s.btn, s.seek)
+            });
+            if let Some(mpv) = mpv {
+                let hit = |r: &RECT| cx >= r.left && cx < r.right && cy >= r.top && cy < r.bottom;
+                if hit(&btn) {
+                    // 再生/一時停止トグル。
+                    let paused = STATE.with(|s| {
+                        let mut s = s.borrow_mut();
+                        s.paused = !s.paused;
+                        s.paused
+                    });
+                    let _ = mpv.set_property("pause", paused);
+                } else if hit(&seek) && seek.right > seek.left {
+                    // シークバークリック位置へ絶対シーク。
+                    let frac =
+                        ((cx - seek.left) as f64 / (seek.right - seek.left) as f64).clamp(0.0, 1.0);
+                    let pct = format!("{:.3}", frac * 100.0);
+                    let _ = mpv.command("seek", &[pct.as_str(), "absolute-percent"]);
+                }
                 render();
             }
             LRESULT(0)
