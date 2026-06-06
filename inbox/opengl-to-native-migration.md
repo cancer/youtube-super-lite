@@ -78,9 +78,16 @@
     シークバー(トラック/進捗/ノブ)・時間表示(mm:ss/mm:ss)を描画。WM_LBUTTONDOWN でボタン=pause トグル／
     シークバー=絶対シーク(`seek <pct> absolute-percent`)に振り分け（hit-test 矩形を render で保存）。
     実測: `time-pos=3.80 duration=4.87 pause=false`（ライブ取得・前進を確認）、帯ピクセル alpha>0。
-  - 残り P3 本体（数週規模）: URL欄+IME(DirectWrite/TSF)、タイトル/その他コントロール、
-    一覧系のサムネグリッド仮想化（image_cache→WICデコード）、チャット左右分割。
-    Controller(P0) を駆動する実フロントエンド(ネイティブ版エントリ)に統合して順次移植。
+  - **ネイティブ版エントリ骨組み** ✅ **完了**: `src/native_app.rs` + `--native` フラグ。
+    winit ウィンドウの HWND を `Player::new_embedded`(wid/D3D11) に渡し、`Controller`(P0) を
+    そのまま駆動する実フロントエンド。OpenGL を一切作らない。キーボード操作(space/矢印)、
+    各種 poll(認証/チャット/おすすめ/登録/履歴/再生リスト/解決)、GPU監視を配線。
+    あわせて `Player` を `Option<GlBackend>` 化し GL版/埋め込み版を一本化、`Controller::new` を新設。
+    実測: `--native` 起動で `VO: [gpu-next] 1280x720`(D3D11)・再生時間前進・正常終了。egui版は無変更。
+    （probe の D2D オーバーレイ統合・実 UI 移植は後続）。
+  - 残り P3 本体（数週規模）: ネイティブ版へ D2D 透過オーバーレイ(P3a/b)を統合してコントローラ表示、
+    URL欄+IME(DirectWrite/TSF)、一覧系のサムネグリッド仮想化（image_cache→WICデコード）、
+    チャット左右分割。すべて `Controller` を駆動する形で順次移植。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 
