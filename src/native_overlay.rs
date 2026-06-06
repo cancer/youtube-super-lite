@@ -11,6 +11,7 @@
 #![cfg(windows)]
 
 use anyhow::Result;
+use std::cell::RefCell;
 
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
@@ -38,13 +39,40 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetClientRect, LoadCursorW, RegisterClassW, ShowWindow,
-    UpdateLayeredWindow, IDC_ARROW, SW_SHOWNOACTIVATE, ULW_ALPHA, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
+    UpdateLayeredWindow, IDC_ARROW, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WNDCLASSW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 use crate::player::Player;
 
 const BAR_H: i32 = 72;
+
+/// オーバーレイのクリックで発生する操作（NativeApp が Player に適用する）。
+#[derive(Clone, Copy)]
+pub enum OverlayAction {
+    /// 再生/一時停止トグル。
+    TogglePause,
+    /// シーク（0.0..=1.0 の割合）。
+    Seek(f64),
+}
+
+/// wndproc(C コールバック) と描画/NativeApp の橋渡し。UI スレッド単一なので thread_local。
+#[derive(Default)]
+struct OvShared {
+    bar: RECT,
+    btn: RECT,
+    seek: RECT,
+    pending: Option<OverlayAction>,
+}
+
+thread_local! {
+    static OV_STATE: RefCell<OvShared> = RefCell::new(OvShared::default());
+}
+
+#[inline]
+fn in_rect(r: &RECT, x: i32, y: i32) -> bool {
+    x >= r.left && x < r.right && y >= r.top && y < r.bottom
+}
 
 /// 親ウィンドウに重ねる透過 2D オーバーレイ。
 pub struct Overlay {
@@ -77,7 +105,7 @@ impl Overlay {
             let _ = RegisterClassW(&wc);
 
             let hwnd = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+                WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
                 class_name,
                 w!("overlay"),
                 WS_POPUP | WS_VISIBLE,
@@ -171,6 +199,18 @@ impl Overlay {
         self.dib_h = h;
     }
 
+    /// クリックで溜まった操作を取り出す（NativeApp が Player に適用する）。
+    pub fn take_action(&self) -> Option<OverlayAction> {
+        OV_STATE.with(|s| s.borrow_mut().pending.take())
+    }
+
+    /// 表示/非表示を切り替える（自動非表示用）。
+    pub fn set_visible(&self, visible: bool) {
+        unsafe {
+            let _ = ShowWindow(self.hwnd, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
+        }
+    }
+
     /// 親のクライアント領域に合わせてコントローラを Direct2D で描画し、ULW で合成する。
     pub fn render(&mut self, player: &Player, parent: HWND) {
         unsafe {
@@ -226,6 +266,12 @@ impl Overlay {
 
             // 再生/一時停止グリフ。
             let bs = 36.0;
+            let btn_rect = RECT {
+                left: x as i32,
+                top: (cy - bs / 2.0) as i32,
+                right: (x + bs) as i32,
+                bottom: (cy + bs / 2.0) as i32,
+            };
             if let Some(b) = &white {
                 let glyph: Vec<u16> = (if paused { "▶" } else { "⏸" }).encode_utf16().collect();
                 let gr = D2D_RECT_F {
@@ -252,6 +298,12 @@ impl Overlay {
             let time_w = 160.0;
             let seek_l = x;
             let seek_r = (bar_f.right - 16.0 - time_w).max(seek_l + 24.0);
+            let seek_rect = RECT {
+                left: seek_l as i32,
+                top: (cy - 12.0) as i32,
+                right: seek_r as i32,
+                bottom: (cy + 12.0) as i32,
+            };
             let track_h = 6.0;
             let frac = if dur > 0.0 {
                 (pos / dur).clamp(0.0, 1.0) as f32
@@ -315,6 +367,20 @@ impl Overlay {
             }
 
             let _ = dc_rt.EndDraw(None, None);
+
+            // ヒット判定用の矩形を wndproc / NativeApp と共有する。
+            let bar_rect = RECT {
+                left: bar_f.left as i32,
+                top: bar_f.top as i32,
+                right: bar_f.right as i32,
+                bottom: bar_f.bottom as i32,
+            };
+            OV_STATE.with(|s| {
+                let mut s = s.borrow_mut();
+                s.bar = bar_rect;
+                s.btn = btn_rect;
+                s.seek = seek_rect;
+            });
 
             // ULW で per-pixel alpha 合成。位置は親のクライアント原点（スクリーン座標）。
             let mut origin = POINT { x: 0, y: 0 };
@@ -384,5 +450,41 @@ unsafe extern "system" fn overlay_wndproc(
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
-    DefWindowProcW(hwnd, msg, wparam, lparam)
+    use windows::Win32::Foundation::LRESULT;
+    use windows::Win32::Graphics::Gdi::ScreenToClient;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HTCLIENT, HTTRANSPARENT, WM_LBUTTONDOWN, WM_NCHITTEST,
+    };
+    match msg {
+        // 入力振り分け: コントローラ帯の中だけ overlay が受け取り、それ以外は下の動画へ透過。
+        WM_NCHITTEST => {
+            let sx = (lparam.0 & 0xFFFF) as i16 as i32;
+            let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let mut pt = POINT { x: sx, y: sy };
+            let _ = ScreenToClient(hwnd, &mut pt);
+            let in_bar = OV_STATE.with(|s| in_rect(&s.borrow().bar, pt.x, pt.y));
+            if in_bar {
+                LRESULT(HTCLIENT as isize)
+            } else {
+                LRESULT(HTTRANSPARENT as isize)
+            }
+        }
+        // 帯クリック: ボタン=再生/一時停止、シークバー=絶対シーク。
+        WM_LBUTTONDOWN => {
+            let x = (lparam.0 & 0xFFFF) as i16 as i32;
+            let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            OV_STATE.with(|s| {
+                let mut s = s.borrow_mut();
+                if in_rect(&s.btn, x, y) {
+                    s.pending = Some(OverlayAction::TogglePause);
+                } else if s.seek.right > s.seek.left && in_rect(&s.seek, x, y) {
+                    let frac = ((x - s.seek.left) as f64 / (s.seek.right - s.seek.left) as f64)
+                        .clamp(0.0, 1.0);
+                    s.pending = Some(OverlayAction::Seek(frac));
+                }
+            });
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
 }

@@ -92,9 +92,14 @@
     `about_to_wait` で ~10fps 再描画（ControlFlow::WaitUntil）。現段はクリックスルー表示専用
     （操作はキーボード）。実測（画面キャプチャ）: 埋め込み映像の上にコントローラが重なり
     「00:02 / 00:03」とシークバー進捗がライブ表示されることを確認。OpenGL 不使用。
-  - 残り P3 本体（数週規模）: オーバーレイの入力振り分け（クリックで pause/seek）と自動非表示、
-    URL欄+IME(DirectWrite/TSF)、一覧系のサムネグリッド仮想化（image_cache→WICデコード）、
-    チャット左右分割。すべて `Controller` を駆動する形で順次移植。
+  - **オーバーレイ入力振り分け＋自動非表示** ✅ **完了**: オーバーレイのクリックスルーをやめ、
+    WM_NCHITTEST で帯のみ受領（他は HTTRANSPARENT で動画へ透過）。WM_LBUTTONDOWN を
+    ボタン=pause トグル / シークバー=絶対シークに振り分け、`OverlayAction` を thread_local 経由で
+    NativeApp に渡し Player に適用。NativeApp は GetCursorPos で活動を監視し 3 秒無操作で
+    `set_visible(false)`（カーソル移動/キー操作で再表示）。実測（画面キャプチャ）: 6 秒無操作で
+    コントローラが消えることを確認。クリック振り分けは検証済み probe と同一ロジック。
+  - 残り P3 本体（数週規模）: URL欄+IME(DirectWrite/TSF)、一覧系のサムネグリッド仮想化
+    （image_cache→WICデコード）、チャット左右分割。すべて `Controller` を駆動する形で順次移植。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 

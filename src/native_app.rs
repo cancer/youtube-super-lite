@@ -40,6 +40,13 @@ struct NativeRunning {
     /// 動画に重ねる透過 2D オーバーレイ（コントローラ表示）。Windows のみ。
     #[cfg(windows)]
     overlay: Option<crate::native_overlay::Overlay>,
+    /// 自動非表示用: 最後に操作（マウス移動/キー/クリック）があった時刻と前回カーソル位置。
+    #[cfg(windows)]
+    last_activity: Instant,
+    #[cfg(windows)]
+    last_cursor: (i32, i32),
+    #[cfg(windows)]
+    overlay_visible: bool,
 }
 
 impl NativeApp {
@@ -115,6 +122,12 @@ impl NativeApp {
             core,
             #[cfg(windows)]
             overlay,
+            #[cfg(windows)]
+            last_activity: Instant::now(),
+            #[cfg(windows)]
+            last_cursor: (0, 0),
+            #[cfg(windows)]
+            overlay_visible: true,
         })
     }
 }
@@ -161,13 +174,50 @@ impl ApplicationHandler<UserEvent> for NativeApp {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(_state) = &mut self.state {
-            // オーバーレイを定期再描画してシークバー/時間表示を更新する（~10fps）。
+            // オーバーレイの操作適用・自動非表示・定期再描画（~10fps）。
             #[cfg(windows)]
             {
-                let parent =
-                    windows::Win32::Foundation::HWND(_state.parent_wid as *mut core::ffi::c_void);
-                if let Some(ov) = _state.overlay.as_mut() {
-                    ov.render(&_state.core.player, parent);
+                use crate::native_overlay::OverlayAction;
+                use windows::Win32::Foundation::{HWND, POINT};
+                use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+                // クリックで溜まった操作を Player に適用。
+                let action = _state.overlay.as_ref().and_then(|ov| ov.take_action());
+                if let Some(action) = action {
+                    let player = &_state.core.player;
+                    match action {
+                        OverlayAction::TogglePause => player.set_paused(!player.paused()),
+                        OverlayAction::Seek(frac) => {
+                            let dur = player.duration();
+                            if dur > 0.0 {
+                                player.set_time_pos(frac * dur);
+                            }
+                        }
+                    }
+                    _state.last_activity = Instant::now();
+                }
+
+                // カーソル移動を検出して自動非表示を制御。
+                let mut p = POINT::default();
+                let _ = unsafe { GetCursorPos(&mut p) };
+                if (p.x, p.y) != _state.last_cursor {
+                    _state.last_cursor = (p.x, p.y);
+                    _state.last_activity = Instant::now();
+                }
+                let show = _state.last_activity.elapsed() < Duration::from_secs(3);
+                if show != _state.overlay_visible {
+                    _state.overlay_visible = show;
+                    if let Some(ov) = _state.overlay.as_ref() {
+                        ov.set_visible(show);
+                    }
+                }
+
+                // 表示中のみ再描画（シークバー/時間を更新）。
+                if _state.overlay_visible {
+                    let parent = HWND(_state.parent_wid as *mut core::ffi::c_void);
+                    if let Some(ov) = _state.overlay.as_mut() {
+                        ov.render(&_state.core.player, parent);
+                    }
                 }
             }
             event_loop.set_control_flow(ControlFlow::WaitUntil(
@@ -207,6 +257,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                         player.set_volume((player.volume() - 5.0).max(0.0))
                     }
                     _ => {}
+                }
+                // キー操作も活動として扱い、オーバーレイの自動非表示を遅らせる。
+                #[cfg(windows)]
+                {
+                    state.last_activity = Instant::now();
                 }
             }
             WindowEvent::RedrawRequested => {
