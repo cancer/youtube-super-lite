@@ -211,8 +211,8 @@ impl Overlay {
         }
     }
 
-    /// 親のクライアント領域に合わせてコントローラを Direct2D で描画し、ULW で合成する。
-    pub fn render(&mut self, player: &Player, parent: HWND) {
+    /// 親のクライアント領域に合わせて URL バー＋コントローラを Direct2D で描画し、ULW で合成する。
+    pub fn render(&mut self, player: &Player, parent: HWND, url_input: &str) {
         unsafe {
             let mut rc = RECT::default();
             if GetClientRect(parent, &mut rc).is_err() {
@@ -361,6 +361,50 @@ impl Overlay {
                     &self.text_format,
                     &layout,
                     b,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+            }
+
+            // URL 入力バー（上部）。
+            let top_f = D2D_RECT_F {
+                left: 12.0,
+                top: 10.0,
+                right: w as f32 - 12.0,
+                bottom: 54.0,
+            };
+            if let Ok(b) = dc_rt.CreateSolidColorBrush(&color(0.10, 0.10, 0.12, 0.78), None) {
+                dc_rt.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: top_f,
+                        radiusX: 10.0,
+                        radiusY: 10.0,
+                    },
+                    &b,
+                );
+            }
+            let (txt, col) = if url_input.is_empty() {
+                (
+                    "URL を入力して Enter で再生（英数字キーで入力 / Backspace 削除 / Esc クリア）"
+                        .to_string(),
+                    color(0.62, 0.62, 0.65, 1.0),
+                )
+            } else {
+                (format!("URL: {url_input}"), color(1.0, 1.0, 1.0, 1.0))
+            };
+            if let Ok(b) = dc_rt.CreateSolidColorBrush(&col, None) {
+                let layout = D2D_RECT_F {
+                    left: top_f.left + 14.0,
+                    top: top_f.top + 10.0,
+                    right: top_f.right - 12.0,
+                    bottom: top_f.bottom,
+                };
+                let wtext: Vec<u16> = txt.encode_utf16().collect();
+                dc_rt.DrawText(
+                    &wtext,
+                    &self.text_format,
+                    &layout,
+                    &b,
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );

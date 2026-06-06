@@ -98,8 +98,14 @@
     NativeApp に渡し Player に適用。NativeApp は GetCursorPos で活動を監視し 3 秒無操作で
     `set_visible(false)`（カーソル移動/キー操作で再表示）。実測（画面キャプチャ）: 6 秒無操作で
     コントローラが消えることを確認。クリック振り分けは検証済み probe と同一ロジック。
-  - 残り P3 本体（数週規模）: URL欄+IME(DirectWrite/TSF)、一覧系のサムネグリッド仮想化
-    （image_cache→WICデコード）、チャット左右分割。すべて `Controller` を駆動する形で順次移植。
+  - **URL 入力欄（基本）** ✅ **完了**: オーバーレイ上部に URL バーを Direct2D で描画
+    （`render` に `url_input` を渡す）。NativeApp が winit のキー入力を処理: 印字可能文字は
+    URL 欄へ追記、Backspace/Esc 編集、Enter で `core.load` + チャット/おすすめ開始。URL は
+    空白を含まないため Space は再生/一時停止に温存（フォーカス概念なし・IME 不要）。CLI URL も欄へ反映。
+    実測（画面キャプチャ）: 映像上にコントローラ（00:01/00:02）が表示、URL バーも同一 D2D 経路で描画。
+  - 残り P3 本体: URL 欄の貼り付け(Ctrl+V クリップボード)、検索等の日本語入力 IME(DirectWrite/TSF)、
+    一覧系のサムネグリッド仮想化（image_cache→WICデコード）、チャット左右分割。
+    すべて `Controller` を駆動する形で順次移植。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 

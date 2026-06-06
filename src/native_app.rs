@@ -37,6 +37,9 @@ struct NativeRunning {
     /// 親ウィンドウの Win32 HWND（i64）。オーバーレイの追従描画に使う。
     parent_wid: i64,
     core: Controller,
+    /// URL 入力欄の内容（英数字キーで編集、Enter で再生）。URL は空白を含まないため
+    /// Space は再生/一時停止に温存できる（フォーカス概念は持たない）。
+    url_input: String,
     /// 動画に重ねる透過 2D オーバーレイ（コントローラ表示）。Windows のみ。
     #[cfg(windows)]
     overlay: Option<crate::native_overlay::Overlay>,
@@ -94,8 +97,10 @@ impl NativeApp {
             core.start_silent_login(rt);
         }
 
-        // CLI で URL 指定があれば再生開始。
+        // CLI で URL 指定があれば再生開始（URL 欄にも反映）。
+        let mut url_input = String::new();
         if let Some(url) = self.initial_url.take() {
+            url_input = url.clone();
             core.load(&url);
             if let Some(vid) = auth::extract_video_id(&core.current_url) {
                 core.start_chat(vid.clone());
@@ -120,6 +125,7 @@ impl NativeApp {
             window,
             parent_wid: wid,
             core,
+            url_input,
             #[cfg(windows)]
             overlay,
             #[cfg(windows)]
@@ -215,8 +221,9 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 // 表示中のみ再描画（シークバー/時間を更新）。
                 if _state.overlay_visible {
                     let parent = HWND(_state.parent_wid as *mut core::ffi::c_void);
+                    let url = _state.url_input.clone();
                     if let Some(ov) = _state.overlay.as_mut() {
-                        ov.render(&_state.core.player, parent);
+                        ov.render(&_state.core.player, parent, &url);
                     }
                 }
             }
@@ -245,18 +252,47 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 if !event.state.is_pressed() {
                     return;
                 }
-                let player = &state.core.player;
                 match event.logical_key {
-                    Key::Named(NamedKey::Space) => player.set_paused(!player.paused()),
-                    Key::Named(NamedKey::ArrowRight) => player.seek_relative(5.0),
-                    Key::Named(NamedKey::ArrowLeft) => player.seek_relative(-5.0),
+                    // Space は URL に現れないため再生/一時停止に温存。
+                    Key::Named(NamedKey::Space) => {
+                        let p = &state.core.player;
+                        p.set_paused(!p.paused());
+                    }
+                    Key::Named(NamedKey::ArrowRight) => state.core.player.seek_relative(5.0),
+                    Key::Named(NamedKey::ArrowLeft) => state.core.player.seek_relative(-5.0),
                     Key::Named(NamedKey::ArrowUp) => {
-                        player.set_volume((player.volume() + 5.0).min(130.0))
+                        let p = &state.core.player;
+                        p.set_volume((p.volume() + 5.0).min(130.0));
                     }
                     Key::Named(NamedKey::ArrowDown) => {
-                        player.set_volume((player.volume() - 5.0).max(0.0))
+                        let p = &state.core.player;
+                        p.set_volume((p.volume() - 5.0).max(0.0));
                     }
-                    _ => {}
+                    // --- URL 入力欄の編集 ---
+                    Key::Named(NamedKey::Backspace) => {
+                        state.url_input.pop();
+                    }
+                    Key::Named(NamedKey::Escape) => state.url_input.clear(),
+                    Key::Named(NamedKey::Enter) => {
+                        let url = state.url_input.trim().to_string();
+                        if !url.is_empty() {
+                            state.core.load(&url);
+                            if let Some(vid) = auth::extract_video_id(&state.core.current_url) {
+                                state.core.start_chat(vid.clone());
+                                state.core.start_recommend(vid);
+                            }
+                        }
+                    }
+                    // 印字可能文字は URL 欄へ追記（IME 不要。URL は英数字記号のみ）。
+                    _ => {
+                        if let Some(t) = &event.text {
+                            for ch in t.chars() {
+                                if !ch.is_control() {
+                                    state.url_input.push(ch);
+                                }
+                            }
+                        }
+                    }
                 }
                 // キー操作も活動として扱い、オーバーレイの自動非表示を遅らせる。
                 #[cfg(windows)]
