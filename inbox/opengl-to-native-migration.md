@@ -44,8 +44,16 @@
   redraw は「poll群 → GL描画 → 状態スナップショット → egui で intent 収集 → intent 適用(core 呼び出し)」の構造。
   機能差分なし（debug ビルド・起動・登録チャンネル取得/カード描画を実機確認）。
   次フェーズ着手前のメモ: intent はまだ redraw 内のローカル変数で受け渡している。必要なら後続で `Intent` enum に形式化。
-- **P1 mpv 埋め込み実証**: 素の Win32 窓に mpv(D3D11)で再生。**OpenGL を一切作らずに再生でき、起動時に他アプリが
-  カクつかない**ことを実測（本移行の核の検証）。最悪「mpv 子窓＋透過オーバーレイ窓」でも成立。
+- **P1 mpv 埋め込み実証** ✅ **完了（probe 実装・実測）**: `src/bin/mpv_d3d11_probe.rs` を新設。
+  素の Win32 窓（windows-rs で RegisterClass/CreateWindowEx）の HWND を mpv の `wid` に渡し、
+  `vo=gpu-next` `gpu-api=d3d11` `force-window=yes` で **OpenGL コンテキストを一切作らずに** mpv 自身が
+  D3D11 で埋め込み描画することを確認。mpv ログで実証:
+  `vo/gpu-next/d3d11] Using Direct3D 11 feature level 12_1` / `Device Name: NVIDIA GeForce GTX 1070` /
+  `Using flip-model presentation` / `VO: [gpu-next] 1280x720`（libplacebo）。正常終了 exit 0。
+  → 起動時に nvoglv64.dll(OpenGL ICD) をロードする現行経路を構造的に回避できることを確認。
+  残: 「ブラウザで YouTube 再生中に probe を起動してカクつきが消えるか」の主観確認は実機で要観察
+  （原因＝OpenGL bring-up は排除済み）。`wid` 直接埋め込みで成立したため、子HWND＋透過窓フォールバックは不要。
+  使い方: `cargo run --bin mpv_d3d11_probe [-- <file|url>]`。
 - **P2 2D レイヤ＋合成**: DirectComposition で「動画視覚＋透過2D視覚」。最小コントローラを重ねて自動非表示＋入力振り分け検証。
 - **P3 UI 移植**: コントローラ全部、URL 欄(IME)、タイトル、一覧系（全画面2D＋サムネグリッド。image_cache がバイト供給→WICデコード）、チャット（左右分割）。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。

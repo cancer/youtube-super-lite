@@ -10,6 +10,11 @@
 /err.txt
 /out.txt
 
+# P1 probe (mpv_d3d11_probe) のログ/キャプチャ
+/probe-mpv.log
+/probe.err.txt
+/probe.out.txt
+
 # 秘密情報（OAuth クライアント / トークン）
 /client_secret.json
 /auth.json
