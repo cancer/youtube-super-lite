@@ -2140,14 +2140,8 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
             // サムネ → テキストの縦隙間を詰める（egui 既定の item_spacing.y は広め）。
             ui.spacing_mut().item_spacing.y = 0.0;
 
-            // サムネ画像。サムネのアスペクト比は保証されない（mqdefault は 16:9(320×180)、
-            // 動画自体が 4:3 のものは内側に黒帯が焼き込まれている等）。どんな比でも歪ませず、
-            // 16:9 枠の中央にアスペクト維持で配置し、余った領域は黒帯にする防御的レイアウト。
-            //   - 16:9 画像 → 枠いっぱい
-            //   - 4:3 等 → 左右に黒帯（センタリング）
-            // サムネ URL は InnerTube/レスポンス由来のもの（card.thumbnail）を優先する。
-            // YouTube が用意した URL は sqp で 16:9 にクロップ済みなので比を推測せずに済む。
-            // 無い場合のみ video_id から mqdefault(16:9 320×180) を組み立てる。
+            // サムネ URL は InnerTube/レスポンス由来のもの（card.thumbnail）を優先。
+            // 無い場合のみ video_id から mqdefault を組み立てる。
             let thumb_url = if card.thumbnail.is_empty() {
                 format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", card.video_id)
             } else {
@@ -2156,20 +2150,42 @@ fn draw_video_card(ui: &mut egui::Ui, card: &GridCard, w: f32) -> Option<String>
             // 16:9 フレームを確保（cursor もこの分だけ進む）。
             let (frame_rect, _) =
                 ui.allocate_exact_size(egui::vec2(w, thumb_h), egui::Sense::hover());
-            // 黒背景（足りない領域がそのまま黒帯になる）。
+            // ロード中・失敗時の保険として黒背景。
             ui.painter()
                 .rect_filled(frame_rect, 8.0, egui::Color32::BLACK);
-            // 実画像をアスペクト維持でフレーム内にセンタリング描画。
-            let image = egui::Image::new(thumb_url)
-                .maintain_aspect_ratio(true)
-                .rounding(8.0);
-            // ロード済みなら実比から内接サイズを得てセンタリング。未ロード時はフレーム全体
-            // （paint_at がローディングスピナーを中央に出す）。
-            let thumb_rect = image
-                .load_and_calc_size(ui, frame_rect.size())
-                .map(|sz| egui::Rect::from_center_size(frame_rect.center(), sz))
-                .unwrap_or(frame_rect);
-            image.paint_at(ui, thumb_rect);
+
+            // cover 配置: 実画像の中央を 16:9 にクロップして枠いっぱいに描く（歪ませない）。
+            // サムネのアスペクト比は一定しない（フィードは 480×360=4:3、しかも中身は16:9で
+            // 上下に黒帯が焼き込まれている。mqdefault は 320×180=16:9）。「枠内センタリング＋
+            // 黒帯」だと 4:3 ファイルが左右に縮み、さらに焼き込み上下帯と合わせて絵が小さくなる。
+            // 代わりに中央クロップで埋めれば、4:3 は上下（＝焼き込み帯）を切って16:9で埋まり、
+            // 16:9 はそのまま埋まる。uv は実比から動的に計算する。
+            let frame_aspect = w / thumb_h; // = 16/9
+            let uv = match egui::Image::new(thumb_url.clone())
+                .load_for_size(ui.ctx(), frame_rect.size())
+                .ok()
+                .and_then(|p| p.size())
+            {
+                Some(sz) if sz.x > 0.0 && sz.y > 0.0 => {
+                    let ia = sz.x / sz.y;
+                    if ia < frame_aspect {
+                        // 縦長（4:3 等）→ 上下をクロップ
+                        let m = (1.0 - ia / frame_aspect) / 2.0;
+                        egui::Rect::from_min_max(egui::pos2(0.0, m), egui::pos2(1.0, 1.0 - m))
+                    } else {
+                        // 横長 → 左右をクロップ
+                        let m = (1.0 - frame_aspect / ia) / 2.0;
+                        egui::Rect::from_min_max(egui::pos2(m, 0.0), egui::pos2(1.0 - m, 1.0))
+                    }
+                }
+                // 未ロード / サイズ不明はクロップ無し（paint_at が中央にスピナーを出す）。
+                _ => egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            };
+            egui::Image::new(thumb_url)
+                .uv(uv)
+                .rounding(8.0)
+                .paint_at(ui, frame_rect);
+            let thumb_rect = frame_rect;
 
             // 再生時間バッジ（サムネ右下に重ね描き）。
             if !card.duration.is_empty() {
