@@ -16,9 +16,11 @@ Rust 製の YouTube プレーヤー（Windows / macOS）。
 | 高評価 | ログイン中ユーザーで `videos.rate` を呼んで高評価を付ける | OAuth |
 | ライブチャット | InnerTube `get_live_chat` 経由でメッセージを取得し動画の右側にサイドパネル表示 | 不要 |
 | メンバーシップスタンプ | カスタム絵文字を YouTube CDN から動的に取得してインライン画像描画 | 不要 |
-| おすすめ動画 | ウォッチページの `ytInitialData.secondaryResults` から関連動画一覧をオーバーレイ表示 | 不要 |
-| 登録チャンネル新着 | Data API v3 で登録チャンネル一覧を取り、各チャンネルの RSS フィードから新着動画を集約 | OAuth |
+| おすすめ動画 | ウォッチページの `ytInitialData.secondaryResults` から関連動画一覧をカードグリッドで表示 | 不要 |
+| 登録チャンネル | InnerTube `FEsubscriptions` で全登録チャンネルの新着をカードグリッド表示。左に登録チャンネル一覧（Data API `subscriptions.list`）、選択でそのチャンネルのアップロード一覧に絞り込み | OAuth |
+| 再生履歴 | InnerTube `FEhistory`（TVHTML5 + OAuth）から視聴履歴をカードグリッド表示 | OAuth |
 | 自分の再生リスト | Data API v3 `playlists.list?mine=true` → `playlistItems.list` で 2 段階オーバーレイ表示 | OAuth |
+| 画像キャッシュ | サムネ・チャンネルアイコン・カスタム絵文字を自前 `BytesLoader` で取得し、メモリ + 永続ディスクキャッシュ（同時取得数制限つき） | 不要 |
 
 ## アーキテクチャ
 
@@ -27,15 +29,16 @@ Rust 製の YouTube プレーヤー（Windows / macOS）。
   ├ player::Player          — libmpv ラッパー。動画を内部 FBO/テクスチャに描画
   ├ gl_quad::FullscreenQuad — テクスチャを画面に描画するクワッド
   ├ egui_glow::EguiGlow     — UI 描画
-  └ 各機能モジュール（chat / recommend / subscriptions / playlist / resolve / auth）
+  ├ image_cache::DiskImageCache — 画像の永続キャッシュ（egui の BytesLoader 実装）
+  └ 各機能モジュール（chat / recommend / subscriptions / playlist / history / resolve / auth / mark_watched）
 ```
 
-- 動画は `Player` 内部のテクスチャに描画され、UI 層はそのテクスチャを背景として配置する分離設計。将来 UI バックエンドを差し替える際の負債軽減のため。
+- 動画は `Player` 内部のテクスチャに描画され、UI 層はそのテクスチャを背景として配置する分離設計。
 - mpv は `Box::leak` で `'static` 化し、`RenderContext<'static>` の自己参照を回避。
-- すべての I/O（API 呼び出し・yt-dlp 解決・チャットポーリング）はバックグラウンドスレッドで実行し、結果は `mpsc::channel` でメインスレッドに送信される。
+- すべての I/O（API 呼び出し・yt-dlp 解決・チャットポーリング・画像取得）はバックグラウンドスレッドで実行し、結果は `mpsc::channel` でメインスレッドに送信される。
 - egui のクロージャ内では `egui_glow` が `&mut self` として借用されているため、UI イベントは intent flag (`like_clicked` 等) を立てるだけにし、実際の処理は `egui_glow.run` の戻り後に実行。
 
-詳細な設計判断（UI スタック選定の背景・配布形態への影響等）は [CLAUDE.md](CLAUDE.md) を参照。
+> **今後の計画**: 現在の描画は mpv の OpenGL Render API ＋ egui を単一 GL コンテキストで合成している。起動時の OpenGL ドライバ bring-up が他アプリの GPU 再生を一瞬妨げる問題があり、これを解消する「mpv 埋め込み(D3D11/Metal/Vulkan) + 2D UI」への移行を検討中。詳細は [inbox/](inbox/) を参照。
 
 ## 必要環境
 
@@ -128,13 +131,14 @@ youtube-super-lite [OPTIONS] [URL]
 
 ### 操作
 - 動画は左側に表示。チャット表示中は動画を縮小して右側にチャットパネル（幅 320 dp）を並べる。
-- ウィンドウ下部のコントロールで **再生/一時停止・シーク・音量** を操作。
-- 上部に **🔑 YouTube ログイン** / **👍 高評価** / **💬 チャット表示・非表示** / **📋 おすすめ** / **📃 再生リスト** / **📺 新着** ボタン。
+- ウィンドウ上部に URL 欄とタイトル、下部のコントローラに **再生/一時停止・シーク・音量・ミュート・画質/コーデック選択・👍高評価・💬チャット開閉** を配置。
+- ログイン / おすすめ / 登録チャンネル / 再生リスト / 履歴 などのオーバーレイを開閉できる。
+- 動画一覧（おすすめ・登録チャンネル新着・履歴・チャンネルのアップロード）は 16:9 サムネのカードグリッドで表示。登録チャンネルはカードをクリックで再生。
 - キーボードショートカット（URL 欄に入力中は無効）:
   - `Space` 再生/一時停止
   - `←` / `→` 5秒シーク
   - `↑` / `↓` 音量 ±5
-  - `Esc` 開いているオーバーレイ（おすすめ・再生リスト・新着）を閉じる
+  - `Esc` 開いているオーバーレイを閉じる
 - 約3秒間マウス/キー操作がないと、URL欄・コントロール・マウスカーソルを自動的に隠す（動かすと再表示）。チャットパネルは恒常表示。
 
 ## 開発者向けツール (`--enable-dev-tools`)
@@ -152,6 +156,7 @@ youtube-super-lite [OPTIONS] [URL]
 | `GET` | `/screenshot` | `image/png` | 現在の back buffer を PNG で返す（物理ピクセル解像度、HiDPI ではウィンドウサイズの 2 倍） |
 | `POST` | `/action/<name>` | `text/plain` | UI 操作の intent flag を立てる（マウス/キー操作の代替）。`<name>` が既知なら `200 ok`、未知なら `400 unknown action: ...` |
 | `POST` | `/click?x=<px>&y=<px>` | `text/plain` | 指定座標（`/screenshot` と同じ物理ピクセル）に左クリックを合成注入。動画クリックでの再生/一時停止やボタン操作の検証に使える |
+| `POST` | `/type` (body=text, `?enter=1`) | `text/plain` | フォーカス中のウィジェット（URL欄等）へテキストを貼り付け、`enter=1` なら Enter を送る |
 
 スクショは egui の描画後・`swap_buffers` の直前に `glReadPixels` で取得するため、画面に映る内容（動画 + UI + ロード状態オーバーレイ）がそのままバイト列になる。動画未ロード時は中央に「動画を解決中…」「再生準備中…」「読み込み失敗 …」のいずれかが描画されるので、「真っ黒な画像」は実際に画面が黒い状態（つまりアプリの状態異常）を意味する。
 
@@ -161,7 +166,7 @@ youtube-super-lite [OPTIONS] [URL]
 |--------------|------|
 | `toggle_chat` | チャットパネルの表示切り替え |
 | `toggle_recommend` | おすすめ動画オーバーレイの表示切り替え |
-| `toggle_subs` | 登録チャンネル新着オーバーレイの表示切り替え（未取得なら自動取得） |
+| `toggle_subs` | 登録チャンネルオーバーレイの表示切り替え（未取得なら自動取得） |
 | `toggle_playlist` | 再生リストオーバーレイの表示切り替え（未取得なら自動取得） |
 | `toggle_history` | 再生履歴オーバーレイの表示切り替え（未取得なら自動取得） |
 | `play_pause` | 再生 / 一時停止トグル（Space キー相当） |
@@ -201,7 +206,9 @@ ffmpeg（Homebrew 標準ビルド）は DASH demuxer 非対応のため、YouTub
 
 ## 制限事項・今後
 
-- 配布形態は未確定（現状はソースビルド前提）。リリース時は LGPL ビルドの mpv 同梱と `.app` バンドル化が必要（詳細は [CLAUDE.md](CLAUDE.md)）。
+計画中の作業は [inbox/](inbox/) に置く（例: OpenGL 合成からの脱却＝「mpv 埋め込み + 2D UI」移行）。
+
+- 配布形態は未確定（現状はソースビルド前提）。リリース時は LGPL ビルドの mpv 同梱と `.app` バンドル化が必要。
 - 高評価の現在状態表示・トグル（`videos.getRating`）未実装。
 - 検索機能未実装。
 - フルスクリーン切替未実装。
