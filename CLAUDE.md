@@ -61,11 +61,11 @@ youtube-super-lite [OPTIONS] [URL]
   -h, --help          ヘルプを表示
 ```
 
-mpv は既定で `hwdec=auto-safe`（HW デコード）。`--auto-hwdec-fallback` を付けたときだけ
+mpv の `hwdec` は既定のまま（アプリ側で明示設定しない）。`--auto-hwdec-fallback` を付けたときだけ
 [src/gpu_usage.rs](src/gpu_usage.rs) の GPU 使用率監視（PDH `\GPU Engine(*)`、1秒間隔）が動き、
 外部アプリが GPU を食っているときに `hwdec=no`（SW）へ倒す。**既定でオンにしない**こと:
 PDH 走査の負荷と、全プロセス合算の過大カウントによる誤判定で SW デコードに張り付き、
-CPU が重くなる副作用がある（フラグ無しなら HW デコード固定で軽い）。
+CPU が重くなる副作用がある（以前これがフラグ無視で常時起動しており、起動時に重い原因だった）。
 
 Environment variables are not used for app configuration; debugging knobs are CLI flags.
 
