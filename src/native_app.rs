@@ -8,10 +8,11 @@
 
 use anyhow::Result;
 use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
@@ -33,7 +34,12 @@ struct NativeRunning {
     /// ウィンドウは所有権保持のため抱える（drop するとウィンドウが閉じ、mpv の wid も無効になる）。
     #[allow(dead_code)]
     window: Window,
+    /// 親ウィンドウの Win32 HWND（i64）。オーバーレイの追従描画に使う。
+    parent_wid: i64,
     core: Controller,
+    /// 動画に重ねる透過 2D オーバーレイ（コントローラ表示）。Windows のみ。
+    #[cfg(windows)]
+    overlay: Option<crate::native_overlay::Overlay>,
 }
 
 impl NativeApp {
@@ -90,7 +96,26 @@ impl NativeApp {
             }
         }
 
-        Ok(NativeRunning { window, core })
+        // 動画に重ねる透過 2D オーバーレイ（Direct2D コントローラ）。
+        #[cfg(windows)]
+        let overlay = {
+            let parent = windows::Win32::Foundation::HWND(wid as *mut core::ffi::c_void);
+            match crate::native_overlay::Overlay::new(parent) {
+                Ok(o) => Some(o),
+                Err(e) => {
+                    eprintln!("[native] overlay init failed: {e:#}");
+                    None
+                }
+            }
+        };
+
+        Ok(NativeRunning {
+            window,
+            parent_wid: wid,
+            core,
+            #[cfg(windows)]
+            overlay,
+        })
     }
 }
 
@@ -131,6 +156,23 @@ impl ApplicationHandler<UserEvent> for NativeApp {
         // 背景スレッド完了 or mpv 更新で起こされる。結果を取り込む。
         if let Some(state) = &mut self.state {
             state.poll_all();
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(_state) = &mut self.state {
+            // オーバーレイを定期再描画してシークバー/時間表示を更新する（~10fps）。
+            #[cfg(windows)]
+            {
+                let parent =
+                    windows::Win32::Foundation::HWND(_state.parent_wid as *mut core::ffi::c_void);
+                if let Some(ov) = _state.overlay.as_mut() {
+                    ov.render(&_state.core.player, parent);
+                }
+            }
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(100),
+            ));
         }
     }
 

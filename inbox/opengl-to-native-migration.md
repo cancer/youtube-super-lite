@@ -85,7 +85,14 @@
     あわせて `Player` を `Option<GlBackend>` 化し GL版/埋め込み版を一本化、`Controller::new` を新設。
     実測: `--native` 起動で `VO: [gpu-next] 1280x720`(D3D11)・再生時間前進・正常終了。egui版は無変更。
     （probe の D2D オーバーレイ統合・実 UI 移植は後続）。
-  - 残り P3 本体（数週規模）: ネイティブ版へ D2D 透過オーバーレイ(P3a/b)を統合してコントローラ表示、
+  - **D2D オーバーレイのネイティブ統合** ✅ **完了**: `src/native_overlay.rs`(`Overlay`)を新設し
+    NativeApp に統合。winit 親窓(=mpv D3D11)の上に WS_EX_LAYERED 透過窓を重ね、`Player` の
+    再生状態(time-pos/duration/pause)を読んで Direct2D でコントローラ（再生/一時停止グリフ・
+    シークバー・時間表示）を描画、UpdateLayeredWindow(ULW_ALPHA) で per-pixel alpha 合成。
+    `about_to_wait` で ~10fps 再描画（ControlFlow::WaitUntil）。現段はクリックスルー表示専用
+    （操作はキーボード）。実測（画面キャプチャ）: 埋め込み映像の上にコントローラが重なり
+    「00:02 / 00:03」とシークバー進捗がライブ表示されることを確認。OpenGL 不使用。
+  - 残り P3 本体（数週規模）: オーバーレイの入力振り分け（クリックで pause/seek）と自動非表示、
     URL欄+IME(DirectWrite/TSF)、一覧系のサムネグリッド仮想化（image_cache→WICデコード）、
     チャット左右分割。すべて `Controller` を駆動する形で順次移植。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。

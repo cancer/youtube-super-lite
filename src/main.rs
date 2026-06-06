@@ -8,6 +8,7 @@ mod history;
 mod image_cache;
 mod mark_watched;
 mod native_app;
+mod native_overlay;
 mod player;
 mod playlist;
 mod recommend;
