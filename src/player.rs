@@ -51,6 +51,10 @@ impl Player {
         let mpv = Mpv::with_initializer(|init| {
             init.set_property("vo", "libmpv")?;
             init.set_property("ytdl", false)?;
+            // 既定で HW デコードを有効化。mpv 既定は "no"（ソフトデコード）で、4K/1080p では
+            // CPU が重く起動直後から PC 全体がもたつく原因になる。auto-safe は GL レンダ API と
+            // 相性の良い安全な HW デコーダを選び、不可なら自動で SW にフォールバックする。
+            init.set_property("hwdec", "auto-safe")?;
             if verbose {
                 init.set_property("terminal", true)?;
                 init.set_property("msg-level", "all=status")?;
