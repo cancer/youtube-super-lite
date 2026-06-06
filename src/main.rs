@@ -2618,9 +2618,12 @@ impl App {
 
         let (window, gl_config) = display_builder
             .build(event_loop, template, |configs| {
+                // MSAA 無し（num_samples 最小）の構成を選ぶ。動画は mpv が自前 FBO に、UI は
+                // egui が自前 AA で描くため既定フレームバッファの MSAA は使わない。最大サンプルを
+                // 選ぶと起動時に無駄なマルチサンプルバッファを確保し、GPU 確保の山が高くなる。
                 configs
                     .reduce(|acc, c| {
-                        if c.num_samples() > acc.num_samples() {
+                        if c.num_samples() < acc.num_samples() {
                             c
                         } else {
                             acc
