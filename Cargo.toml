@@ -56,4 +56,13 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_LibraryLoader",
     "Win32_Graphics_Gdi",
+    # P3a 描画基盤実証 (src/bin/d2d_overlay_probe.rs): Direct2D + DirectWrite + WIC で
+    # 透過オーバーレイ(per-pixel alpha)に AA矩形・日本語テキスト・JPEGサムネを描く。
+    "Win32_System_Com",
+    "Foundation_Numerics",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Imaging",
+    "Win32_Graphics_Dxgi_Common",
 ] }

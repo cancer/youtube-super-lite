@@ -66,6 +66,15 @@
   製品版は透過 2D を Direct2D + DirectComposition に置換予定（本 probe はレイヤ合成・自動非表示・
   入力振り分けの**モデル検証**が目的）。使い方: `cargo run --bin overlay_probe -- <file|url>`。
 - **P3 UI 移植**: コントローラ全部、URL 欄(IME)、タイトル、一覧系（全画面2D＋サムネグリッド。image_cache がバイト供給→WICデコード）、チャット（左右分割）。
+  - **P3a 描画基盤実証** ✅ **完了**: `src/bin/d2d_overlay_probe.rs`。P2 の GDI 描画を Direct2D に置換し、
+    製品 UI で必要な 2D 描画スタックを実証。透過オーバーレイ(WS_EX_LAYERED + DCRenderTarget を
+    32bpp premultiplied DIB にバインド → UpdateLayeredWindow(ULW_ALPHA) で per-pixel alpha 合成)に:
+    ①Direct2D の AA 角丸矩形 ②DirectWrite の日本語テキスト ③WIC で JPEG をデコード→ID2D1Bitmap 表示、
+    を描画。実測: `WIC: サムネイルをデコードしました` / `帯中心ピクセル BGRA=(255,255,255,255)`(alpha>0=描画成功)。
+    Cargo features 追加: System_Com / Foundation_Numerics / Direct2D(+Common) / DirectWrite / Imaging / Dxgi_Common。
+    使い方: `cargo run --bin d2d_overlay_probe -- <video|url> [thumbnail.jpg]`。
+  - 残り P3 本体（数週規模）: コントローラ全機能、URL欄+IME(DirectWrite/TSF)、一覧系のサムネグリッド仮想化
+    （image_cache→WICデコード）、チャット左右分割。Controller(P0) を駆動する形で順次移植。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 
