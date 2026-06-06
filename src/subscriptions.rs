@@ -30,6 +30,8 @@ pub struct SubVideo {
     pub video_id: String,
     pub title: String,
     pub channel: String,
+    /// チャンネル ID（UC…）。Data API のアイコンと突き合わせる用。取れないこともある。
+    pub channel_id: String,
     /// "mm:ss" など。サムネ右下バッジ用。
     pub duration: String,
     /// 「14万回視聴・17 時間前」など、メタ情報。
@@ -216,6 +218,7 @@ fn extract_videos(v: &Value) -> Result<Vec<SubVideo>> {
                 video_id: video_id.to_string(),
                 title,
                 channel,
+                channel_id: channel_id.to_string(),
                 duration,
                 meta,
                 channel_icon,

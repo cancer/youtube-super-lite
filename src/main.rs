@@ -1280,6 +1280,23 @@ impl Running {
                                         ui.add_space(4.0);
                                     }
 
+                                    // 新着カードのアイコンは Data API のチャンネルリストで突き合わせて
+                                    // 一貫させる。タイルの channel_id は一部にしか無いので、id があれば
+                                    // それを優先し、無ければチャンネル名で引く（フィードの名前は Data API
+                                    // の title と一致する）。どちらも外れたら InnerTube タブ由来にフォールバック。
+                                    let sub_icon_by_id: std::collections::HashMap<&str, &str> =
+                                        sub_channels
+                                            .iter()
+                                            .filter(|c| !c.icon.is_empty())
+                                            .map(|c| (c.channel_id.as_str(), c.icon.as_str()))
+                                            .collect();
+                                    let sub_icon_by_name: std::collections::HashMap<&str, &str> =
+                                        sub_channels
+                                            .iter()
+                                            .filter(|c| !c.icon.is_empty())
+                                            .map(|c| (c.title.as_str(), c.icon.as_str()))
+                                            .collect();
+
                                     let cards: Vec<GridCard> = if channel_visible {
                                         channel_videos
                                             .iter()
@@ -1303,7 +1320,16 @@ impl Running {
                                                 channel: item.channel.clone(),
                                                 duration: item.duration.clone(),
                                                 meta: item.meta.clone(),
-                                                channel_icon: item.channel_icon.clone(),
+                                                channel_icon: sub_icon_by_id
+                                                    .get(item.channel_id.as_str())
+                                                    .or_else(|| {
+                                                        sub_icon_by_name
+                                                            .get(item.channel.as_str())
+                                                    })
+                                                    .map(|s| s.to_string())
+                                                    .unwrap_or_else(|| {
+                                                        item.channel_icon.clone()
+                                                    }),
                                                 thumbnail: item.thumbnail.clone(),
                                             })
                                             .collect()
