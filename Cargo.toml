@@ -65,4 +65,8 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Imaging",
     "Win32_Graphics_Dxgi_Common",
+    # ネイティブ版 URL 欄の貼り付け（Ctrl+V でクリップボードのテキストを取得）。
+    "Win32_System_DataExchange",
+    "Win32_System_Ole",
+    "Win32_System_Memory",
 ] }

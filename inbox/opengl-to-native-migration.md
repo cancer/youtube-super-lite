@@ -103,9 +103,11 @@
     URL 欄へ追記、Backspace/Esc 編集、Enter で `core.load` + チャット/おすすめ開始。URL は
     空白を含まないため Space は再生/一時停止に温存（フォーカス概念なし・IME 不要）。CLI URL も欄へ反映。
     実測（画面キャプチャ）: 映像上にコントローラ（00:01/00:02）が表示、URL バーも同一 D2D 経路で描画。
-  - 残り P3 本体: URL 欄の貼り付け(Ctrl+V クリップボード)、検索等の日本語入力 IME(DirectWrite/TSF)、
-    一覧系のサムネグリッド仮想化（image_cache→WICデコード）、チャット左右分割。
-    すべて `Controller` を駆動する形で順次移植。
+  - **URL 欄の貼り付け(Ctrl+V)** ✅ **完了**: `native_overlay::clipboard_text()` で CF_UNICODETEXT を
+    取得（OpenClipboard/GetClipboardData/GlobalLock）。NativeApp は ModifiersChanged で Ctrl 押下を
+    追跡し、Ctrl+V で URL 欄へ貼り付け。Cargo features 追加: System_DataExchange/Ole/Memory。
+  - 残り P3 本体: 検索等の日本語入力 IME(DirectWrite/TSF)、一覧系のサムネグリッド仮想化
+    （image_cache→WICデコード）、チャット左右分割。すべて `Controller` を駆動する形で順次移植。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 

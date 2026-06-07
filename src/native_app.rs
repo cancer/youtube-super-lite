@@ -40,6 +40,9 @@ struct NativeRunning {
     /// URL 入力欄の内容（英数字キーで編集、Enter で再生）。URL は空白を含まないため
     /// Space は再生/一時停止に温存できる（フォーカス概念は持たない）。
     url_input: String,
+    /// Ctrl 押下状態（Ctrl+V 貼り付け判定用）。
+    #[allow(dead_code)]
+    ctrl: bool,
     /// 動画に重ねる透過 2D オーバーレイ（コントローラ表示）。Windows のみ。
     #[cfg(windows)]
     overlay: Option<crate::native_overlay::Overlay>,
@@ -126,6 +129,7 @@ impl NativeApp {
             parent_wid: wid,
             core,
             url_input,
+            ctrl: false,
             #[cfg(windows)]
             overlay,
             #[cfg(windows)]
@@ -248,9 +252,29 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 self.state = None;
                 event_loop.exit();
             }
+            WindowEvent::ModifiersChanged(m) => {
+                state.ctrl = m.state().control_key();
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 if !event.state.is_pressed() {
                     return;
+                }
+                // Ctrl+V: クリップボードのテキストを URL 欄へ貼り付け。
+                #[cfg(windows)]
+                if state.ctrl {
+                    if let Key::Character(c) = &event.logical_key {
+                        if c.eq_ignore_ascii_case("v") {
+                            if let Some(t) = crate::native_overlay::clipboard_text() {
+                                for ch in t.chars() {
+                                    if !ch.is_control() {
+                                        state.url_input.push(ch);
+                                    }
+                                }
+                            }
+                            state.last_activity = Instant::now();
+                            return;
+                        }
+                    }
                 }
                 match event.logical_key {
                     // Space は URL に現れないため再生/一時停止に温存。

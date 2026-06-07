@@ -74,6 +74,38 @@ fn in_rect(r: &RECT, x: i32, y: i32) -> bool {
     x >= r.left && x < r.right && y >= r.top && y < r.bottom
 }
 
+/// クリップボードの Unicode テキストを取得する（URL 貼り付け用）。
+pub fn clipboard_text() -> Option<String> {
+    use windows::Win32::Foundation::{HANDLE, HGLOBAL};
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, GetClipboardData, OpenClipboard,
+    };
+    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+    use windows::Win32::System::Ole::CF_UNICODETEXT;
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return None;
+        }
+        let result = (|| {
+            let h: HANDLE = GetClipboardData(CF_UNICODETEXT.0 as u32).ok()?;
+            let hglobal = HGLOBAL(h.0);
+            let ptr = GlobalLock(hglobal) as *const u16;
+            if ptr.is_null() {
+                return None;
+            }
+            let mut len = 0usize;
+            while *ptr.add(len) != 0 {
+                len += 1;
+            }
+            let s = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
+            let _ = GlobalUnlock(hglobal);
+            Some(s)
+        })();
+        let _ = CloseClipboard();
+        result
+    }
+}
+
 /// 親ウィンドウに重ねる透過 2D オーバーレイ。
 pub struct Overlay {
     hwnd: HWND,
