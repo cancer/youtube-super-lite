@@ -309,20 +309,30 @@ impl NativeRunning {
         // egui 版と同じく、チャット接続中 or メッセージがある時のみ 💬 を出す。
         let chat_available = !self.core.chat_status.is_empty();
         let chat_open = self.chat_open;
-        let chat_lines: Vec<String> = if chat_open {
+        use crate::native_overlay::ChatSeg;
+        let chat_lines: Vec<Vec<ChatSeg>> = if chat_open {
             self.core
                 .chat_messages
                 .iter()
                 .map(|m| {
-                    let text: String = m
-                        .runs
-                        .iter()
-                        .map(|r| match r {
-                            ChatRun::Text(t) => t.as_str(),
-                            ChatRun::Image { alt } => alt.as_str(),
-                        })
-                        .collect();
-                    format!("{}: {}", m.author, text)
+                    let mut segs: Vec<ChatSeg> = vec![ChatSeg::Text(format!("{}: ", m.author))];
+                    for r in &m.runs {
+                        match r {
+                            // 連続テキストは 1 セグメントにまとめる。
+                            ChatRun::Text(t) => {
+                                if let Some(ChatSeg::Text(last)) = segs.last_mut() {
+                                    last.push_str(t);
+                                } else {
+                                    segs.push(ChatSeg::Text(t.clone()));
+                                }
+                            }
+                            ChatRun::Image { alt, url } => segs.push(ChatSeg::Emoji {
+                                url: url.clone(),
+                                alt: alt.clone(),
+                            }),
+                        }
+                    }
+                    segs
                 })
                 .collect()
         } else {

@@ -63,6 +63,14 @@ pub enum ListTab {
     History,
 }
 
+/// チャット 1 行を構成する描画セグメント（テキスト or カスタム絵文字画像）。
+pub enum ChatSeg {
+    Text(String),
+    /// カスタム絵文字（メンバーシップスタンプ等）。`url` の画像をインライン描画し、
+    /// 未デコード時は `alt` テキストにフォールバックする。
+    Emoji { url: String, alt: String },
+}
+
 /// オーバーレイのクリックで発生する操作（NativeApp が Player/Controller に適用する）。
 #[derive(Clone, Copy)]
 pub enum OverlayAction {
@@ -351,16 +359,26 @@ impl Painter {
         }
     }
 
-    /// 小フォントでのテキスト幅（px）を計測する。
-    unsafe fn measure_s(&self, s: &str) -> f32 {
+    /// 指定フォントでのテキスト幅（px）を計測する。
+    unsafe fn measure(&self, tf: &IDWriteTextFormat, s: &str, fallback_w: f32) -> f32 {
         let wt: Vec<u16> = s.encode_utf16().collect();
-        if let Ok(layout) = self.dw.CreateTextLayout(&wt, &self.tfs, 4096.0, 64.0) {
+        if let Ok(layout) = self.dw.CreateTextLayout(&wt, tf, 8192.0, 64.0) {
             let mut m = DWRITE_TEXT_METRICS::default();
             if layout.GetMetrics(&mut m).is_ok() {
                 return m.width;
             }
         }
-        s.chars().count() as f32 * 9.0
+        s.chars().count() as f32 * fallback_w
+    }
+
+    /// 小フォントでのテキスト幅（px）。
+    unsafe fn measure_s(&self, s: &str) -> f32 {
+        self.measure(&self.tfs, s, 9.0)
+    }
+
+    /// 主フォントでのテキスト幅（px）。
+    unsafe fn measure_main(&self, s: &str) -> f32 {
+        self.measure(&self.tf, s, 12.0)
     }
 
     /// 左端 `x`・縦中心 `cy` に小フォントのフラットなテキストボタンを描き、ヒット矩形を返す。
@@ -603,7 +621,7 @@ impl Overlay {
         is_live: bool,
         chat_available: bool,
         chat_open: bool,
-        chat_lines: &[String],
+        chat_lines: &[Vec<ChatSeg>],
     ) {
         unsafe {
             let mut rc = RECT::default();
@@ -1028,7 +1046,16 @@ impl Overlay {
 
     /// チャットパネル（右側。video-margin-ratio-right で空けた領域に重ねる）。
     /// パネル矩形を hits.chat_panel に保存し、領域内クリックを無視できるようにする。
-    unsafe fn draw_chat(&self, p: &Painter, w: i32, h: i32, chat_lines: &[String], hits: &mut OvShared) {
+    /// 各行はセグメント列を左→右に並べ、カスタム絵文字（メンバーシップスタンプ等）は
+    /// WIC でデコードした画像をインライン描画する（未デコード時は alt テキスト）。
+    unsafe fn draw_chat(
+        &mut self,
+        p: &Painter,
+        w: i32,
+        h: i32,
+        chat_lines: &[Vec<ChatSeg>],
+        hits: &mut OvShared,
+    ) {
         let pw = w as f32 * 0.28;
         let px = w as f32 - pw;
         let ptop = (TOP_H + 4) as f32;
@@ -1051,22 +1078,84 @@ impl Overlay {
             },
             color(0.05, 0.05, 0.07, 0.82),
         );
-        let line_h = 38.0;
+        let line_h = 36.0;
+        let em = 26.0; // 絵文字の表示サイズ。
+        let col = color(0.90, 0.90, 0.95, 1.0);
+        let left = px + 10.0;
+        let right_lim = w as f32 - 10.0;
         let avail = (((pbot - ptop - 12.0) / line_h).floor() as usize).max(1);
         let n = chat_lines.len();
         let start = n.saturating_sub(avail);
-        for (rowi, line) in chat_lines[start..].iter().enumerate() {
+        let dc_rt_clone = self.dc_rt.clone();
+        for (rowi, segs) in chat_lines[start..].iter().enumerate() {
             let y = ptop + 6.0 + rowi as f32 * line_h;
-            p.text(
-                line,
-                D2D_RECT_F {
-                    left: px + 10.0,
-                    top: y,
-                    right: w as f32 - 10.0,
-                    bottom: y + line_h,
-                },
-                color(0.90, 0.90, 0.95, 1.0),
-            );
+            let mut cx = left;
+            for seg in segs {
+                if cx >= right_lim {
+                    break;
+                }
+                match seg {
+                    ChatSeg::Text(t) => {
+                        let tw = p.measure_main(t);
+                        p.text(
+                            t,
+                            D2D_RECT_F {
+                                left: cx,
+                                top: y,
+                                right: (cx + tw + 2.0).min(right_lim),
+                                bottom: y + line_h,
+                            },
+                            col,
+                        );
+                        cx += tw;
+                    }
+                    ChatSeg::Emoji { url, alt } => {
+                        // ディスクキャッシュ済みの絵文字だけ WIC デコードしてキャッシュ。
+                        if !url.is_empty() && !self.thumb_cache.contains_key(url) {
+                            match crate::image_cache::cached_path(url)
+                                .and_then(|p| p.to_str().map(String::from))
+                            {
+                                Some(ps) => {
+                                    if let Ok(bmp) = load_wic_bitmap(&dc_rt_clone, &ps) {
+                                        self.thumb_cache.insert(url.clone(), bmp);
+                                    }
+                                }
+                                None => crate::image_cache::ensure_cached_async(url),
+                            }
+                        }
+                        if let Some(bmp) = self.thumb_cache.get(url) {
+                            let top = y + (line_h - em) / 2.0;
+                            p.rt.DrawBitmap(
+                                bmp,
+                                Some(&D2D_RECT_F {
+                                    left: cx,
+                                    top,
+                                    right: cx + em,
+                                    bottom: top + em,
+                                }),
+                                1.0,
+                                windows::Win32::Graphics::Direct2D::D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                                None,
+                            );
+                            cx += em + 2.0;
+                        } else {
+                            // 未デコードは alt テキストで仮表示（次フレーム以降で画像に置き換わる）。
+                            let tw = p.measure_main(alt);
+                            p.text(
+                                alt,
+                                D2D_RECT_F {
+                                    left: cx,
+                                    top: y,
+                                    right: (cx + tw + 2.0).min(right_lim),
+                                    bottom: y + line_h,
+                                },
+                                col,
+                            );
+                            cx += tw + 2.0;
+                        }
+                    }
+                }
+            }
         }
     }
 

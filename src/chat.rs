@@ -21,8 +21,9 @@ use std::time::Duration;
 #[derive(Clone, Debug)]
 pub enum ChatRun {
     Text(String),
-    /// メンバーシップスタンプ等のカスタム絵文字。ネイティブ版では alt テキストで表示する。
-    Image { alt: String },
+    /// メンバーシップスタンプ等のカスタム絵文字。`url` の画像をインライン描画する
+    /// （未取得時やデコード失敗時は `alt` テキストにフォールバック）。
+    Image { alt: String, url: String },
 }
 
 /// ライブチャットの 1 メッセージ。
@@ -107,7 +108,8 @@ pub fn run_chat_poll(
                     None => break, // チャット終了
                 }
                 // ポーリング間隔を待つ（stop チェックのため小刻みに sleep）。
-                sleep_interruptible(Duration::from_millis(timeout_ms.max(1000)), stop);
+                // YouTube が返す timeoutMs は 5〜10 秒と長く更新が遅いため、1〜2 秒に詰める。
+                sleep_interruptible(Duration::from_millis(timeout_ms.clamp(1000, 2000)), stop);
             }
             Err(e) => {
                 let _ = tx.send(ChatUpdate::Error(e.to_string()));
@@ -465,9 +467,9 @@ fn extract_runs(message: &Value) -> Vec<ChatRun> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            if pick_emoji_image_url(emoji).is_some() {
-                // カスタム絵文字。ネイティブ版は alt テキストで表示する。
-                out.push(ChatRun::Image { alt });
+            if let Some(url) = pick_emoji_image_url(emoji) {
+                // カスタム絵文字。画像 URL を保持してインライン描画する。
+                out.push(ChatRun::Image { alt, url });
             } else if !alt.is_empty() {
                 // 画像 URL が無い場合は shortcut にフォールバック。
                 push_text(&mut out, &alt);
