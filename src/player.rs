@@ -81,6 +81,12 @@ impl Player {
             .command("seek", &[&secs.to_string(), "relative"]);
     }
 
+    /// ライブ配信の先端（最新）へ追いつく。seekable な範囲の 100%（＝ライブ先端）へシークする。
+    /// DVR 窓のあるライブで有効。非 DVR（seekable=false）では mpv が無視する。
+    pub fn seek_to_live(&self) {
+        let _ = self.mpv.command("seek", &["100", "absolute-percent"]);
+    }
+
     /// HW デコードの設定を動的に変更する。`"auto"` で HW 利用、`"no"` で SW 強制。
     /// GPU 使用率監視（gpu_usage）から、使用率が高い時に呼ばれる。
     pub fn set_hwdec(&self, mode: &str) {

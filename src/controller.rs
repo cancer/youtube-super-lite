@@ -31,6 +31,8 @@ pub struct Controller {
     pub player_offset_ms: Arc<AtomicI64>,
     pub backend: String,
     pub load_error: Option<String>,
+    /// 現在の再生がライブ配信か（yt-dlp の is_live）。時間表示↔ライブボタンの切替に使う。
+    pub is_live: bool,
     // --- 認証 / API ---
     pub tokens: Option<auth::Tokens>,
     pub channel: Option<String>,
@@ -102,6 +104,7 @@ impl Controller {
             player_offset_ms: Arc::new(AtomicI64::new(0)),
             backend,
             load_error: None,
+            is_live: false,
             tokens: None,
             channel: None,
             auth_status: "未ログイン".to_string(),
@@ -153,6 +156,7 @@ impl Controller {
         }
         self.current_url = url.clone();
         self.load_error = None;
+        self.is_live = false; // 解決完了（poll_resolve）で確定する。
 
         // ログイン済みなら再生履歴に載せる。CLI 引数経由の起動直後は auto-login が
         // 完了する前にここに来るため tokens=None になりがちで、その場合は
@@ -206,6 +210,7 @@ impl Controller {
             self.resolve_busy = false;
             match update {
                 resolve::ResolveUpdate::Ready(r) => {
+                    self.is_live = r.is_live;
                     self.mpv_loadfile(
                         &r.video_url,
                         r.audio_url.as_deref(),

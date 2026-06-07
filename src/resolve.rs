@@ -36,6 +36,8 @@ pub struct Resolved {
     pub audio_url: Option<String>,
     /// 動画タイトル（取得失敗時は None）。
     pub title: Option<String>,
+    /// ライブ配信か（yt-dlp の is_live）。時間表示を「ライブ最新へ」ボタンに置き換える判定に使う。
+    pub is_live: bool,
 }
 
 /// 背景スレッドからメインスレッドへの通知。
@@ -92,16 +94,19 @@ fn resolve_inner(url: &str, format: &str) -> Result<Resolved> {
         other => other,
     };
 
-    let title = fetch_title(url);
+    let (title, is_live) = fetch_meta(url);
 
     Ok(Resolved {
         video_url,
         audio_url,
         title,
+        is_live,
     })
 }
 
-fn fetch_title(url: &str) -> Option<String> {
+/// 動画のタイトルとライブ判定を 1 回の yt-dlp 呼び出しで取得する。
+/// `--print` を 2 つ渡すと指定順に 1 行ずつ出力される（1 行目=タイトル, 2 行目=is_live）。
+fn fetch_meta(url: &str) -> (Option<String>, bool) {
     let output = ytdlp()
         .args([
             "--no-warnings",
@@ -112,19 +117,27 @@ fn fetch_title(url: &str) -> Option<String> {
             "--skip-download",
             "--print",
             "%(title)s",
+            "--print",
+            "%(is_live)s",
             url,
         ])
-        .output()
-        .ok()?;
+        .output();
+    let Ok(output) = output else {
+        return (None, false);
+    };
     if !output.status.success() {
-        return None;
+        return (None, false);
     }
-    let t = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if t.is_empty() {
-        None
-    } else {
-        Some(t)
-    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    let title = lines
+        .next()
+        .map(str::trim)
+        .filter(|t| !t.is_empty() && *t != "NA")
+        .map(str::to_string);
+    // is_live は "True" / "False" / "NA"（None）で出力される。
+    let is_live = lines.next().map(str::trim) == Some("True");
+    (title, is_live)
 }
 
 /// 指定 URL が YouTube かどうか判定する。

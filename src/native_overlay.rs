@@ -70,6 +70,8 @@ pub enum OverlayAction {
     TogglePause,
     /// シーク（0.0..=1.0 の割合。seekable 時のみ発生）。
     Seek(f64),
+    /// ライブ配信の先端（最新）へ追いつく。
+    LiveEdge,
     /// 音量設定（0.0..=130.0）。
     SetVolume(f64),
     /// ミュートのトグル。
@@ -114,6 +116,8 @@ struct OvShared {
     codec: RECT,
     like: RECT,
     chat: RECT,
+    /// ライブ時に時間表示の代わりに置く「ライブ最新へ」ボタン。
+    live_edge: RECT,
     /// チャットパネル領域（クリックを無視して動画クリック=一時停止に落とさない）。
     chat_panel: RECT,
     /// クリックを捕捉する領域（上部 UI 帯・下部コントローラ帯）。この外側は HTTRANSPARENT に
@@ -204,6 +208,9 @@ fn dispatch_hit(s: &OvShared, x: i32, y: i32) -> Option<OverlayAction> {
     }
     if in_rect(&s.chat, x, y) {
         return Some(ToggleChat);
+    }
+    if in_rect(&s.live_edge, x, y) {
+        return Some(LiveEdge);
     }
     if in_rect(&s.tab_recommend, x, y) {
         return Some(OpenList(ListTab::Recommend));
@@ -591,6 +598,7 @@ impl Overlay {
         has_recommend: bool,
         quality_label: &str,
         codec_label: &str,
+        is_live: bool,
         chat_available: bool,
         chat_open: bool,
         chat_lines: &[String],
@@ -658,6 +666,7 @@ impl Overlay {
                     player,
                     quality_label,
                     codec_label,
+                    is_live,
                     chat_available,
                     chat_open,
                     &mut hits,
@@ -824,6 +833,7 @@ impl Overlay {
         player: &Player,
         quality_label: &str,
         codec_label: &str,
+        is_live: bool,
         chat_available: bool,
         chat_open: bool,
         hits: &mut OvShared,
@@ -912,19 +922,33 @@ impl Overlay {
         hits.btn = r;
         x = r.right + 12;
 
-        let time_str = format!("{} / {}", fmt_time(pos), fmt_time(dur));
-        let tw = p.measure_s(&time_str).ceil() as i32;
-        p.text_s(
-            &time_str,
-            D2D_RECT_F {
-                left: x as f32,
-                top: (cy - 9) as f32,
-                right: (x + tw + 4) as f32,
-                bottom: (cy + 9) as f32,
-            },
-            fg,
-        );
-        x += tw + 16;
+        if is_live {
+            // ライブ配信は時間表示の代わりに「ライブ最新へ」ボタン（クリックで先端へ追いつく）。
+            // 先端付近(>=99%)なら赤点灯、遅れていれば白系（クリックで追いつける合図）。
+            let at_live = !seekable || dur <= 0.0 || (pos / dur) >= 0.99;
+            let col = if at_live {
+                color(1.0, 0.30, 0.30, 1.0)
+            } else {
+                color(0.96, 0.96, 0.98, 1.0)
+            };
+            let r = p.flat(x, cy, "● ライブ", col);
+            hits.live_edge = r;
+            x = r.right + 16;
+        } else {
+            let time_str = format!("{} / {}", fmt_time(pos), fmt_time(dur));
+            let tw = p.measure_s(&time_str).ceil() as i32;
+            p.text_s(
+                &time_str,
+                D2D_RECT_F {
+                    left: x as f32,
+                    top: (cy - 9) as f32,
+                    right: (x + tw + 4) as f32,
+                    bottom: (cy + 9) as f32,
+                },
+                fg,
+            );
+            x += tw + 16;
+        }
 
         let r = p.flat(x, cy, "👍", fg);
         hits.like = r;

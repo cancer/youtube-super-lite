@@ -305,6 +305,7 @@ impl NativeRunning {
         let quality_label = self.core.quality.label();
         let codec_label = self.core.codec.label();
         let has_recommend = !self.core.recommend_items.is_empty();
+        let is_live = self.core.is_live;
         // egui 版と同じく、チャット接続中 or メッセージがある時のみ 💬 を出す。
         let chat_available = !self.core.chat_status.is_empty();
         let chat_open = self.chat_open;
@@ -343,6 +344,7 @@ impl NativeRunning {
                 has_recommend,
                 quality_label,
                 codec_label,
+                is_live,
                 chat_available,
                 chat_open,
                 &chat_lines,
@@ -367,6 +369,7 @@ impl NativeRunning {
                 }
             }
             OverlayAction::SetVolume(v) => self.core.player.set_volume(v.clamp(0.0, 130.0)),
+            OverlayAction::LiveEdge => self.core.player.seek_to_live(),
             OverlayAction::ToggleMute => {
                 let p = &self.core.player;
                 p.set_muted(!p.muted());
