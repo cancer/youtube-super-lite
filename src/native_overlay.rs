@@ -243,8 +243,17 @@ impl Overlay {
         }
     }
 
-    /// 親のクライアント領域に合わせて URL バー＋コントローラを Direct2D で描画し、ULW で合成する。
-    pub fn render(&mut self, player: &Player, parent: HWND, url_input: &str) {
+    /// 親のクライアント領域に合わせて URL バー＋コントローラ（または一覧）を Direct2D で
+    /// 描画し、ULW で合成する。`list_open` 時は全面に一覧（登録チャンネル新着）を描く。
+    pub fn render(
+        &mut self,
+        player: &Player,
+        parent: HWND,
+        url_input: &str,
+        list_open: bool,
+        list_items: &[String],
+        list_sel: usize,
+    ) {
         unsafe {
             let mut rc = RECT::default();
             if GetClientRect(parent, &mut rc).is_err() {
@@ -442,20 +451,137 @@ impl Overlay {
                 );
             }
 
+            // 一覧（登録チャンネル新着）。開いている時は全面パネルでコントローラ等を覆う。
+            if list_open {
+                let panel = D2D_RECT_F {
+                    left: 0.0,
+                    top: 0.0,
+                    right: w as f32,
+                    bottom: h as f32,
+                };
+                if let Ok(b) = dc_rt.CreateSolidColorBrush(&color(0.04, 0.04, 0.06, 0.93), None) {
+                    dc_rt.FillRectangle(&panel, &b);
+                }
+                let textb = dc_rt
+                    .CreateSolidColorBrush(&color(1.0, 1.0, 1.0, 1.0), None)
+                    .ok();
+                let dimb = dc_rt
+                    .CreateSolidColorBrush(&color(0.70, 0.70, 0.75, 1.0), None)
+                    .ok();
+                let selb = dc_rt
+                    .CreateSolidColorBrush(&color(0.20, 0.40, 0.85, 0.85), None)
+                    .ok();
+                if let Some(b) = &textb {
+                    let head: Vec<u16> =
+                        "登録チャンネルの新着  （↑↓ 選択 / Enter 再生 / Tab・Esc 閉じる）"
+                            .encode_utf16()
+                            .collect();
+                    let r = D2D_RECT_F {
+                        left: 24.0,
+                        top: 18.0,
+                        right: w as f32 - 24.0,
+                        bottom: 54.0,
+                    };
+                    dc_rt.DrawText(
+                        &head,
+                        &self.text_format,
+                        &r,
+                        b,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                    );
+                }
+                let row_h = 34.0;
+                let top0 = 64.0;
+                let visible = (((h as f32 - top0 - 16.0) / row_h).floor() as usize).max(1);
+                let first = if list_sel >= visible {
+                    list_sel - visible + 1
+                } else {
+                    0
+                };
+                for (i, item) in list_items.iter().enumerate().skip(first).take(visible) {
+                    let y = top0 + (i - first) as f32 * row_h;
+                    if i == list_sel {
+                        if let Some(b) = &selb {
+                            let rr = D2D_RECT_F {
+                                left: 16.0,
+                                top: y,
+                                right: w as f32 - 16.0,
+                                bottom: y + row_h - 4.0,
+                            };
+                            dc_rt.FillRoundedRectangle(
+                                &D2D1_ROUNDED_RECT {
+                                    rect: rr,
+                                    radiusX: 6.0,
+                                    radiusY: 6.0,
+                                },
+                                b,
+                            );
+                        }
+                    }
+                    let brush = if i == list_sel {
+                        textb.as_ref()
+                    } else {
+                        dimb.as_ref()
+                    };
+                    if let Some(b) = brush {
+                        let tr = D2D_RECT_F {
+                            left: 28.0,
+                            top: y + 4.0,
+                            right: w as f32 - 28.0,
+                            bottom: y + row_h,
+                        };
+                        let wt: Vec<u16> = item.encode_utf16().collect();
+                        dc_rt.DrawText(
+                            &wt,
+                            &self.text_format,
+                            &tr,
+                            b,
+                            D2D1_DRAW_TEXT_OPTIONS_NONE,
+                            DWRITE_MEASURING_MODE_NATURAL,
+                        );
+                    }
+                }
+                if list_items.is_empty() {
+                    if let Some(b) = &dimb {
+                        let r = D2D_RECT_F {
+                            left: 28.0,
+                            top: top0 + 4.0,
+                            right: w as f32 - 28.0,
+                            bottom: top0 + 44.0,
+                        };
+                        let wt: Vec<u16> = "（取得中… ログインが必要です）".encode_utf16().collect();
+                        dc_rt.DrawText(
+                            &wt,
+                            &self.text_format,
+                            &r,
+                            b,
+                            D2D1_DRAW_TEXT_OPTIONS_NONE,
+                            DWRITE_MEASURING_MODE_NATURAL,
+                        );
+                    }
+                }
+            }
+
             let _ = dc_rt.EndDraw(None, None);
 
-            // ヒット判定用の矩形を wndproc / NativeApp と共有する。
-            let bar_rect = RECT {
-                left: bar_f.left as i32,
-                top: bar_f.top as i32,
-                right: bar_f.right as i32,
-                bottom: bar_f.bottom as i32,
-            };
+            // ヒット判定用の矩形を wndproc / NativeApp と共有する。一覧表示中は無効化（透過）。
             OV_STATE.with(|s| {
                 let mut s = s.borrow_mut();
-                s.bar = bar_rect;
-                s.btn = btn_rect;
-                s.seek = seek_rect;
+                if list_open {
+                    s.bar = RECT::default();
+                    s.btn = RECT::default();
+                    s.seek = RECT::default();
+                } else {
+                    s.bar = RECT {
+                        left: bar_f.left as i32,
+                        top: bar_f.top as i32,
+                        right: bar_f.right as i32,
+                        bottom: bar_f.bottom as i32,
+                    };
+                    s.btn = btn_rect;
+                    s.seek = seek_rect;
+                }
             });
 
             // ULW で per-pixel alpha 合成。位置は親のクライアント原点（スクリーン座標）。

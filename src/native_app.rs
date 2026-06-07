@@ -43,6 +43,9 @@ struct NativeRunning {
     /// Ctrl 押下状態（Ctrl+V 貼り付け判定用）。
     #[allow(dead_code)]
     ctrl: bool,
+    /// 登録チャンネル新着の一覧表示中か、および選択位置。
+    list_open: bool,
+    list_sel: usize,
     /// 動画に重ねる透過 2D オーバーレイ（コントローラ表示）。Windows のみ。
     #[cfg(windows)]
     overlay: Option<crate::native_overlay::Overlay>,
@@ -130,6 +133,8 @@ impl NativeApp {
             core,
             url_input,
             ctrl: false,
+            list_open: false,
+            list_sel: 0,
             #[cfg(windows)]
             overlay,
             #[cfg(windows)]
@@ -214,7 +219,8 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     _state.last_cursor = (p.x, p.y);
                     _state.last_activity = Instant::now();
                 }
-                let show = _state.last_activity.elapsed() < Duration::from_secs(3);
+                // 一覧表示中は常に表示。それ以外は 3 秒無操作で自動非表示。
+                let show = _state.list_open || _state.last_activity.elapsed() < Duration::from_secs(3);
                 if show != _state.overlay_visible {
                     _state.overlay_visible = show;
                     if let Some(ov) = _state.overlay.as_ref() {
@@ -222,12 +228,24 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     }
                 }
 
-                // 表示中のみ再描画（シークバー/時間を更新）。
+                // 表示中のみ再描画（シークバー/時間・一覧を更新）。
                 if _state.overlay_visible {
                     let parent = HWND(_state.parent_wid as *mut core::ffi::c_void);
                     let url = _state.url_input.clone();
+                    let list_open = _state.list_open;
+                    let list_sel = _state.list_sel;
+                    let titles: Vec<String> = if list_open {
+                        _state
+                            .core
+                            .sub_feed
+                            .iter()
+                            .map(|v| format!("{}   |   {}", v.title, v.channel))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                     if let Some(ov) = _state.overlay.as_mut() {
-                        ov.render(&_state.core.player, parent, &url);
+                        ov.render(&_state.core.player, parent, &url, list_open, &titles, list_sel);
                     }
                 }
             }
@@ -275,6 +293,57 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                             return;
                         }
                     }
+                }
+                // Tab: 登録チャンネル新着の一覧を開閉。
+                if let Key::Named(NamedKey::Tab) = event.logical_key {
+                    state.list_open = !state.list_open;
+                    if state.list_open {
+                        state.list_sel = 0;
+                        if state.core.sub_feed.is_empty() && !state.core.sub_busy {
+                            state.core.start_subs();
+                        }
+                    }
+                    #[cfg(windows)]
+                    {
+                        state.last_activity = Instant::now();
+                    }
+                    return;
+                }
+                // 一覧表示中はキーをナビゲーションに使う。
+                if state.list_open {
+                    match event.logical_key {
+                        Key::Named(NamedKey::ArrowUp) => {
+                            state.list_sel = state.list_sel.saturating_sub(1);
+                        }
+                        Key::Named(NamedKey::ArrowDown) => {
+                            let n = state.core.sub_feed.len();
+                            if n > 0 {
+                                state.list_sel = (state.list_sel + 1).min(n - 1);
+                            }
+                        }
+                        Key::Named(NamedKey::Enter) => {
+                            if let Some(v) = state.core.sub_feed.get(state.list_sel) {
+                                let url =
+                                    format!("https://www.youtube.com/watch?v={}", v.video_id);
+                                state.list_open = false;
+                                state.url_input = url.clone();
+                                state.core.load(&url);
+                                if let Some(vid) =
+                                    auth::extract_video_id(&state.core.current_url)
+                                {
+                                    state.core.start_chat(vid.clone());
+                                    state.core.start_recommend(vid);
+                                }
+                            }
+                        }
+                        Key::Named(NamedKey::Escape) => state.list_open = false,
+                        _ => {}
+                    }
+                    #[cfg(windows)]
+                    {
+                        state.last_activity = Instant::now();
+                    }
+                    return;
                 }
                 match event.logical_key {
                     // Space は URL に現れないため再生/一時停止に温存。
