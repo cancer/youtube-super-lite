@@ -53,11 +53,14 @@ fn open_in_browser(url: &str) {
     }
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         // `cmd /C start "" <url>` は URL 中の `&`（OAuth URL に多数ある）を cmd が
         // コマンド区切りと解釈して URL が途中で切れてしまう。rundll32 の
         // FileProtocolHandler は URL を単一引数として受け取るため安全に既定ブラウザで開ける。
+        // CREATE_NO_WINDOW: GUI アプリから起動してもコンソール窓を出さない。
         let _ = std::process::Command::new("rundll32")
             .args(["url.dll,FileProtocolHandler", url])
+            .creation_flags(0x0800_0000)
             .spawn();
     }
     #[cfg(target_os = "macos")]
@@ -162,10 +165,14 @@ fn ensure_ytdlp_on_path() {
     let path_sep = if cfg!(windows) { ";" } else { ":" };
 
     // システム PATH 上にあればそのまま使う。
-    if let Ok(output) = std::process::Command::new("which")
-        .arg("yt-dlp")
-        .output()
+    let mut which = std::process::Command::new("which");
+    which.arg("yt-dlp");
+    #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        which.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    if let Ok(output) = which.output() {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout);
             println!("yt-dlp found: {}", path.trim());

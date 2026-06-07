@@ -14,6 +14,19 @@ use std::process::Command;
 use std::sync::mpsc::Sender;
 use std::time::Duration as StdDuration;
 
+/// yt-dlp 用の `Command` を作る。Windows では CREATE_NO_WINDOW を付け、GUI アプリ
+/// （コンソール無し）から起動してもコンソール窓が出ないようにする。
+fn ytdlp() -> Command {
+    let mut cmd = Command::new("yt-dlp");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// 解決済みのストリーム情報。
 #[derive(Clone, Debug)]
 pub struct Resolved {
@@ -45,7 +58,7 @@ pub fn resolve(url: &str, format: &str, tx: &Sender<ResolveUpdate>) {
 }
 
 fn resolve_inner(url: &str, format: &str) -> Result<Resolved> {
-    let output = Command::new("yt-dlp")
+    let output = ytdlp()
         .args(["--no-warnings", "-g", "-f", format, url])
         .output()?;
 
@@ -89,7 +102,7 @@ fn resolve_inner(url: &str, format: &str) -> Result<Resolved> {
 }
 
 fn fetch_title(url: &str) -> Option<String> {
-    let output = Command::new("yt-dlp")
+    let output = ytdlp()
         .args([
             "--no-warnings",
             // Windows(日本語ロケール)の frozen yt-dlp はパイプ出力時に cp932 で出すため、
