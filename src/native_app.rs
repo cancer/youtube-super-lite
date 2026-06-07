@@ -59,6 +59,9 @@ struct NativeRunning {
     list_source: ListSource,
     /// チャット（右パネル）表示中か。
     chat_open: bool,
+    /// アプリ窓がフォーカスを持っているか。失っている間はオーバーレイを隠す
+    /// （他アプリの上にオーバーレイが残らないようにする）。
+    focused: bool,
     /// 動画に重ねる透過 2D オーバーレイ（コントローラ表示）。Windows のみ。
     #[cfg(windows)]
     overlay: Option<crate::native_overlay::Overlay>,
@@ -150,6 +153,7 @@ impl NativeApp {
             list_sel: 0,
             list_source: ListSource::Subs,
             chat_open: false,
+            focused: true,
             #[cfg(windows)]
             overlay,
             #[cfg(windows)]
@@ -410,10 +414,12 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     _state.last_cursor = (p.x, p.y);
                     _state.last_activity = Instant::now();
                 }
-                // 一覧/チャット表示中は常に表示。それ以外は 3 秒無操作で自動非表示。
-                let show = _state.list_open
-                    || _state.chat_open
-                    || _state.last_activity.elapsed() < Duration::from_secs(3);
+                // フォーカスを失っている間は隠す。フォーカスありなら
+                // 一覧/チャット表示中は常に表示、それ以外は 3 秒無操作で自動非表示。
+                let show = _state.focused
+                    && (_state.list_open
+                        || _state.chat_open
+                        || _state.last_activity.elapsed() < Duration::from_secs(3));
                 if show != _state.overlay_visible {
                     _state.overlay_visible = show;
                     if let Some(ov) = _state.overlay.as_ref() {
@@ -448,11 +454,26 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             WindowEvent::ModifiersChanged(m) => {
                 state.ctrl = m.state().control_key();
             }
+            // フォーカスを失ったらオーバーレイを隠す（他アプリの上に残らないように）。
+            WindowEvent::Focused(focused) => {
+                state.focused = focused;
+                #[cfg(windows)]
+                {
+                    if focused {
+                        state.last_activity = Instant::now();
+                    } else {
+                        state.overlay_visible = false;
+                        if let Some(ov) = state.overlay.as_ref() {
+                            ov.set_visible(false);
+                        }
+                    }
+                }
+            }
             // ウィンドウのリサイズ/移動にオーバーレイを即追従させる
             // （モーダルなドラッグループ中は about_to_wait が止まるため、ここで直接再描画）。
             WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
                 #[cfg(windows)]
-                {
+                if state.focused {
                     state.last_activity = Instant::now();
                     state.overlay_visible = true;
                     if let Some(ov) = state.overlay.as_ref() {

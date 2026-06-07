@@ -40,7 +40,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetClientRect, LoadCursorW, RegisterClassW, ShowWindow,
     UpdateLayeredWindow, IDC_ARROW, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WNDCLASSW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_POPUP, WS_VISIBLE,
 };
 
 use crate::player::Player;
@@ -179,8 +179,10 @@ impl Overlay {
             };
             let _ = RegisterClassW(&wc);
 
+            // WS_EX_TOPMOST は付けない（他アプリの上に浮かせない）。所有者(親)に紐づく
+            // オーバーレイとして、親がアクティブな時だけ親の上に表示する。
             let hwnd = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+                WS_EX_LAYERED | WS_EX_NOACTIVATE,
                 class_name,
                 w!("overlay"),
                 WS_POPUP | WS_VISIBLE,
