@@ -1,3 +1,7 @@
+// リリースビルドではコンソールウィンドウを出さない（GUI アプリとしてリンク）。
+// デバッグビルドはログ確認のためコンソールを残す。
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod auth;
 mod chat;
 mod controller;
