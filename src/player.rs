@@ -1,104 +1,22 @@
 //! 動画プレイヤー（libmpv ラッパー）。
 //!
-//! mpv に関する状態（インスタンス・RenderContext・描画先 FBO/テクスチャ）を
-//! すべてこの構造体内に閉じ込める。UI 層からは:
-//!   - `Player::render(w, h)` で動画フレームを内部テクスチャに描画
-//!   - `Player::texture_id()` でそのテクスチャ ID（OpenGL）を取得
-//!   - 残りはプロパティ get/set / loadfile / seek 等の薄いラッパー
-//! を呼ぶ。UI バックエンドを差し替えても Player は変更不要。
+//! mpv を `wid`（ウィンドウハンドル）に埋め込み、`vo=gpu-next` `gpu-api=d3d11` で
+//! mpv 自身が D3D11 にウィンドウへ直接描画する（OpenGL は使わない）。UI 層からは
+//! プロパティ get/set・loadfile・seek 等の薄いラッパーを呼ぶ。
 //!
-//! 設計メモ:
-//!   - mpv は `Box::leak` で `'static` 化し `RenderContext<'static>` を成立させる。
-//!     `RenderContext` が `Mpv` を借用するため自己参照を回避するこの形が必要。
-//!   - 動画はデフォルト FBO ではなく自前 FBO に描画し、UI 層が任意の方法で
-//!     テクスチャを使えるようにする（egui の `PaintCallback`、ネイティブ UI の
-//!     OpenGL レイヤ、シェーダで合成、いずれにも対応可能）。
+//! 設計メモ: mpv はプロセス終了まで生かす運用なので `Box::leak` で `'static` 化する。
 
-use anyhow::{anyhow, bail, Result};
-use glow::HasContext;
-use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
+use anyhow::{anyhow, Result};
 use libmpv2::Mpv;
-use std::ffi::{c_void, CString};
-use std::sync::Arc;
 
-/// 動画プレイヤー。
+/// 動画プレイヤー（mpv を `wid` に D3D11 埋め込み）。
 pub struct Player {
     mpv: &'static Mpv,
-    /// OpenGL 合成バックエンド（egui 版）。`None` の場合は mpv が `wid` 経由で
-    /// D3D11 に自前描画する埋め込みモード（ネイティブ版）で、GL は一切使わない。
-    gl: Option<GlBackend>,
-}
-
-/// mpv の OpenGL Render API で動画を自前 FBO/テクスチャに描く egui 用バックエンド。
-struct GlBackend {
-    render_context: RenderContext<'static>,
-    gl: Arc<glow::Context>,
-    fbo: glow::NativeFramebuffer,
-    texture: glow::NativeTexture,
-    /// 現在の FBO/テクスチャのサイズ。描画要求サイズと異なれば再生成する。
-    size: (i32, i32),
 }
 
 impl Player {
-    /// プレイヤーを初期化する。
-    /// - `gl`: egui_glow と共有する glow::Context（FBO/テクスチャ作成に必要）
-    /// - `gl_display`: mpv の `get_proc_address` に渡す glutin::Display
-    /// - `on_update`: mpv が新フレームを生成したときに呼ばれるコールバック
-    pub fn new<F>(
-        gl: Arc<glow::Context>,
-        gl_display: glutin::display::Display,
-        verbose: bool,
-        on_update: F,
-    ) -> Result<Self>
-    where
-        F: Fn() + Send + 'static,
-    {
-        // mpv 初期化。YouTube URL の解決はアプリ側で行うので `ytdl` は無効化。
-        let mpv = Mpv::with_initializer(|init| {
-            init.set_property("vo", "libmpv")?;
-            init.set_property("ytdl", false)?;
-            // hwdec は mpv 既定のまま（明示設定しない）。
-            if verbose {
-                init.set_property("terminal", true)?;
-                init.set_property("msg-level", "all=status")?;
-            }
-            Ok(())
-        })
-        .map_err(|e| anyhow!("mpv init failed: {e}"))?;
-
-        // RenderContext が Mpv を借用するためリークして 'static にする。
-        let mpv: &'static Mpv = Box::leak(Box::new(mpv));
-
-        let mut render_context = mpv
-            .create_render_context(vec![
-                RenderParam::ApiType(RenderParamApiType::OpenGl),
-                RenderParam::InitParams(OpenGLInitParams {
-                    get_proc_address: get_proc_address,
-                    ctx: gl_display,
-                }),
-            ])
-            .map_err(|e| anyhow!("mpv render context failed: {e}"))?;
-        render_context.set_update_callback(on_update);
-
-        // 初期サイズは適当に小さな値で作っておく。最初の render() でリサイズされる。
-        let (fbo, texture) = unsafe { create_fbo_texture(&gl, 16, 16)? };
-
-        Ok(Self {
-            mpv,
-            gl: Some(GlBackend {
-                render_context,
-                gl,
-                fbo,
-                texture,
-                size: (16, 16),
-            }),
-        })
-    }
-
-    /// 埋め込みモードで初期化する（ネイティブ版）。OpenGL を一切作らず、mpv 自身が
-    /// `wid`（ウィンドウハンドル）に対し `vo=gpu-next` `gpu-api=d3d11` で直接描画する。
-    /// 動画フレームの提示は mpv が内部スレッドで行うため `render()`/`texture()` は使わない。
-    #[allow(dead_code)] // ネイティブ版エントリ（後続フェーズ）から使用する。
+    /// 埋め込みモードで初期化する。OpenGL を一切作らず、mpv 自身が `wid`（ウィンドウハンドル）に
+    /// 対し `vo=gpu-next` `gpu-api=d3d11` で直接描画する。
     pub fn new_embedded(wid: i64, verbose: bool) -> Result<Self> {
         let mpv = Mpv::with_initializer(|init| {
             init.set_property("wid", wid)?;
@@ -115,48 +33,7 @@ impl Player {
         })
         .map_err(|e| anyhow!("mpv init (embedded) failed: {e}"))?;
         let mpv: &'static Mpv = Box::leak(Box::new(mpv));
-        Ok(Self { mpv, gl: None })
-    }
-
-    /// 動画フレームを内部テクスチャに描画する。
-    /// 要求サイズが現在の FBO サイズと異なる場合は再生成する。
-    pub fn render(&mut self, width: i32, height: i32) {
-        // 埋め込みモード（gl=None）では mpv が自前で描画するので何もしない。
-        let Some(backend) = self.gl.as_mut() else {
-            return;
-        };
-        if width <= 0 || height <= 0 {
-            return;
-        }
-        if backend.size != (width, height) {
-            unsafe {
-                backend.gl.delete_framebuffer(backend.fbo);
-                backend.gl.delete_texture(backend.texture);
-                let (fbo, texture) = create_fbo_texture(&backend.gl, width, height)
-                    .expect("FBO/texture recreate failed");
-                backend.fbo = fbo;
-                backend.texture = texture;
-            }
-            backend.size = (width, height);
-        }
-
-        // mpv の render に渡す FBO ID は i32。glow の NativeFramebuffer は NonZeroU32 内包なので
-        // u32 に取り出してキャスト。flip=true は OpenGL の Y 軸方向を mpv に伝える。
-        let fbo_id: u32 = native_fbo_id(backend.fbo);
-        if let Err(e) = backend
-            .render_context
-            .render::<()>(fbo_id as i32, width, height, true)
-        {
-            eprintln!("mpv render error: {e}");
-        }
-    }
-
-    /// 動画テクスチャを取得する（UI 層が合成に使う）。
-    pub fn texture(&self) -> glow::NativeTexture {
-        self.gl
-            .as_ref()
-            .expect("texture() は GL 合成モード専用（埋め込みモードでは呼ばない）")
-            .texture
+        Ok(Self { mpv })
     }
 
     // --- mpv プロパティアクセス（薄いラッパー）---
@@ -245,97 +122,3 @@ impl Player {
     }
 }
 
-impl Drop for Player {
-    fn drop(&mut self) {
-        if let Some(backend) = &self.gl {
-            unsafe {
-                backend.gl.delete_framebuffer(backend.fbo);
-                backend.gl.delete_texture(backend.texture);
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 内部ヘルパー
-// ---------------------------------------------------------------------------
-
-/// mpv が GL 関数ポインタを解決するためのコールバック。
-/// ctx には glutin の Display を渡しておき、ここで名前解決する。
-fn get_proc_address(display: &glutin::display::Display, name: &str) -> *mut c_void {
-    use glutin::display::GlDisplay;
-    let cname = match CString::new(name) {
-        Ok(c) => c,
-        Err(_) => return std::ptr::null_mut(),
-    };
-    display.get_proc_address(cname.as_c_str()) as *mut c_void
-}
-
-/// glow の NativeFramebuffer から OpenGL の生 ID（u32）を取り出す。
-fn native_fbo_id(fbo: glow::NativeFramebuffer) -> u32 {
-    // glow::NativeFramebuffer は内部に NonZeroU32 を持つ。
-    // safe な変換は無いので transmute（同サイズ・同レイアウト）。
-    unsafe { std::mem::transmute::<glow::NativeFramebuffer, std::num::NonZeroU32>(fbo) }.get()
-}
-
-unsafe fn create_fbo_texture(
-    gl: &glow::Context,
-    width: i32,
-    height: i32,
-) -> Result<(glow::NativeFramebuffer, glow::NativeTexture)> {
-    let texture = gl
-        .create_texture()
-        .map_err(|e| anyhow!("create texture failed: {e}"))?;
-    gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-    gl.tex_image_2d(
-        glow::TEXTURE_2D,
-        0,
-        glow::RGBA8 as i32,
-        width,
-        height,
-        0,
-        glow::RGBA,
-        glow::UNSIGNED_BYTE,
-        None,
-    );
-    gl.tex_parameter_i32(
-        glow::TEXTURE_2D,
-        glow::TEXTURE_MIN_FILTER,
-        glow::LINEAR as i32,
-    );
-    gl.tex_parameter_i32(
-        glow::TEXTURE_2D,
-        glow::TEXTURE_MAG_FILTER,
-        glow::LINEAR as i32,
-    );
-    gl.tex_parameter_i32(
-        glow::TEXTURE_2D,
-        glow::TEXTURE_WRAP_S,
-        glow::CLAMP_TO_EDGE as i32,
-    );
-    gl.tex_parameter_i32(
-        glow::TEXTURE_2D,
-        glow::TEXTURE_WRAP_T,
-        glow::CLAMP_TO_EDGE as i32,
-    );
-
-    let fbo = gl
-        .create_framebuffer()
-        .map_err(|e| anyhow!("create framebuffer failed: {e}"))?;
-    gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
-    gl.framebuffer_texture_2d(
-        glow::FRAMEBUFFER,
-        glow::COLOR_ATTACHMENT0,
-        glow::TEXTURE_2D,
-        Some(texture),
-        0,
-    );
-    let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
-    gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-    gl.bind_texture(glow::TEXTURE_2D, None);
-
-    if status != glow::FRAMEBUFFER_COMPLETE {
-        bail!("framebuffer incomplete: 0x{:X}", status);
-    }
-    Ok((fbo, texture))
-}

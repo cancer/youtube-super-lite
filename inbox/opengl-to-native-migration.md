@@ -138,7 +138,14 @@
     日本語 IME は実機能上の parity ギャップではない（URL タイプ＋Ctrl+V 貼り付けで充足）。
   - → **P3 の機能 parity 完了**。egui 版の UI 機能はネイティブ版(`--native`)に出揃った。
     次は **P4: egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を撤去**して移行完了。
-- **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
+- **P4 切替** ✅ **完了 — egui 移行完了**: egui/glutin/glow/egui_glow/egui_extras/image/tiny_http を
+  Cargo から削除。main.rs から egui App/Running/redraw/GridCard/draw_*・GL 初期化・devtools を撤去し、
+  main() は常に NativeApp を起動（`--native`/`--enable-dev-tools` は互換で受理だけして無視）。
+  player.rs は GL バックエンド（RenderContext/FBO/glow）を撤去し `new_embedded`(D3D11) のみに。
+  image_cache.rs は egui BytesLoader を撤去し cache_dir/cached_path/ensure_cached_async/hash_uri のみに。
+  gl_quad.rs / devtools.rs を削除。全ターゲット build OK、デフォルト起動で再生・正常終了を確認。
+  → **アプリは OpenGL を一切作らず、mpv(D3D11)＋Direct2D オーバーレイのみで動作**。
+  残: dead_code 警告の整理、チャンネル別アップロード一覧（egui のサブ機能、未移植）、README 更新。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 
 ## リスク / 要検証
