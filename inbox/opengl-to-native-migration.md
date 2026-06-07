@@ -111,9 +111,12 @@
     `core.load`、Esc/Tab で閉じる。`render` に `list_open`/タイトル配列/選択 index を渡し、
     Direct2D で半透明パネル＋行＋選択ハイライトを描画。一覧表示中は自動非表示を抑止し
     ヒット判定を透過化。ビルド通過。URL バー描画は実機キャプチャで確認済み。
-  - 残り P3 本体: 一覧へのサムネ表示（image_cache→WIC デコード→ID2D1Bitmap キャッシュ）と
-    他の一覧（おすすめ/履歴/再生リスト）への拡張、クリック選択、検索等の日本語入力 IME
-    (DirectWrite/TSF)、チャット左右分割。すべて `Controller` を駆動する形で順次移植。
+  - **一覧のサムネ表示** ✅ **完了**: `image_cache::cache_dir()/cached_path()` を公開（egui 版と
+    共有。main.rs の重複 `image_cache_dir` は撤去）。`Overlay` に URL→ID2D1Bitmap キャッシュを持ち、
+    表示行のサムネを（ディスクキャッシュ済みのものだけ）WIC デコードして行左に描画（行高 48px、16:9）。
+    ネットワーク取得はしない（egui 版 BytesLoader が保存済みのものを読む）。未キャッシュはテキストのみ。
+  - 残り P3 本体: 他の一覧（おすすめ/履歴/再生リスト）への拡張、一覧のクリック選択、
+    検索等の日本語入力 IME(DirectWrite/TSF)、チャット左右分割。すべて `Controller` を駆動して順次移植。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 

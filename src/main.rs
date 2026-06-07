@@ -236,29 +236,6 @@ fn load_system_emoji_font() -> Option<Vec<u8>> {
     load_font_from(paths)
 }
 
-/// 画像キャッシュの保存先（パッケージ外のキャッシュディレクトリ）。
-/// auth の設定ディレクトリとは別に、OS のキャッシュ領域へ置く
-/// （Windows は Roaming ではなく Local、macOS は ~/Library/Caches）。
-fn image_cache_dir() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        let base = std::env::var("LOCALAPPDATA")
-            .or_else(|_| std::env::var("APPDATA"))
-            .unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(base)
-            .join("YouTubeSuperLite")
-            .join("image-cache")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home)
-            .join("Library")
-            .join("Caches")
-            .join("YouTubeSuperLite")
-            .join("images")
-    }
-}
 
 /// egui コンテキストに日本語フォントと絵文字フォントをフォールバックとして登録する。
 fn setup_japanese_font(ctx: &egui::Context) {
@@ -2101,7 +2078,7 @@ impl App {
         // HTTP 画像（サムネ/アイコン/絵文字）の永続キャッシュ。install_image_loaders の後に
         // 登録することで try_load_bytes の後入れ優先（.rev()）により本ローダが先に当たる。
         egui_glow.egui_ctx.add_bytes_loader(std::sync::Arc::new(
-            image_cache::DiskImageCache::new(image_cache_dir(), egui_glow.egui_ctx.clone()),
+            image_cache::DiskImageCache::new(image_cache::cache_dir(), egui_glow.egui_ctx.clone()),
         ));
 
         let proxy_for_mpv = self.proxy.clone();

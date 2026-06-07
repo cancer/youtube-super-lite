@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_DRAW_TEXT_OPTIONS_NONE,
+    D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, D2D1_DRAW_TEXT_OPTIONS_NONE,
     D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1_ROUNDED_RECT,
@@ -74,6 +74,36 @@ fn in_rect(r: &RECT, x: i32, y: i32) -> bool {
     x >= r.left && x < r.right && y >= r.top && y < r.bottom
 }
 
+/// 画像ファイル（ディスクキャッシュ済み）を WIC でデコードして Direct2D Bitmap を作る。
+unsafe fn load_wic_bitmap(dc_rt: &ID2D1DCRenderTarget, path: &str) -> Result<ID2D1Bitmap> {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::GENERIC_READ;
+    use windows::Win32::Graphics::Imaging::{
+        CLSID_WICImagingFactory, IWICImagingFactory, WICBitmapDitherTypeNone,
+        WICBitmapPaletteTypeMedianCut, WICDecodeMetadataCacheOnLoad, GUID_WICPixelFormat32bppPBGRA,
+    };
+    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+    let wic: IWICImagingFactory =
+        CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+    let decoder = wic.CreateDecoderFromFilename(
+        &HSTRING::from(path),
+        None,
+        GENERIC_READ,
+        WICDecodeMetadataCacheOnLoad,
+    )?;
+    let frame = decoder.GetFrame(0)?;
+    let converter = wic.CreateFormatConverter()?;
+    converter.Initialize(
+        &frame,
+        &GUID_WICPixelFormat32bppPBGRA,
+        WICBitmapDitherTypeNone,
+        None,
+        0.0,
+        WICBitmapPaletteTypeMedianCut,
+    )?;
+    Ok(dc_rt.CreateBitmapFromWicBitmap(&converter, None)?)
+}
+
 /// クリップボードの Unicode テキストを取得する（URL 貼り付け用）。
 pub fn clipboard_text() -> Option<String> {
     use windows::Win32::Foundation::{HANDLE, HGLOBAL};
@@ -118,12 +148,18 @@ pub struct Overlay {
     old_obj: HGDIOBJ,
     dib_w: i32,
     dib_h: i32,
+    /// 一覧サムネイルの ID2D1Bitmap キャッシュ（URL → デコード済みビットマップ）。
+    thumb_cache: std::collections::HashMap<String, ID2D1Bitmap>,
 }
 
 impl Overlay {
     /// 親ウィンドウ（HWND）の上に重ねる透過オーバーレイを作る。
     pub fn new(parent: HWND) -> Result<Self> {
         unsafe {
+            // WIC(CoCreateInstance) のため COM を初期化（多重呼び出しは無害）。
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
             let hinstance = GetModuleHandleW(None)?;
             let class_name = w!("YSL_NativeOverlay");
             // クラス登録は失敗（既登録）しても続行。
@@ -189,6 +225,7 @@ impl Overlay {
                 old_obj: HGDIOBJ::default(),
                 dib_w: 0,
                 dib_h: 0,
+                thumb_cache: std::collections::HashMap::new(),
             })
         }
     }
@@ -253,6 +290,7 @@ impl Overlay {
         list_open: bool,
         list_items: &[String],
         list_sel: usize,
+        list_thumbs: &[String],
     ) {
         unsafe {
             let mut rc = RECT::default();
@@ -491,7 +529,7 @@ impl Overlay {
                         DWRITE_MEASURING_MODE_NATURAL,
                     );
                 }
-                let row_h = 34.0;
+                let row_h = 48.0;
                 let top0 = 64.0;
                 let visible = (((h as f32 - top0 - 16.0) / row_h).floor() as usize).max(1);
                 let first = if list_sel >= visible {
@@ -499,6 +537,23 @@ impl Overlay {
                 } else {
                     0
                 };
+                // 表示行のサムネイルを、ディスクキャッシュ済みのものだけ WIC デコードしてキャッシュ。
+                let dc_rt_clone = self.dc_rt.clone();
+                for idx in first..(first + visible).min(list_thumbs.len()) {
+                    let url = &list_thumbs[idx];
+                    if !url.is_empty() && !self.thumb_cache.contains_key(url) {
+                        if let Some(ps) =
+                            crate::image_cache::cached_path(url).and_then(|p| p.to_str().map(String::from))
+                        {
+                            if let Ok(bmp) = load_wic_bitmap(&dc_rt_clone, &ps) {
+                                self.thumb_cache.insert(url.clone(), bmp);
+                            }
+                        }
+                    }
+                }
+                let th = row_h - 10.0;
+                let tw = th * 16.0 / 9.0;
+                let text_left = 20.0 + tw + 12.0;
                 for (i, item) in list_items.iter().enumerate().skip(first).take(visible) {
                     let y = top0 + (i - first) as f32 * row_h;
                     if i == list_sel {
@@ -519,6 +574,22 @@ impl Overlay {
                             );
                         }
                     }
+                    // サムネイル（キャッシュにあれば）。
+                    if let Some(bmp) = list_thumbs.get(i).and_then(|u| self.thumb_cache.get(u)) {
+                        let dst = D2D_RECT_F {
+                            left: 20.0,
+                            top: y + 3.0,
+                            right: 20.0 + tw,
+                            bottom: y + 3.0 + th,
+                        };
+                        dc_rt.DrawBitmap(
+                            bmp,
+                            Some(&dst),
+                            1.0,
+                            windows::Win32::Graphics::Direct2D::D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                            None,
+                        );
+                    }
                     let brush = if i == list_sel {
                         textb.as_ref()
                     } else {
@@ -526,8 +597,8 @@ impl Overlay {
                     };
                     if let Some(b) = brush {
                         let tr = D2D_RECT_F {
-                            left: 28.0,
-                            top: y + 4.0,
+                            left: text_left,
+                            top: y + 6.0,
                             right: w as f32 - 28.0,
                             bottom: y + row_h,
                         };

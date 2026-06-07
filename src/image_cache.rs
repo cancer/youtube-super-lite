@@ -114,6 +114,43 @@ impl DiskImageCache {
     }
 }
 
+/// 画像ディスクキャッシュのディレクトリ。egui 版・ネイティブ版で共有する。
+pub fn cache_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let base = std::env::var("LOCALAPPDATA")
+            .or_else(|_| std::env::var("APPDATA"))
+            .unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(base)
+            .join("YouTubeSuperLite")
+            .join("image-cache")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home)
+            .join("Library")
+            .join("Caches")
+            .join("YouTubeSuperLite")
+            .join("images")
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        PathBuf::from(".").join(".ysl-image-cache")
+    }
+}
+
+/// 既にディスクキャッシュ済みなら、その画像ファイルのパスを返す（ネイティブ版の WIC 用）。
+/// ネットワーク取得はしない（egui 版の BytesLoader が取得・保存したものを読むだけ）。
+pub fn cached_path(uri: &str) -> Option<PathBuf> {
+    let p = cache_dir().join(hash_uri(uri));
+    if p.is_file() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
 /// FNV-1a 64bit ハッシュ → 16 桁 hex。URL→キャッシュファイル名に使う。
 fn hash_uri(uri: &str) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;

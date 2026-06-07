@@ -234,18 +234,34 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     let url = _state.url_input.clone();
                     let list_open = _state.list_open;
                     let list_sel = _state.list_sel;
-                    let titles: Vec<String> = if list_open {
-                        _state
-                            .core
-                            .sub_feed
-                            .iter()
-                            .map(|v| format!("{}   |   {}", v.title, v.channel))
-                            .collect()
+                    let (titles, thumbs): (Vec<String>, Vec<String>) = if list_open {
+                        (
+                            _state
+                                .core
+                                .sub_feed
+                                .iter()
+                                .map(|v| format!("{}   |   {}", v.title, v.channel))
+                                .collect(),
+                            _state
+                                .core
+                                .sub_feed
+                                .iter()
+                                .map(|v| v.thumbnail.clone())
+                                .collect(),
+                        )
                     } else {
-                        Vec::new()
+                        (Vec::new(), Vec::new())
                     };
                     if let Some(ov) = _state.overlay.as_mut() {
-                        ov.render(&_state.core.player, parent, &url, list_open, &titles, list_sel);
+                        ov.render(
+                            &_state.core.player,
+                            parent,
+                            &url,
+                            list_open,
+                            &titles,
+                            list_sel,
+                            &thumbs,
+                        );
                     }
                 }
             }
