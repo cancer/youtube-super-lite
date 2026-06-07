@@ -14,7 +14,7 @@ use anyhow::Result;
 use std::cell::RefCell;
 
 use windows::core::w;
-use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F,
 };
@@ -74,6 +74,8 @@ struct OvShared {
 
 thread_local! {
     static OV_STATE: RefCell<OvShared> = RefCell::new(OvShared::default());
+    /// 親ウィンドウのサブクラス化用: (overlay_hwnd, parent_hwnd, 元の WndProc) を isize で保持。
+    static FOLLOW: RefCell<(isize, isize, isize)> = RefCell::new((0, 0, 0));
 }
 
 #[inline]
@@ -222,6 +224,16 @@ impl Overlay {
             let dc_rt: ID2D1DCRenderTarget = factory.CreateDCRenderTarget(&rt_props)?;
 
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+
+            // 親ウィンドウの WndProc をサブクラス化し、ドラッグ移動(WM_MOVE)中も
+            // オーバーレイを追従させる（ドラッグ中は winit のループがモーダルループに入り
+            // about_to_wait が止まるため、ここで直接追従させる）。
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SetWindowLongPtrW, GWLP_WNDPROC, WNDPROC,
+            };
+            let fp: WNDPROC = Some(follow_wndproc);
+            let orig = SetWindowLongPtrW(parent, GWLP_WNDPROC, std::mem::transmute::<WNDPROC, isize>(fp));
+            FOLLOW.with(|f| *f.borrow_mut() = (hwnd.0 as isize, parent.0 as isize, orig));
 
             Ok(Self {
                 hwnd,
@@ -830,6 +842,39 @@ fn fmt_time(secs: f64) -> String {
     } else {
         format!("{m:02}:{s:02}")
     }
+}
+
+/// 親ウィンドウのサブクラス WndProc。移動・位置変更時にオーバーレイを親クライアント原点へ
+/// 即座に追従させ、それ以外は元の（winit の）WndProc に委譲する。
+unsafe extern "system" fn follow_wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Graphics::Gdi::ClientToScreen;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallWindowProcW, SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WM_MOVE,
+        WM_WINDOWPOSCHANGED, WNDPROC,
+    };
+    let (ov, parent, orig) = FOLLOW.with(|f| *f.borrow());
+    if ov != 0 && (msg == WM_MOVE || msg == WM_WINDOWPOSCHANGED) {
+        let ovh = HWND(ov as *mut core::ffi::c_void);
+        let parenth = HWND(parent as *mut core::ffi::c_void);
+        let mut o = POINT { x: 0, y: 0 };
+        let _ = ClientToScreen(parenth, &mut o);
+        let _ = SetWindowPos(
+            ovh,
+            None,
+            o.x,
+            o.y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
+        );
+    }
+    let orig_proc: WNDPROC = std::mem::transmute::<isize, WNDPROC>(orig);
+    CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam)
 }
 
 unsafe extern "system" fn overlay_wndproc(
