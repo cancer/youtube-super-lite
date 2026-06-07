@@ -106,8 +106,14 @@
   - **URL 欄の貼り付け(Ctrl+V)** ✅ **完了**: `native_overlay::clipboard_text()` で CF_UNICODETEXT を
     取得（OpenClipboard/GetClipboardData/GlobalLock）。NativeApp は ModifiersChanged で Ctrl 押下を
     追跡し、Ctrl+V で URL 欄へ貼り付け。Cargo features 追加: System_DataExchange/Ole/Memory。
-  - 残り P3 本体: 検索等の日本語入力 IME(DirectWrite/TSF)、一覧系のサムネグリッド仮想化
-    （image_cache→WICデコード）、チャット左右分割。すべて `Controller` を駆動する形で順次移植。
+  - **一覧ビュー（登録チャンネル新着・テキスト）** ✅ **完了**: Tab で全面パネルを開閉。
+    開く時に未取得なら `core.start_subs()` を起動、↑↓ で選択（スクロール追従）、Enter で
+    `core.load`、Esc/Tab で閉じる。`render` に `list_open`/タイトル配列/選択 index を渡し、
+    Direct2D で半透明パネル＋行＋選択ハイライトを描画。一覧表示中は自動非表示を抑止し
+    ヒット判定を透過化。ビルド通過。URL バー描画は実機キャプチャで確認済み。
+  - 残り P3 本体: 一覧へのサムネ表示（image_cache→WIC デコード→ID2D1Bitmap キャッシュ）と
+    他の一覧（おすすめ/履歴/再生リスト）への拡張、クリック選択、検索等の日本語入力 IME
+    (DirectWrite/TSF)、チャット左右分割。すべて `Controller` を駆動する形で順次移植。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 
