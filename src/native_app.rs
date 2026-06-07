@@ -11,7 +11,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
@@ -473,7 +473,10 @@ impl ApplicationHandler<UserEvent> for NativeApp {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(_state) = &mut self.state {
-            // オーバーレイの操作適用・自動非表示・定期再描画（~10fps）。
+            // 背景スレッドの結果を毎フレーム取り込む（チャットのポーリングは proxy を起こさず
+            // channel に送るだけなので、ここで定期的に drain しないと反映されない）。
+            _state.poll_all();
+            // オーバーレイの操作適用・自動非表示・定期再描画。
             #[cfg(windows)]
             {
                 use windows::Win32::Foundation::POINT;
@@ -515,7 +518,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 _state.render_overlay(active);
             }
             event_loop.set_control_flow(ControlFlow::WaitUntil(
-                Instant::now() + Duration::from_millis(100),
+                Instant::now() + Duration::from_millis(33),
             ));
         }
     }
@@ -550,6 +553,22 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 #[cfg(windows)]
                 {
                     state.last_activity = Instant::now();
+                }
+            }
+            // マウスホイールで音量 ±5（動画プレーヤー慣習。バー上に限らず有効）。
+            WindowEvent::MouseWheel { delta, .. } => {
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 40.0,
+                };
+                if dy != 0.0 {
+                    let p = &state.core.player;
+                    let step = if dy > 0.0 { 5.0 } else { -5.0 };
+                    p.set_volume((p.volume() + step).clamp(0.0, 130.0));
+                    #[cfg(windows)]
+                    {
+                        state.last_activity = Instant::now();
+                    }
                 }
             }
             // フォーカスを失ったらオーバーレイを隠す（他アプリの上に残らないように）。

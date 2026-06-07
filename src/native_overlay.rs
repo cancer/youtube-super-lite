@@ -90,6 +90,15 @@ pub enum OverlayAction {
     PlayIndex(usize),
 }
 
+/// ドラッグ中のスライダー種別（マウスキャプチャ中の連続更新対象）。
+#[derive(Default, Clone, Copy, PartialEq)]
+enum Drag {
+    #[default]
+    None,
+    Seek,
+    Vol,
+}
+
 /// wndproc(C コールバック) と描画/NativeApp の橋渡し。UI スレッド単一なので thread_local。
 /// コントロール矩形は `active`（コントロール描画中）の時のみ有効。一覧表示中は list_* を使う。
 #[derive(Default)]
@@ -123,6 +132,8 @@ struct OvShared {
     list_row_h: i32,
     list_first: usize,
     list_count: usize,
+    /// ドラッグ中のスライダー（マウスキャプチャ中の連続更新対象）。render 跨ぎで保持する。
+    drag: Drag,
     /// クリックで積まれた操作キュー（NativeApp が drain して適用）。
     actions: Vec<OverlayAction>,
 }
@@ -148,51 +159,68 @@ fn rf(r: RECT) -> D2D_RECT_F {
     }
 }
 
-/// active 時のクリックを各コントロール矩形に振り分ける。非ヒットは TogglePause（動画クリック）。
-fn dispatch_hit(s: &OvShared, x: i32, y: i32) -> OverlayAction {
+/// 音量バーのクリック/ドラッグ位置から音量(0–130)を求める。
+#[inline]
+fn vol_from_x(s: &OvShared, x: i32) -> f64 {
+    let f = ((x - s.vol.left) as f64 / (s.vol.right - s.vol.left).max(1) as f64).clamp(0.0, 1.0);
+    f * 130.0
+}
+
+/// シークバーのクリック/ドラッグ位置から割合(0.0–1.0)を求める。
+#[inline]
+fn seek_from_x(s: &OvShared, x: i32) -> f64 {
+    ((x - s.seek.left) as f64 / (s.seek.right - s.seek.left).max(1) as f64).clamp(0.0, 1.0)
+}
+
+/// active 時のクリックを各コントロール矩形に振り分ける。`None` は無反応（no-op）。
+/// 非ヒット（バー余白・動画）は TogglePause。
+fn dispatch_hit(s: &OvShared, x: i32, y: i32) -> Option<OverlayAction> {
     use OverlayAction::*;
-    if s.seekable && s.seek.right > s.seek.left && in_rect(&s.seek, x, y) {
-        let f = ((x - s.seek.left) as f64 / (s.seek.right - s.seek.left) as f64).clamp(0.0, 1.0);
-        return Seek(f);
+    if s.seek.right > s.seek.left && in_rect(&s.seek, x, y) {
+        // seekable 時のみシーク。非 DVR ライブは領域を吸収するだけ（一時停止に落とさない）。
+        return if s.seekable {
+            Some(Seek(seek_from_x(s, x)))
+        } else {
+            None
+        };
     }
     if s.vol.right > s.vol.left && in_rect(&s.vol, x, y) {
-        let f = ((x - s.vol.left) as f64 / (s.vol.right - s.vol.left) as f64).clamp(0.0, 1.0);
-        return SetVolume(f * 130.0);
+        return Some(SetVolume(vol_from_x(s, x)));
     }
     if in_rect(&s.btn, x, y) {
-        return TogglePause;
+        return Some(TogglePause);
     }
     if in_rect(&s.mute, x, y) {
-        return ToggleMute;
+        return Some(ToggleMute);
     }
     if in_rect(&s.quality, x, y) {
-        return CycleQuality;
+        return Some(CycleQuality);
     }
     if in_rect(&s.codec, x, y) {
-        return CycleCodec;
+        return Some(CycleCodec);
     }
     if in_rect(&s.like, x, y) {
-        return Like;
+        return Some(Like);
     }
     if in_rect(&s.chat, x, y) {
-        return ToggleChat;
+        return Some(ToggleChat);
     }
     if in_rect(&s.tab_recommend, x, y) {
-        return OpenList(ListTab::Recommend);
+        return Some(OpenList(ListTab::Recommend));
     }
     if in_rect(&s.tab_subs, x, y) {
-        return OpenList(ListTab::Subs);
+        return Some(OpenList(ListTab::Subs));
     }
     if in_rect(&s.tab_playlist, x, y) {
-        return OpenList(ListTab::Playlist);
+        return Some(OpenList(ListTab::Playlist));
     }
     if in_rect(&s.tab_history, x, y) {
-        return OpenList(ListTab::History);
+        return Some(OpenList(ListTab::History));
     }
     if in_rect(&s.login, x, y) {
-        return Login;
+        return Some(Login);
     }
-    TogglePause
+    Some(TogglePause)
 }
 
 /// 画像ファイル（ディスクキャッシュ済み）を WIC でデコードして Direct2D Bitmap を作る。
@@ -655,8 +683,9 @@ impl Overlay {
             // ヒット判定用の矩形を wndproc / NativeApp と共有する。
             OV_STATE.with(|s| {
                 let mut prev = s.borrow_mut();
-                // キューは保持したまま矩形だけ差し替える。
+                // キューとドラッグ状態は保持したまま矩形だけ差し替える。
                 hits.actions = std::mem::take(&mut prev.actions);
+                hits.drag = prev.drag;
                 *prev = hits;
             });
 
@@ -819,12 +848,12 @@ impl Overlay {
         let sx1 = w as f32 - 14.0;
         let sy = (h - BOTTOM_H + 13) as f32;
         let track_h = 3.0;
-        let frac = if dur > 0.0 {
+        let frac = if !seekable {
+            1.0 // 非 DVR ライブはバー 100% 固定（pos/dur で動き続けないように）。
+        } else if dur > 0.0 {
             (pos / dur).clamp(0.0, 1.0) as f32
-        } else if seekable {
-            0.0
         } else {
-            1.0 // DVR 無しライブはバー 100% 固定。
+            0.0
         };
         p.fill_round(
             D2D_RECT_F {
@@ -863,13 +892,15 @@ impl Overlay {
                     &b,
                 );
             }
-            hits.seek = RECT {
-                left: sx0 as i32,
-                top: (sy - 9.0) as i32,
-                right: sx1 as i32,
-                bottom: (sy + 9.0) as i32,
-            };
         }
+        // seek 矩形は常に登録（非 DVR ライブのクリックを吸収し一時停止に落とさない。
+        // 実際にシークするかは dispatch_hit が seekable で判定）。
+        hits.seek = RECT {
+            left: sx0 as i32,
+            top: (sy - 9.0) as i32,
+            right: sx1 as i32,
+            bottom: (sy + 9.0) as i32,
+        };
 
         // --- コントロール行（フラット、下段）---
         let cy = h - 16;
@@ -1214,8 +1245,10 @@ unsafe extern "system" fn overlay_wndproc(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Graphics::Gdi::ScreenToClient;
     use windows::Win32::Foundation::LRESULT;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
     use windows::Win32::UI::WindowsAndMessaging::{
-        HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCHITTEST,
+        HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
+        WM_MOUSEMOVE, WM_NCHITTEST,
     };
     match msg {
         // クリックされてもこの窓を activate せず、親(winit)も非アクティブ化させない。
@@ -1249,6 +1282,7 @@ unsafe extern "system" fn overlay_wndproc(
         WM_LBUTTONDOWN => {
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let mut capture = false;
             OV_STATE.with(|s| {
                 let mut s = s.borrow_mut();
                 if s.list_open {
@@ -1259,13 +1293,51 @@ unsafe extern "system" fn overlay_wndproc(
                             s.actions.push(OverlayAction::PlayIndex(idx));
                         }
                     }
-                } else if in_rect(&s.chat_panel, x, y) {
-                    // チャットパネル領域: クリックを無視。
-                } else {
-                    let act = dispatch_hit(&s, x, y);
+                    return;
+                }
+                if in_rect(&s.chat_panel, x, y) {
+                    return; // チャットパネル領域: クリックを無視。
+                }
+                // スライダー上で押したらドラッグ開始（マウスキャプチャして領域外でも追従）。
+                if s.seekable && s.seek.right > s.seek.left && in_rect(&s.seek, x, y) {
+                    s.drag = Drag::Seek;
+                    capture = true;
+                } else if s.vol.right > s.vol.left && in_rect(&s.vol, x, y) {
+                    s.drag = Drag::Vol;
+                    capture = true;
+                }
+                if let Some(act) = dispatch_hit(&s, x, y) {
                     s.actions.push(act);
                 }
             });
+            if capture {
+                let _ = SetCapture(hwnd);
+            }
+            LRESULT(0)
+        }
+        // ドラッグ中はスライダーを連続更新（キャプチャ中なので領域外でも x を clamp して反映）。
+        // `drag` はボタン押下中のみ非 None なので、これで「押しながら移動」だけを拾える。
+        WM_MOUSEMOVE => {
+            let x = (lparam.0 & 0xFFFF) as i16 as i32;
+            OV_STATE.with(|s| {
+                let mut s = s.borrow_mut();
+                match s.drag {
+                    Drag::Seek => {
+                        let f = seek_from_x(&s, x);
+                        s.actions.push(OverlayAction::Seek(f));
+                    }
+                    Drag::Vol => {
+                        let v = vol_from_x(&s, x);
+                        s.actions.push(OverlayAction::SetVolume(v));
+                    }
+                    Drag::None => {}
+                }
+            });
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            OV_STATE.with(|s| s.borrow_mut().drag = Drag::None);
+            let _ = ReleaseCapture();
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
