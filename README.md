@@ -113,8 +113,22 @@ youtube-super-lite [OPTIONS] [URL]
   -v, --verbose             mpv の詳細ログを出力（動作確認用）
       --debug-backend URL   認証バックエンドを上書き（デバッグ用、既定: 本番Worker）
       --volume N            初期音量 0-130（デバッグ用。例: --volume 0 で無音）
+      --enable-dev-tools    検証用ローカル HTTP を有効化（後述の dev-tools）
   -h, --help                ヘルプを表示
 ```
+
+### dev-tools（`--enable-dev-tools`）
+
+外部の screencapture / クリックツールに依存せず、アプリ自身がローカル HTTP で
+スクリーンショット撮影・UI 操作注入を受け付ける検証用サーバ。起動時に listen ポートを
+stderr に表示する（`[dev-tools] http://127.0.0.1:<port> ...`）。`curl` だけで検証フローを回せる。
+
+| メソッド / パス | 説明 |
+|------|------|
+| `GET /screenshot` | 現在のウィンドウ（クライアント領域）を PNG で返す。撮影前にウィンドウを前面化し、オーバーレイ込みの合成画を取得する |
+| `POST /action/<name>` | UI 操作を起こす。`<name>`: `toggle_chat` / `play_pause` / `login` / `like` / `close_overlay` / `open_recommend` / `open_subs` / `open_playlist` / `open_history` |
+| `POST /click?x=&y=` | クライアント px 座標に左クリックを注入（コントロール矩形へ振り分け） |
+| `POST /type`（body=text, `?enter=1`） | URL 欄へテキスト入力。`enter=1` で再生 |
 
 ### 操作（キーボード中心）
 

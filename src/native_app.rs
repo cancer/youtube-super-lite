@@ -37,6 +37,7 @@ pub struct NativeApp {
     verbose: bool,
     backend: String,
     initial_volume: Option<f64>,
+    enable_dev_tools: bool,
     state: Option<NativeRunning>,
 }
 
@@ -72,6 +73,12 @@ struct NativeRunning {
     last_cursor: (i32, i32),
     #[cfg(windows)]
     overlay_visible: bool,
+    /// dev-tools（--enable-dev-tools）からの要求受信口。None なら無効。
+    devtools_rx: Option<std::sync::mpsc::Receiver<crate::devtools::Command>>,
+    /// 保留中のスクリーンショット返信先。前面化＋再描画を待ってからキャプチャするため遅延させる。
+    pending_shot: Option<std::sync::mpsc::Sender<Vec<u8>>>,
+    /// スクショ前に待つフレーム数（前面化と合成の反映待ち）。
+    shot_delay: u32,
 }
 
 impl NativeApp {
@@ -81,6 +88,7 @@ impl NativeApp {
         verbose: bool,
         backend: String,
         initial_volume: Option<f64>,
+        enable_dev_tools: bool,
     ) -> Self {
         Self {
             proxy,
@@ -88,6 +96,7 @@ impl NativeApp {
             verbose,
             backend,
             initial_volume,
+            enable_dev_tools,
             state: None,
         }
     }
@@ -130,6 +139,23 @@ impl NativeApp {
             }
         }
 
+        // dev-tools HTTP サーバ（--enable-dev-tools）。
+        let devtools_rx = if self.enable_dev_tools {
+            let (tx, rx) = std::sync::mpsc::channel();
+            match crate::devtools::start(tx, self.proxy.clone()) {
+                Ok(port) => {
+                    eprintln!("[dev-tools] http://127.0.0.1:{port} （/screenshot, /click, /type, /action/<name>）");
+                    Some(rx)
+                }
+                Err(e) => {
+                    eprintln!("[dev-tools] 起動失敗: {e:#}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // 動画に重ねる透過 2D オーバーレイ（Direct2D コントローラ）。
         #[cfg(windows)]
         let overlay = {
@@ -162,6 +188,9 @@ impl NativeApp {
             last_cursor: (0, 0),
             #[cfg(windows)]
             overlay_visible: true,
+            devtools_rx,
+            pending_shot: None,
+            shot_delay: 0,
         })
     }
 }
@@ -271,6 +300,123 @@ impl NativeRunning {
         self.core.poll_playlist();
         self.core.poll_gpu_usage();
         self.core.poll_resolve();
+    }
+
+    /// dev-tools（--enable-dev-tools）からの要求を処理する。毎フレーム呼ぶ。
+    fn poll_devtools(&mut self) {
+        use crate::devtools::Command;
+        // 借用を切るため先に集めてから処理する。
+        let cmds: Vec<Command> = match &self.devtools_rx {
+            Some(rx) => rx.try_iter().collect(),
+            None => return,
+        };
+        for cmd in cmds {
+            match cmd {
+                Command::Screenshot(reply) => {
+                    // ウィンドウを前面化し、オーバーレイ込みの合成が画面に反映されてから
+                    // （数フレーム後に）キャプチャする。
+                    #[cfg(windows)]
+                    unsafe {
+                        use windows::Win32::Foundation::HWND;
+                        use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+                        let _ = SetForegroundWindow(HWND(self.parent_wid as *mut core::ffi::c_void));
+                    }
+                    self.pending_shot = Some(reply);
+                    self.shot_delay = 3;
+                }
+                Command::Action(name, reply) => {
+                    let known = self.devtools_action(&name);
+                    let _ = reply.send(known);
+                }
+                Command::Click { x, y, reply } => {
+                    #[cfg(windows)]
+                    if let Some(ov) = self.overlay.as_ref() {
+                        ov.inject_click(x, y);
+                    }
+                    let _ = reply.send(true);
+                }
+                Command::Type { text, enter, reply } => {
+                    for ch in text.chars() {
+                        if !ch.is_control() {
+                            self.url_input.push(ch);
+                        }
+                    }
+                    if enter {
+                        let url = self.url_input.trim().to_string();
+                        if !url.is_empty() {
+                            self.core.load(&url);
+                            if let Some(vid) = auth::extract_video_id(&self.core.current_url) {
+                                self.core.start_chat(vid.clone());
+                                self.core.start_recommend(vid);
+                            }
+                        }
+                    }
+                    let _ = reply.send(true);
+                }
+            }
+        }
+    }
+
+    /// dev-tools のアクション名を UI 状態に反映する。既知なら true。
+    fn devtools_action(&mut self, name: &str) -> bool {
+        let known = match name {
+            "play_pause" => {
+                let p = &self.core.player;
+                p.set_paused(!p.paused());
+                true
+            }
+            "toggle_chat" => {
+                self.chat_open = !self.chat_open;
+                self.core
+                    .player
+                    .set_video_margin_right(if self.chat_open { 0.28 } else { 0.0 });
+                true
+            }
+            "login" => {
+                if !self.core.auth_busy {
+                    self.core.start_login();
+                }
+                true
+            }
+            "like" => {
+                if let Some(vid) = auth::extract_video_id(&self.core.current_url) {
+                    self.core.start_like(vid);
+                }
+                true
+            }
+            "close_overlay" => {
+                self.list_open = false;
+                true
+            }
+            "open_recommend" | "open_subs" | "open_playlist" | "open_history" => {
+                self.list_source = match name {
+                    "open_recommend" => ListSource::Recommend,
+                    "open_subs" => ListSource::Subs,
+                    "open_playlist" => ListSource::Playlist,
+                    _ => ListSource::History,
+                };
+                self.list_open = true;
+                self.list_sel = 0;
+                self.ensure_source_fetched();
+                true
+            }
+            _ => false,
+        };
+        #[cfg(windows)]
+        if known {
+            self.last_activity = Instant::now();
+        }
+        known
+    }
+
+    /// 現在のウィンドウ（クライアント領域）を PNG にして返す（取得不可なら空）。
+    #[cfg(windows)]
+    fn capture_png(&self) -> Vec<u8> {
+        unsafe { capture_client_png(self.parent_wid) }.unwrap_or_default()
+    }
+    #[cfg(not(windows))]
+    fn capture_png(&self) -> Vec<u8> {
+        Vec::new()
     }
 
     /// オーバーレイを現在のウィンドウ位置・サイズに合わせて再描画する（窓が可視の時のみ）。
@@ -493,6 +639,8 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             // 背景スレッドの結果を毎フレーム取り込む（チャットのポーリングは proxy を起こさず
             // channel に送るだけなので、ここで定期的に drain しないと反映されない）。
             _state.poll_all();
+            // dev-tools 要求（スクショ/操作注入）を処理（クリック注入はこの後の drain で適用）。
+            _state.poll_devtools();
             // オーバーレイの操作適用・自動非表示・定期再描画。
             #[cfg(windows)]
             {
@@ -523,7 +671,8 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     || _state.last_activity.elapsed() < Duration::from_secs(3);
                 // 窓の可視は「フォーカス中かつ表示すべき UI がある」時のみ。アイドル時は隠して
                 // 動画全面を素通しにする（動画クリック=一時停止は winit の MouseInput で処理）。
-                let show = _state.focused && active;
+                // dev-tools 有効時はフォーカスに依らず表示（/screenshot で UI を確実に写すため）。
+                let show = active && (_state.focused || _state.devtools_rx.is_some());
                 if show != _state.overlay_visible {
                     _state.overlay_visible = show;
                     if let Some(ov) = _state.overlay.as_ref() {
@@ -533,6 +682,17 @@ impl ApplicationHandler<UserEvent> for NativeApp {
 
                 // 窓が可視の時のみ再描画。
                 _state.render_overlay(active);
+
+                // 保留中のスクリーンショット: 前面化＋再描画の反映を数フレーム待ってからキャプチャ。
+                if _state.pending_shot.is_some() {
+                    if _state.shot_delay == 0 {
+                        if let Some(reply) = _state.pending_shot.take() {
+                            let _ = reply.send(_state.capture_png());
+                        }
+                    } else {
+                        _state.shot_delay -= 1;
+                    }
+                }
             }
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + Duration::from_millis(33),
@@ -835,6 +995,78 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             _ => {}
         }
     }
+}
+
+/// ウィンドウのクライアント領域を画面から BitBlt で取り込み、PNG バイト列にする。
+/// 動画(mpv D3D11)と透過オーバーレイが OS で合成された「見たままの」画を取得する
+/// （ウィンドウが可視で前面にある前提。dev-tools の /screenshot 用）。
+#[cfg(windows)]
+unsafe fn capture_client_png(wid: i64) -> Option<Vec<u8>> {
+    use windows::Win32::Foundation::{HWND, POINT, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
+        GetDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+        HBITMAP, SRCCOPY,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+
+    let hwnd = HWND(wid as *mut core::ffi::c_void);
+    let mut rc = RECT::default();
+    if GetClientRect(hwnd, &mut rc).is_err() {
+        return None;
+    }
+    let w = (rc.right - rc.left).max(1);
+    let h = (rc.bottom - rc.top).max(1);
+    let mut org = POINT { x: 0, y: 0 };
+    let _ = ClientToScreen(hwnd, &mut org);
+
+    let screen = GetDC(None);
+    let mem = CreateCompatibleDC(screen);
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h, // top-down
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+    let dib = CreateDIBSection(mem, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
+        .ok()
+        .filter(|b: &HBITMAP| !b.0.is_null());
+    let result = (|| {
+        let dib = dib?;
+        let old = SelectObject(mem, dib);
+        let _ = BitBlt(mem, 0, 0, w, h, screen, org.x, org.y, SRCCOPY);
+        let n = (w * h * 4) as usize;
+        let src = std::slice::from_raw_parts(bits as *const u8, n);
+        // BGRA(top-down) → RGBA。
+        let mut rgba = vec![0u8; n];
+        for i in (0..n).step_by(4) {
+            rgba[i] = src[i + 2];
+            rgba[i + 1] = src[i + 1];
+            rgba[i + 2] = src[i];
+            rgba[i + 3] = 255;
+        }
+        let mut out = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut out, w as u32, h as u32);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut wtr = enc.write_header().ok()?;
+            wtr.write_image_data(&rgba).ok()?;
+        }
+        SelectObject(mem, old);
+        let _ = DeleteObject(dib);
+        Some(out)
+    })();
+    let _ = DeleteDC(mem);
+    ReleaseDC(None, screen);
+    result
 }
 
 /// winit ウィンドウの Win32 HWND を i64 で取り出す（mpv の `wid` 用）。

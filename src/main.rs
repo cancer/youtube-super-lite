@@ -5,6 +5,7 @@
 mod auth;
 mod chat;
 mod controller;
+mod devtools;
 mod gpu_usage;
 mod history;
 mod image_cache;
@@ -206,6 +207,7 @@ struct CliArgs {
     verbose: bool,
     backend: String,
     volume: Option<f64>,
+    enable_dev_tools: bool,
 }
 
 fn parse_args() -> Result<CliArgs> {
@@ -213,6 +215,7 @@ fn parse_args() -> Result<CliArgs> {
     let mut backend = auth::DEFAULT_BACKEND.to_string();
     let mut url: Option<String> = None;
     let mut volume: Option<f64> = None;
+    let mut enable_dev_tools = false;
 
     let parse_volume = |s: &str| -> Result<f64> {
         let v: f64 = s
@@ -230,8 +233,10 @@ fn parse_args() -> Result<CliArgs> {
                     .next()
                     .ok_or_else(|| anyhow!("--debug-backend に URL を指定してください"))?;
             }
+            // 検証用ローカル HTTP（スクショ/操作注入）を有効化。
+            "--enable-dev-tools" => enable_dev_tools = true,
             // 旧 egui 版のフラグ。互換のため受理するが無視する（現在は常にネイティブ版）。
-            "--enable-dev-tools" | "--native" => {}
+            "--native" => {}
             // 初期音量（デバッグ用。例: --volume 0 で無音起動）。`--volume=0` 形式も可。
             "--volume" => {
                 let v = args
@@ -263,6 +268,7 @@ fn parse_args() -> Result<CliArgs> {
         verbose,
         backend: backend.trim_end_matches('/').to_string(),
         volume,
+        enable_dev_tools,
     })
 }
 
@@ -276,6 +282,7 @@ fn print_help() {
          \x20\x20-v, --verbose             mpv の詳細ログを出力\n\
          \x20\x20    --debug-backend URL   認証バックエンドを上書き（デバッグ用、デフォルト: {}）\n\
          \x20\x20    --volume N            初期音量 0-130（デバッグ用。例: --volume 0 で無音）\n\
+         \x20\x20    --enable-dev-tools    検証用ローカル HTTP（/screenshot, /click, /action 等）を有効化\n\
          \x20\x20-h, --help                このヘルプを表示",
         auth::DEFAULT_BACKEND
     );
@@ -296,8 +303,14 @@ fn main() -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let proxy = event_loop.create_proxy();
-    let mut app =
-        native_app::NativeApp::new(proxy, args.url, args.verbose, args.backend, args.volume);
+    let mut app = native_app::NativeApp::new(
+        proxy,
+        args.url,
+        args.verbose,
+        args.backend,
+        args.volume,
+        args.enable_dev_tools,
+    );
     event_loop.run_app(&mut app)?;
     Ok(())
 }

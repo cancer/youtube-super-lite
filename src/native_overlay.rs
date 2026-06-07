@@ -589,6 +589,27 @@ impl Overlay {
         OV_STATE.with(|s| std::mem::take(&mut s.borrow_mut().actions))
     }
 
+    /// dev-tools 用: クライアント座標 (x,y) への左クリックを注入する（wndproc の
+    /// WM_LBUTTONDOWN と同じ振り分けでアクションキューに積む）。
+    pub fn inject_click(&self, x: i32, y: i32) {
+        OV_STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            if s.list_open {
+                if s.list_row_h > 0 && y >= s.list_top {
+                    let row = ((y - s.list_top) / s.list_row_h) as usize;
+                    let idx = s.list_first + row;
+                    if idx < s.list_count {
+                        s.actions.push(OverlayAction::PlayIndex(idx));
+                    }
+                }
+            } else if in_rect(&s.chat_panel, x, y) {
+                // チャットパネル領域: 無視。
+            } else if let Some(act) = dispatch_hit(&s, x, y) {
+                s.actions.push(act);
+            }
+        });
+    }
+
     /// 表示/非表示を切り替える（フォーカス喪失時に隠す）。
     pub fn set_visible(&self, visible: bool) {
         unsafe {
