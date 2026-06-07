@@ -1215,9 +1215,14 @@ unsafe extern "system" fn overlay_wndproc(
     use windows::Win32::Graphics::Gdi::ScreenToClient;
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        HTCLIENT, HTTRANSPARENT, WM_LBUTTONDOWN, WM_NCHITTEST,
+        HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCHITTEST,
     };
     match msg {
+        // クリックされてもこの窓を activate せず、親(winit)も非アクティブ化させない。
+        // これを返さないと既定動作で親が WM_KILLFOCUS → winit Focused(false) になり
+        // オーバーレイが隠れてしまう（＝クリックで UI が消える）。クリック自体は食わず
+        // WM_LBUTTONDOWN として配送される（MA_NOACTIVATEANDEAT ではない）。
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         // コントロール帯（上部 UI／下部コントローラ）・チャットパネル・一覧の上だけ HTCLIENT で
         // 捕捉し、それ以外は HTTRANSPARENT で親 winit ウィンドウへ通す（動画クリック=一時停止は
         // winit 側の MouseInput で処理）。
