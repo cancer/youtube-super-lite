@@ -340,6 +340,10 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     } else {
                         (String::new(), Vec::new(), Vec::new())
                     };
+                    let auth_label = match &_state.core.channel {
+                        Some(ch) if !ch.is_empty() => format!("👤 {ch}"),
+                        _ => format!("{}（Ctrl+L）", _state.core.auth_status),
+                    };
                     if let Some(ov) = _state.overlay.as_mut() {
                         ov.render(
                             &_state.core.player,
@@ -350,6 +354,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                             list_sel,
                             &thumbs,
                             &header,
+                            &auth_label,
                         );
                     }
                 }
@@ -381,6 +386,17 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             WindowEvent::KeyboardInput { event, .. } => {
                 if !event.state.is_pressed() {
                     return;
+                }
+                // Ctrl+L: 対話ログイン（ブラウザで OAuth 同意）。
+                if state.ctrl {
+                    if let Key::Character(c) = &event.logical_key {
+                        if c.eq_ignore_ascii_case("l") {
+                            if !state.core.auth_busy {
+                                state.core.start_login();
+                            }
+                            return;
+                        }
+                    }
                 }
                 // Ctrl+V: クリップボードのテキストを URL 欄へ貼り付け。
                 #[cfg(windows)]

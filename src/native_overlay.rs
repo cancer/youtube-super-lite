@@ -304,6 +304,7 @@ impl Overlay {
         list_sel: usize,
         list_thumbs: &[String],
         list_header: &str,
+        auth_label: &str,
     ) {
         unsafe {
             let mut rc = RECT::default();
@@ -488,7 +489,7 @@ impl Overlay {
                 let layout = D2D_RECT_F {
                     left: top_f.left + 14.0,
                     top: top_f.top + 10.0,
-                    right: top_f.right - 12.0,
+                    right: top_f.right - 250.0,
                     bottom: top_f.bottom,
                 };
                 let wtext: Vec<u16> = txt.encode_utf16().collect();
@@ -500,6 +501,26 @@ impl Overlay {
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
+            }
+            // 認証状態（右寄せ領域）。Ctrl+L でログイン。
+            if !auth_label.is_empty() {
+                if let Ok(b) = dc_rt.CreateSolidColorBrush(&color(0.60, 0.85, 1.0, 1.0), None) {
+                    let ar = D2D_RECT_F {
+                        left: top_f.right - 240.0,
+                        top: top_f.top + 10.0,
+                        right: top_f.right - 12.0,
+                        bottom: top_f.bottom,
+                    };
+                    let wt: Vec<u16> = auth_label.encode_utf16().collect();
+                    dc_rt.DrawText(
+                        &wt,
+                        &self.text_format,
+                        &ar,
+                        &b,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                    );
+                }
             }
 
             // 一覧（登録チャンネル新着）。開いている時は全面パネルでコントローラ等を覆う。

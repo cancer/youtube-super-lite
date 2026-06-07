@@ -123,7 +123,9 @@
     全クリックを受領。render で行ジオメトリ(top/row_h/first/count)を OV_STATE に保存し、
     WM_LBUTTONDOWN で y からクリック行 index を算出して `list_click` に格納。NativeApp が
     `take_list_click()` で取り出し、その動画を再生。
-  - 残り P3 本体: 再生リスト一覧（2階層）、ログインUI/Like/画質選択、
+  - **ログインUI＋認証状態表示** ✅ **完了**: Ctrl+L で `core.start_login()`（ブラウザ OAuth 同意）。
+    上部バー右に認証状態を表示（ログイン中はチャンネル名「👤 …」、未ログインは auth_status＋「（Ctrl+L）」）。
+  - 残り P3 本体: Like(高評価)、画質/コーデック選択、再生リスト一覧（2階層）、
     検索等の日本語入力 IME(DirectWrite/TSF)、チャット左右分割。すべて `Controller` を駆動して順次移植。
     その後 P4 で egui/OpenGL 経路を撤去して移行完了。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
