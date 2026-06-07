@@ -369,6 +369,10 @@ impl NativeRunning {
                 }
             }
             OverlayAction::SetVolume(v) => self.core.player.set_volume(v.clamp(0.0, 130.0)),
+            OverlayAction::VolumeStep(d) => {
+                let p = &self.core.player;
+                p.set_volume((p.volume() + d).clamp(0.0, 130.0));
+            }
             OverlayAction::LiveEdge => self.core.player.seek_to_live(),
             OverlayAction::ToggleMute => {
                 let p = &self.core.player;

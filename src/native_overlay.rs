@@ -74,6 +74,8 @@ pub enum OverlayAction {
     LiveEdge,
     /// 音量設定（0.0..=130.0）。
     SetVolume(f64),
+    /// 音量を相対変更（マウスホイール。± の量）。
+    VolumeStep(f64),
     /// ミュートのトグル。
     ToggleMute,
     /// 現在の動画に高評価。
@@ -1272,7 +1274,7 @@ unsafe extern "system" fn overlay_wndproc(
     use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
     use windows::Win32::UI::WindowsAndMessaging::{
         HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
-        WM_MOUSEMOVE, WM_NCHITTEST,
+        WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
     };
     match msg {
         // クリックされてもこの窓を activate せず、親(winit)も非アクティブ化させない。
@@ -1362,6 +1364,14 @@ unsafe extern "system" fn overlay_wndproc(
         WM_LBUTTONUP => {
             OV_STATE.with(|s| s.borrow_mut().drag = Drag::None);
             let _ = ReleaseCapture();
+            LRESULT(0)
+        }
+        // ホイール: 音量 ±5。カーソルがオーバーレイ（コントロール帯）上にある時は
+        // ホイールがこの窓に届くため、ここで処理する（動画上では winit 側が受ける）。
+        WM_MOUSEWHEEL => {
+            let delta = ((wparam.0 >> 16) & 0xFFFF) as i16;
+            let step = if delta > 0 { 5.0 } else { -5.0 };
+            OV_STATE.with(|s| s.borrow_mut().actions.push(OverlayAction::VolumeStep(step)));
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
