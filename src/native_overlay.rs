@@ -306,6 +306,8 @@ impl Overlay {
         list_header: &str,
         auth_label: &str,
         info_label: &str,
+        chat_open: bool,
+        chat_lines: &[String],
     ) {
         unsafe {
             let mut rc = RECT::default();
@@ -478,6 +480,51 @@ impl Overlay {
                         D2D1_DRAW_TEXT_OPTIONS_NONE,
                         DWRITE_MEASURING_MODE_NATURAL,
                     );
+                }
+            }
+
+            // チャットパネル（右側。video-margin-ratio-right で空けた領域に重ねる）。
+            if chat_open {
+                let pw = w as f32 * 0.28;
+                let px = w as f32 - pw;
+                let ptop = 60.0;
+                let pbot = bar_f.top - 8.0;
+                if pbot > ptop + 40.0 {
+                    let panel = D2D_RECT_F {
+                        left: px,
+                        top: ptop,
+                        right: w as f32,
+                        bottom: pbot,
+                    };
+                    if let Ok(b) = dc_rt.CreateSolidColorBrush(&color(0.05, 0.05, 0.07, 0.82), None)
+                    {
+                        dc_rt.FillRectangle(&panel, &b);
+                    }
+                    if let Ok(b) = dc_rt.CreateSolidColorBrush(&color(0.90, 0.90, 0.95, 1.0), None)
+                    {
+                        let line_h = 38.0;
+                        let avail = (((pbot - ptop - 12.0) / line_h).floor() as usize).max(1);
+                        let n = chat_lines.len();
+                        let start = n.saturating_sub(avail);
+                        for (row, line) in chat_lines[start..].iter().enumerate() {
+                            let y = ptop + 6.0 + row as f32 * line_h;
+                            let r = D2D_RECT_F {
+                                left: px + 10.0,
+                                top: y,
+                                right: w as f32 - 10.0,
+                                bottom: y + line_h,
+                            };
+                            let wt: Vec<u16> = line.encode_utf16().collect();
+                            dc_rt.DrawText(
+                                &wt,
+                                &self.text_format,
+                                &r,
+                                &b,
+                                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                                DWRITE_MEASURING_MODE_NATURAL,
+                            );
+                        }
+                    }
                 }
             }
 

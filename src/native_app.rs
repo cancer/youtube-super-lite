@@ -16,6 +16,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
+use crate::chat::ChatRun;
 use crate::controller::Controller;
 use crate::player::Player;
 use crate::{auth, gpu_usage, resolve, Codec, Quality, UserEvent};
@@ -55,6 +56,8 @@ struct NativeRunning {
     list_open: bool,
     list_sel: usize,
     list_source: ListSource,
+    /// チャット（右パネル）表示中か。
+    chat_open: bool,
     /// 動画に重ねる透過 2D オーバーレイ（コントローラ表示）。Windows のみ。
     #[cfg(windows)]
     overlay: Option<crate::native_overlay::Overlay>,
@@ -145,6 +148,7 @@ impl NativeApp {
             list_open: false,
             list_sel: 0,
             list_source: ListSource::Subs,
+            chat_open: false,
             #[cfg(windows)]
             overlay,
             #[cfg(windows)]
@@ -314,8 +318,10 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     _state.last_cursor = (p.x, p.y);
                     _state.last_activity = Instant::now();
                 }
-                // 一覧表示中は常に表示。それ以外は 3 秒無操作で自動非表示。
-                let show = _state.list_open || _state.last_activity.elapsed() < Duration::from_secs(3);
+                // 一覧/チャット表示中は常に表示。それ以外は 3 秒無操作で自動非表示。
+                let show = _state.list_open
+                    || _state.chat_open
+                    || _state.last_activity.elapsed() < Duration::from_secs(3);
                 if show != _state.overlay_visible {
                     _state.overlay_visible = show;
                     if let Some(ov) = _state.overlay.as_ref() {
@@ -345,10 +351,31 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                         _ => format!("{}（Ctrl+L）", _state.core.auth_status),
                     };
                     let info_label = format!(
-                        "画質: {} ｜ コーデック: {}  （Ctrl+Q/C 変更・Ctrl+G 高評価）",
+                        "画質: {} ｜ コーデック: {}  （Ctrl+Q/C 変更・Ctrl+G 高評価・Ctrl+T チャット）",
                         _state.core.quality.label(),
                         _state.core.codec.label()
                     );
+                    let chat_open = _state.chat_open;
+                    let chat_lines: Vec<String> = if chat_open {
+                        _state
+                            .core
+                            .chat_messages
+                            .iter()
+                            .map(|m| {
+                                let text: String = m
+                                    .runs
+                                    .iter()
+                                    .map(|r| match r {
+                                        ChatRun::Text(t) => t.as_str(),
+                                        ChatRun::Image { alt, .. } => alt.as_str(),
+                                    })
+                                    .collect();
+                                format!("{}: {}", m.author, text)
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                     if let Some(ov) = _state.overlay.as_mut() {
                         ov.render(
                             &_state.core.player,
@@ -361,6 +388,8 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                             &header,
                             &auth_label,
                             &info_label,
+                            chat_open,
+                            &chat_lines,
                         );
                     }
                 }
@@ -409,6 +438,14 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                                 {
                                     state.core.start_like(vid);
                                 }
+                                return;
+                            }
+                            "t" => {
+                                state.chat_open = !state.chat_open;
+                                state
+                                    .core
+                                    .player
+                                    .set_video_margin_right(if state.chat_open { 0.28 } else { 0.0 });
                                 return;
                             }
                             "q" => {

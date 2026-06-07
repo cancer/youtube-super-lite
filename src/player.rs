@@ -209,6 +209,14 @@ impl Player {
         let _ = self.mpv.set_property("hwdec", mode);
     }
 
+    /// 映像の右マージン比率（0.0..1.0）を設定する。ネイティブ版でチャットを右に出すとき、
+    /// 動画を左に縮めて重なりを避けるために使う（真の左右分割）。
+    pub fn set_video_margin_right(&self, ratio: f64) {
+        let _ = self
+            .mpv
+            .set_property("video-margin-ratio-right", ratio.clamp(0.0, 0.9));
+    }
+
     /// 動画を読み込む（loadfile replace）。
     /// `audio_url` / `title` は loadfile のオプションとして `audio-file=` / `force-media-title=` を渡す。
     pub fn loadfile(

@@ -128,7 +128,10 @@
   - **Like＋画質/コーデック選択** ✅ **完了**: Ctrl+G で `core.start_like(video_id)`、Ctrl+Q で画質、
     Ctrl+C でコーデックを巡回切替（YouTube 再生中なら `core.start_resolve` で取り直し）。
     コントローラ帯の上に「画質: … ｜ コーデック: …（Ctrl+Q/C・Ctrl+G）」の状態ラベルを表示。
-  - 残り P3 本体: 再生リスト一覧（2階層）、検索等の日本語入力 IME(DirectWrite/TSF)、チャット左右分割。
+  - **チャット左右分割** ✅ **完了**: Ctrl+T で開閉。`Player::set_video_margin_right(0.28)` で
+    mpv の映像を左に縮め、空いた右 28% に Direct2D でチャットパネルを描画（`core.chat_messages` の
+    author: text を末尾から表示。ChatRun::Image は alt テキスト）。閉じると margin を 0 に戻す。
+  - 残り P3 本体: 再生リスト一覧（2階層）、検索等の日本語入力 IME(DirectWrite/TSF)。
     すべて `Controller` を駆動して順次移植。その後 P4 で egui/OpenGL 経路を撤去して移行完了。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
