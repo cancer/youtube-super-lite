@@ -18,7 +18,7 @@ use winit::window::{Window, WindowId};
 
 use crate::controller::Controller;
 use crate::player::Player;
-use crate::{auth, gpu_usage, UserEvent};
+use crate::{auth, gpu_usage, resolve, Codec, Quality, UserEvent};
 
 /// 一覧の表示ソース。1/2/3 キーで切替。
 #[derive(Clone, Copy, PartialEq)]
@@ -344,6 +344,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                         Some(ch) if !ch.is_empty() => format!("👤 {ch}"),
                         _ => format!("{}（Ctrl+L）", _state.core.auth_status),
                     };
+                    let info_label = format!(
+                        "画質: {} ｜ コーデック: {}  （Ctrl+Q/C 変更・Ctrl+G 高評価）",
+                        _state.core.quality.label(),
+                        _state.core.codec.label()
+                    );
                     if let Some(ov) = _state.overlay.as_mut() {
                         ov.render(
                             &_state.core.player,
@@ -355,6 +360,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                             &thumbs,
                             &header,
                             &auth_label,
+                            &info_label,
                         );
                     }
                 }
@@ -387,14 +393,51 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 if !event.state.is_pressed() {
                     return;
                 }
-                // Ctrl+L: 対話ログイン（ブラウザで OAuth 同意）。
+                // Ctrl+修飾キー: L=ログイン, G=高評価, Q=画質切替, C=コーデック切替。
                 if state.ctrl {
                     if let Key::Character(c) = &event.logical_key {
-                        if c.eq_ignore_ascii_case("l") {
-                            if !state.core.auth_busy {
-                                state.core.start_login();
+                        match c.as_str().to_ascii_lowercase().as_str() {
+                            "l" => {
+                                if !state.core.auth_busy {
+                                    state.core.start_login();
+                                }
+                                return;
                             }
-                            return;
+                            "g" => {
+                                if let Some(vid) =
+                                    auth::extract_video_id(&state.core.current_url)
+                                {
+                                    state.core.start_like(vid);
+                                }
+                                return;
+                            }
+                            "q" => {
+                                let all = Quality::ALL;
+                                let i = all
+                                    .iter()
+                                    .position(|q| *q == state.core.quality)
+                                    .unwrap_or(0);
+                                state.core.quality = all[(i + 1) % all.len()];
+                                if resolve::is_youtube_url(&state.core.current_url) {
+                                    let u = state.core.current_url.clone();
+                                    state.core.start_resolve(u);
+                                }
+                                return;
+                            }
+                            "c" => {
+                                let all = Codec::ALL;
+                                let i = all
+                                    .iter()
+                                    .position(|c2| *c2 == state.core.codec)
+                                    .unwrap_or(0);
+                                state.core.codec = all[(i + 1) % all.len()];
+                                if resolve::is_youtube_url(&state.core.current_url) {
+                                    let u = state.core.current_url.clone();
+                                    state.core.start_resolve(u);
+                                }
+                                return;
+                            }
+                            _ => {}
                         }
                     }
                 }

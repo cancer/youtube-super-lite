@@ -125,9 +125,11 @@
     `take_list_click()` で取り出し、その動画を再生。
   - **ログインUI＋認証状態表示** ✅ **完了**: Ctrl+L で `core.start_login()`（ブラウザ OAuth 同意）。
     上部バー右に認証状態を表示（ログイン中はチャンネル名「👤 …」、未ログインは auth_status＋「（Ctrl+L）」）。
-  - 残り P3 本体: Like(高評価)、画質/コーデック選択、再生リスト一覧（2階層）、
-    検索等の日本語入力 IME(DirectWrite/TSF)、チャット左右分割。すべて `Controller` を駆動して順次移植。
-    その後 P4 で egui/OpenGL 経路を撤去して移行完了。
+  - **Like＋画質/コーデック選択** ✅ **完了**: Ctrl+G で `core.start_like(video_id)`、Ctrl+Q で画質、
+    Ctrl+C でコーデックを巡回切替（YouTube 再生中なら `core.start_resolve` で取り直し）。
+    コントローラ帯の上に「画質: … ｜ コーデック: …（Ctrl+Q/C・Ctrl+G）」の状態ラベルを表示。
+  - 残り P3 本体: 再生リスト一覧（2階層）、検索等の日本語入力 IME(DirectWrite/TSF)、チャット左右分割。
+    すべて `Controller` を駆動して順次移植。その後 P4 で egui/OpenGL 経路を撤去して移行完了。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 

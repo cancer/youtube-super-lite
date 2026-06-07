@@ -305,6 +305,7 @@ impl Overlay {
         list_thumbs: &[String],
         list_header: &str,
         auth_label: &str,
+        info_label: &str,
     ) {
         unsafe {
             let mut rc = RECT::default();
@@ -457,6 +458,27 @@ impl Overlay {
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
+            }
+
+            // 画質/コーデック等の状態ラベル（コントローラ帯の上、半透明）。
+            if !info_label.is_empty() {
+                if let Ok(b) = dc_rt.CreateSolidColorBrush(&color(0.82, 0.82, 0.88, 0.92), None) {
+                    let ir = D2D_RECT_F {
+                        left: bar_f.left + 6.0,
+                        top: bar_f.top - 26.0,
+                        right: bar_f.right,
+                        bottom: bar_f.top - 2.0,
+                    };
+                    let wt: Vec<u16> = info_label.encode_utf16().collect();
+                    dc_rt.DrawText(
+                        &wt,
+                        &self.text_format,
+                        &ir,
+                        &b,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                    );
+                }
             }
 
             // URL 入力バー（上部）。
