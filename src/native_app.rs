@@ -268,6 +268,75 @@ impl NativeRunning {
         self.core.poll_gpu_usage();
         self.core.poll_resolve();
     }
+
+    /// オーバーレイを現在のウィンドウ位置・サイズに合わせて再描画する（表示中のみ）。
+    /// リサイズ/移動イベントからも呼び、ウィンドウに即追従させる。
+    #[cfg(windows)]
+    fn render_overlay(&mut self) {
+        if !self.overlay_visible {
+            return;
+        }
+        use windows::Win32::Foundation::HWND;
+        let parent = HWND(self.parent_wid as *mut core::ffi::c_void);
+        let url = self.url_input.clone();
+        let list_open = self.list_open;
+        let list_sel = self.list_sel;
+        let (header, titles, thumbs): (String, Vec<String>, Vec<String>) = if list_open {
+            let (h, rows) = self.list_rows();
+            (
+                h,
+                rows.iter().map(|r| r.0.clone()).collect(),
+                rows.iter().map(|r| r.1.clone()).collect(),
+            )
+        } else {
+            (String::new(), Vec::new(), Vec::new())
+        };
+        let auth_label = match &self.core.channel {
+            Some(ch) if !ch.is_empty() => format!("👤 {ch}"),
+            _ => format!("{}（Ctrl+L）", self.core.auth_status),
+        };
+        let info_label = format!(
+            "画質: {} ｜ コーデック: {}  （Ctrl+Q/C 変更・Ctrl+G 高評価・Ctrl+T チャット）",
+            self.core.quality.label(),
+            self.core.codec.label()
+        );
+        let chat_open = self.chat_open;
+        let chat_lines: Vec<String> = if chat_open {
+            self.core
+                .chat_messages
+                .iter()
+                .map(|m| {
+                    let text: String = m
+                        .runs
+                        .iter()
+                        .map(|r| match r {
+                            ChatRun::Text(t) => t.as_str(),
+                            ChatRun::Image { alt } => alt.as_str(),
+                        })
+                        .collect();
+                    format!("{}: {}", m.author, text)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if let Some(ov) = self.overlay.as_mut() {
+            ov.render(
+                &self.core.player,
+                parent,
+                &url,
+                list_open,
+                &titles,
+                list_sel,
+                &thumbs,
+                &header,
+                &auth_label,
+                &info_label,
+                chat_open,
+                &chat_lines,
+            );
+        }
+    }
 }
 
 impl ApplicationHandler<UserEvent> for NativeApp {
@@ -297,7 +366,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             #[cfg(windows)]
             {
                 use crate::native_overlay::OverlayAction;
-                use windows::Win32::Foundation::{HWND, POINT};
+                use windows::Win32::Foundation::POINT;
                 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
                 // クリックで溜まった操作を Player に適用。
@@ -353,69 +422,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 }
 
                 // 表示中のみ再描画（シークバー/時間・一覧を更新）。
-                if _state.overlay_visible {
-                    let parent = HWND(_state.parent_wid as *mut core::ffi::c_void);
-                    let url = _state.url_input.clone();
-                    let list_open = _state.list_open;
-                    let list_sel = _state.list_sel;
-                    let (header, titles, thumbs): (String, Vec<String>, Vec<String>) = if list_open
-                    {
-                        let (h, rows) = _state.list_rows();
-                        (
-                            h,
-                            rows.iter().map(|r| r.0.clone()).collect(),
-                            rows.iter().map(|r| r.1.clone()).collect(),
-                        )
-                    } else {
-                        (String::new(), Vec::new(), Vec::new())
-                    };
-                    let auth_label = match &_state.core.channel {
-                        Some(ch) if !ch.is_empty() => format!("👤 {ch}"),
-                        _ => format!("{}（Ctrl+L）", _state.core.auth_status),
-                    };
-                    let info_label = format!(
-                        "画質: {} ｜ コーデック: {}  （Ctrl+Q/C 変更・Ctrl+G 高評価・Ctrl+T チャット）",
-                        _state.core.quality.label(),
-                        _state.core.codec.label()
-                    );
-                    let chat_open = _state.chat_open;
-                    let chat_lines: Vec<String> = if chat_open {
-                        _state
-                            .core
-                            .chat_messages
-                            .iter()
-                            .map(|m| {
-                                let text: String = m
-                                    .runs
-                                    .iter()
-                                    .map(|r| match r {
-                                        ChatRun::Text(t) => t.as_str(),
-                                        ChatRun::Image { alt, .. } => alt.as_str(),
-                                    })
-                                    .collect();
-                                format!("{}: {}", m.author, text)
-                            })
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                    if let Some(ov) = _state.overlay.as_mut() {
-                        ov.render(
-                            &_state.core.player,
-                            parent,
-                            &url,
-                            list_open,
-                            &titles,
-                            list_sel,
-                            &thumbs,
-                            &header,
-                            &auth_label,
-                            &info_label,
-                            chat_open,
-                            &chat_lines,
-                        );
-                    }
-                }
+                _state.render_overlay();
             }
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + Duration::from_millis(100),
@@ -440,6 +447,19 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             }
             WindowEvent::ModifiersChanged(m) => {
                 state.ctrl = m.state().control_key();
+            }
+            // ウィンドウのリサイズ/移動にオーバーレイを即追従させる
+            // （モーダルなドラッグループ中は about_to_wait が止まるため、ここで直接再描画）。
+            WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
+                #[cfg(windows)]
+                {
+                    state.last_activity = Instant::now();
+                    state.overlay_visible = true;
+                    if let Some(ov) = state.overlay.as_ref() {
+                        ov.set_visible(true);
+                    }
+                    state.render_overlay();
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if !event.state.is_pressed() {
