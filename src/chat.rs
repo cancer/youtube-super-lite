@@ -21,8 +21,8 @@ use std::time::Duration;
 #[derive(Clone, Debug)]
 pub enum ChatRun {
     Text(String),
-    /// メンバーシップスタンプ等の YouTube カスタム絵文字。画像 URL とフォールバック用のテキスト。
-    Image { url: String, alt: String },
+    /// メンバーシップスタンプ等のカスタム絵文字。ネイティブ版では alt テキストで表示する。
+    Image { alt: String },
 }
 
 /// ライブチャットの 1 メッセージ。
@@ -30,9 +30,6 @@ pub enum ChatRun {
 pub struct ChatMessage {
     pub author: String,
     pub runs: Vec<ChatRun>,
-    /// 仮想スクロール（show_viewport）用に、描画時に実測した行高をキャッシュする。
-    /// 0.0 = 未実測。チャット欄は幅固定なので一度測れば安定する。
-    pub cached_height: std::cell::Cell<f32>,
 }
 
 /// 背景スレッドからメインスレッドへの通知。
@@ -425,11 +422,7 @@ fn parse_text_message(renderer: &Value) -> Option<ChatMessage> {
     if runs.is_empty() {
         return None;
     }
-    Some(ChatMessage {
-        author,
-        runs,
-        cached_height: std::cell::Cell::new(0.0),
-    })
+    Some(ChatMessage { author, runs })
 }
 
 /// message.runs[] を ChatRun の列に変換する。
@@ -472,14 +465,12 @@ fn extract_runs(message: &Value) -> Vec<ChatRun> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let url = pick_emoji_image_url(emoji);
-            if let Some(url) = url {
-                out.push(ChatRun::Image { url, alt });
-            } else {
+            if pick_emoji_image_url(emoji).is_some() {
+                // カスタム絵文字。ネイティブ版は alt テキストで表示する。
+                out.push(ChatRun::Image { alt });
+            } else if !alt.is_empty() {
                 // 画像 URL が無い場合は shortcut にフォールバック。
-                if !alt.is_empty() {
-                    push_text(&mut out, &alt);
-                }
+                push_text(&mut out, &alt);
             }
         }
     }

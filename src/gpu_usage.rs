@@ -40,39 +40,27 @@ mod imp {
         UseHardware,
     }
 
-    /// GPU 使用率の監視を開始する。停止するには [`Monitor::stop`] を呼ぶ。
+    /// GPU 使用率の監視を開始する。`Monitor` を drop すると監視スレッドも終了する。
     pub fn start_monitoring() -> Option<Monitor> {
         let (tx, rx) = mpsc::channel();
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
-        let handle = thread::Builder::new()
+        thread::Builder::new()
             .name("gpu-usage-monitor".into())
             .spawn(move || run_loop(tx, stop_rx))
             .ok()?;
-        Some(Monitor {
-            rx,
-            stop_tx,
-            handle: Some(handle),
-        })
+        Some(Monitor { rx, _stop_tx: stop_tx })
     }
 
     pub struct Monitor {
         rx: mpsc::Receiver<HwdecDecision>,
-        stop_tx: mpsc::Sender<()>,
-        handle: Option<thread::JoinHandle<()>>,
+        /// 保持するだけ。drop されると stop_rx 側が Disconnected になり監視スレッドが終了する。
+        _stop_tx: mpsc::Sender<()>,
     }
 
     impl Monitor {
         /// 直近の決定を取り出す（非ブロッキング）。
         pub fn try_recv(&self) -> Option<HwdecDecision> {
             self.rx.try_recv().ok()
-        }
-
-        /// 監視を停止して結合する。
-        pub fn stop(mut self) {
-            let _ = self.stop_tx.send(());
-            if let Some(h) = self.handle.take() {
-                let _ = h.join();
-            }
         }
     }
 

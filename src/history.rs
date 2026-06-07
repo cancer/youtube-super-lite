@@ -29,10 +29,6 @@ pub struct HistoryItem {
     pub video_id: String,
     pub title: String,
     pub channel: String,
-    /// "mm:ss" など。サムネ右下バッジ用。
-    pub duration: String,
-    /// 視聴回数の表示（例 "4.6万回視聴"）。空文字なら非表示。
-    pub view_count: String,
     /// InnerTube が返すサムネ URL（最大サイズ、16:9クロップ済み）。空なら video_id から組み立て。
     pub thumbnail: String,
 }
@@ -88,30 +84,13 @@ fn fetch_inner(access_token: &str) -> Result<Vec<HistoryItem>> {
     for it in items_arr {
         let Some(tile) = it.get("tileRenderer") else { continue };
         let Some(video_id) = tile.get("contentId").and_then(|v| v.as_str()) else { continue };
-        // ヘッダから duration を抽出。
-        let mut duration = String::new();
-        if let Some(overlays) = tile
-            .pointer("/header/tileHeaderRenderer/thumbnailOverlays")
-            .and_then(|x| x.as_array())
-        {
-            for ov in overlays {
-                if let Some(s) = ov
-                    .pointer("/thumbnailOverlayTimeStatusRenderer/text/simpleText")
-                    .and_then(|v| v.as_str())
-                {
-                    duration = s.to_string();
-                    break;
-                }
-            }
-        }
         let title = tile
             .pointer("/metadata/tileMetadataRenderer/title/simpleText")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        // lines[0] がチャンネル名、lines[1] が視聴回数。runs か simpleText のどちらか。
+        // lines[0] がチャンネル名。
         let channel = extract_line(tile, 0);
-        let view_count = extract_line(tile, 1);
         let thumbnail = crate::subscriptions::pick_largest_thumbnail(
             tile.pointer("/header/tileHeaderRenderer/thumbnail"),
         );
@@ -120,8 +99,6 @@ fn fetch_inner(access_token: &str) -> Result<Vec<HistoryItem>> {
             video_id: video_id.to_string(),
             title,
             channel,
-            duration,
-            view_count,
             thumbnail,
         });
     }

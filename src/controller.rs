@@ -49,12 +49,8 @@ pub struct Controller {
     pub recommend_items: Vec<recommend::VideoItem>,
     pub recommend_tx: Sender<recommend::RecommendUpdate>,
     pub recommend_rx: Receiver<recommend::RecommendUpdate>,
-    pub recommend_visible: bool,
     pub recommend_status: String,
-    // --- 登録チャンネルタブ ---
-    /// 左のチャンネルリスト。
-    pub sub_channels: Vec<subscriptions::SubChannel>,
-    /// 右ペイン既定: 全登録チャンネルの新着フィード。
+    // --- 登録チャンネル新着 ---
     pub sub_feed: Vec<subscriptions::SubVideo>,
     pub sub_tx: Sender<subscriptions::SubUpdate>,
     pub sub_rx: Receiver<subscriptions::SubUpdate>,
@@ -77,13 +73,6 @@ pub struct Controller {
     pub playlist_visible: bool,
     pub playlist_status: String,
     pub playlist_busy: bool,
-    // --- チャンネル動画（登録チャンネルから開くアップロード一覧。再生リストではないのでカード UI）---
-    pub channel_videos: Vec<playlist::PlaylistItem>,
-    pub channel_tx: Sender<playlist::PlaylistUpdate>,
-    pub channel_rx: Receiver<playlist::PlaylistUpdate>,
-    pub channel_visible: bool,
-    pub channel_status: String,
-    pub channel_busy: bool,
     // --- ストリーム解決（yt-dlp）---
     pub resolve_tx: Sender<resolve::ResolveUpdate>,
     pub resolve_rx: Receiver<resolve::ResolveUpdate>,
@@ -103,7 +92,6 @@ impl Controller {
         let (sub_tx, sub_rx) = std::sync::mpsc::channel();
         let (history_tx, history_rx) = std::sync::mpsc::channel();
         let (playlist_tx, playlist_rx) = std::sync::mpsc::channel();
-        let (channel_tx, channel_rx) = std::sync::mpsc::channel();
         let (resolve_tx, resolve_rx) = std::sync::mpsc::channel();
         Self {
             player,
@@ -129,9 +117,7 @@ impl Controller {
             recommend_items: Vec::new(),
             recommend_tx,
             recommend_rx,
-            recommend_visible: false,
             recommend_status: String::new(),
-            sub_channels: Vec::new(),
             sub_feed: Vec::new(),
             sub_tx,
             sub_rx,
@@ -152,12 +138,6 @@ impl Controller {
             playlist_visible: false,
             playlist_status: String::new(),
             playlist_busy: false,
-            channel_videos: Vec::new(),
-            channel_tx,
-            channel_rx,
-            channel_visible: false,
-            channel_status: String::new(),
-            channel_busy: false,
             resolve_tx,
             resolve_rx,
             resolve_busy: false,
@@ -400,13 +380,9 @@ impl Controller {
         while let Ok(update) = self.sub_rx.try_recv() {
             match update {
                 subscriptions::SubUpdate::Feed(items) => {
-                    // 新着フィードの取得完了でスピナーを止める（こちらが右ペイン主役）。
                     self.sub_busy = false;
                     self.sub_status = "新着".to_string();
                     self.sub_feed = items;
-                }
-                subscriptions::SubUpdate::Channels(channels) => {
-                    self.sub_channels = channels;
                 }
                 subscriptions::SubUpdate::Error(e) => {
                     self.sub_busy = false;
@@ -430,22 +406,12 @@ impl Controller {
         self.sub_status = "新着を取得中…".to_string();
         self.sub_visible = true;
 
-        let access_token = tokens.access_token.clone();
-
-        // 1. 新着フィード（InnerTube FEsubscriptions）。
+        // 新着フィード（InnerTube FEsubscriptions）。
         let tx = self.sub_tx.clone();
         let proxy = self.proxy.clone();
-        let token = access_token.clone();
+        let token = tokens.access_token.clone();
         std::thread::spawn(move || {
             subscriptions::fetch_subscription_feed(&token, &tx);
-            let _ = proxy.send_event(UserEvent::Background);
-        });
-
-        // 2. 左のチャンネルリスト（Data API subscriptions.list）。
-        let tx = self.sub_tx.clone();
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            subscriptions::fetch_subscribed_channels(&access_token, &tx);
             let _ = proxy.send_event(UserEvent::Background);
         });
     }
@@ -572,49 +538,6 @@ impl Controller {
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
             playlist::fetch_playlist_items(&access_token, &playlist_id, &title, &tx);
-            let _ = proxy.send_event(UserEvent::Background);
-        });
-    }
-
-    pub fn poll_channel(&mut self) {
-        while let Ok(update) = self.channel_rx.try_recv() {
-            self.channel_busy = false;
-            match update {
-                playlist::PlaylistUpdate::Items { title, items } => {
-                    self.channel_status = title;
-                    self.channel_videos = items;
-                }
-                playlist::PlaylistUpdate::Error(e) => {
-                    self.channel_status = format!("取得エラー: {e}");
-                }
-                // チャンネルのアップロード取得では Playlists は来ない。
-                playlist::PlaylistUpdate::Playlists(_) => {}
-            }
-        }
-    }
-
-    /// 登録チャンネルのアップロード動画一覧をカード UI 用に背景スレッドで取得する。
-    /// 内部的にはアップロード再生リスト(UU…)を `fetch_playlist_items` で取るが、
-    /// これは「再生リスト」ではないので すべて再生/シャッフル は出さず、専用オーバーレイで
-    /// カードグリッド表示する。
-    pub fn start_channel_uploads(&mut self, uploads_id: String, title: String) {
-        let Some(tokens) = &self.tokens else {
-            self.channel_status = "先にログインしてください".to_string();
-            return;
-        };
-        if self.channel_busy {
-            return;
-        }
-        self.channel_busy = true;
-        self.channel_visible = true;
-        self.channel_videos.clear();
-        self.channel_status = format!("{title} を読み込み中…");
-
-        let access_token = tokens.access_token.clone();
-        let tx = self.channel_tx.clone();
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            playlist::fetch_playlist_items(&access_token, &uploads_id, &title, &tx);
             let _ = proxy.send_event(UserEvent::Background);
         });
     }

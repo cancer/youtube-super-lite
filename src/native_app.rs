@@ -265,7 +265,6 @@ impl NativeRunning {
         self.core.poll_subs();
         self.core.poll_history();
         self.core.poll_playlist();
-        self.core.poll_channel();
         self.core.poll_gpu_usage();
         self.core.poll_resolve();
     }

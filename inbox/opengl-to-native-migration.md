@@ -145,7 +145,14 @@
   image_cache.rs は egui BytesLoader を撤去し cache_dir/cached_path/ensure_cached_async/hash_uri のみに。
   gl_quad.rs / devtools.rs を削除。全ターゲット build OK、デフォルト起動で再生・正常終了を確認。
   → **アプリは OpenGL を一切作らず、mpv(D3D11)＋Direct2D オーバーレイのみで動作**。
-  残: dead_code 警告の整理、チャンネル別アップロード一覧（egui のサブ機能、未移植）、README 更新。
+  ✅ README をネイティブ構成に全面更新済み。
+  ✅ dead_code 一掃済み（**警告 0**）: egui 撤去で不要になった機能・データを削除 —
+  チャンネル別アップロード(Controller.channel_*/poll_channel/start_channel_uploads)、
+  登録チャンネル一覧ペイン(subscriptions::SubChannel/fetch_subscribed_channels/SubUpdate::Channels/
+  decode_channel_id_from_params、base64 依存も不要化)、未表示データ項目
+  (SubVideo.channel_id/duration/meta/channel_icon、VideoItem/HistoryItem.duration/view_count、
+  ChatRun::Image.url、ChatMessage.cached_height)、未使用 Player API(seekable/muted/set_muted/media_title)、
+  gpu_usage の未使用 stop()/handle、UserEvent::MpvRedraw。全ターゲット build 警告 0・実行確認済み。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 
 ## リスク / 要検証

@@ -3114,7 +3114,6 @@ name = "youtube-super-lite"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64",
  "dash-mpd",
  "libmpv2",
  "rand",
