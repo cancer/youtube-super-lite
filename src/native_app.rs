@@ -289,6 +289,24 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     _state.last_activity = Instant::now();
                 }
 
+                // 一覧のクリック選択 → 選択動画を再生。
+                if _state.list_open {
+                    if let Some(idx) = _state.overlay.as_ref().and_then(|o| o.take_list_click()) {
+                        let rows = _state.list_rows().1;
+                        if let Some((_, _, vid)) = rows.get(idx) {
+                            let url = format!("https://www.youtube.com/watch?v={vid}");
+                            _state.list_open = false;
+                            _state.url_input = url.clone();
+                            _state.core.load(&url);
+                            if let Some(v) = auth::extract_video_id(&_state.core.current_url) {
+                                _state.core.start_chat(v.clone());
+                                _state.core.start_recommend(v);
+                            }
+                        }
+                        _state.last_activity = Instant::now();
+                    }
+                }
+
                 // カーソル移動を検出して自動非表示を制御。
                 let mut p = POINT::default();
                 let _ = unsafe { GetCursorPos(&mut p) };

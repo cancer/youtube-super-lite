@@ -63,6 +63,13 @@ struct OvShared {
     btn: RECT,
     seek: RECT,
     pending: Option<OverlayAction>,
+    // 一覧（list_open 時）の行ジオメトリとクリック結果。
+    list_open: bool,
+    list_top: i32,
+    list_row_h: i32,
+    list_first: usize,
+    list_count: usize,
+    list_click: Option<usize>,
 }
 
 thread_local! {
@@ -271,6 +278,11 @@ impl Overlay {
     /// クリックで溜まった操作を取り出す（NativeApp が Player に適用する）。
     pub fn take_action(&self) -> Option<OverlayAction> {
         OV_STATE.with(|s| s.borrow_mut().pending.take())
+    }
+
+    /// 一覧でクリックされた行 index を取り出す。
+    pub fn take_list_click(&self) -> Option<usize> {
+        OV_STATE.with(|s| s.borrow_mut().list_click.take())
     }
 
     /// 表示/非表示を切り替える（自動非表示用）。
@@ -630,6 +642,14 @@ impl Overlay {
                         );
                     }
                 }
+                // クリック判定用に行ジオメトリを保存。
+                OV_STATE.with(|s| {
+                    let mut s = s.borrow_mut();
+                    s.list_top = top0 as i32;
+                    s.list_row_h = row_h as i32;
+                    s.list_first = first;
+                    s.list_count = list_items.len();
+                });
             }
 
             let _ = dc_rt.EndDraw(None, None);
@@ -637,6 +657,7 @@ impl Overlay {
             // ヒット判定用の矩形を wndproc / NativeApp と共有する。一覧表示中は無効化（透過）。
             OV_STATE.with(|s| {
                 let mut s = s.borrow_mut();
+                s.list_open = list_open;
                 if list_open {
                     s.bar = RECT::default();
                     s.btn = RECT::default();
@@ -727,26 +748,37 @@ unsafe extern "system" fn overlay_wndproc(
         HTCLIENT, HTTRANSPARENT, WM_LBUTTONDOWN, WM_NCHITTEST,
     };
     match msg {
-        // 入力振り分け: コントローラ帯の中だけ overlay が受け取り、それ以外は下の動画へ透過。
+        // 入力振り分け: 一覧表示中は全クリックを overlay が受ける。それ以外はコントローラ帯のみ。
         WM_NCHITTEST => {
             let sx = (lparam.0 & 0xFFFF) as i16 as i32;
             let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
             let mut pt = POINT { x: sx, y: sy };
             let _ = ScreenToClient(hwnd, &mut pt);
-            let in_bar = OV_STATE.with(|s| in_rect(&s.borrow().bar, pt.x, pt.y));
-            if in_bar {
+            let hit = OV_STATE.with(|s| {
+                let s = s.borrow();
+                s.list_open || in_rect(&s.bar, pt.x, pt.y)
+            });
+            if hit {
                 LRESULT(HTCLIENT as isize)
             } else {
                 LRESULT(HTTRANSPARENT as isize)
             }
         }
-        // 帯クリック: ボタン=再生/一時停止、シークバー=絶対シーク。
+        // クリック: 一覧表示中は行選択、それ以外はボタン=再生/一時停止・バー=絶対シーク。
         WM_LBUTTONDOWN => {
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
             OV_STATE.with(|s| {
                 let mut s = s.borrow_mut();
-                if in_rect(&s.btn, x, y) {
+                if s.list_open {
+                    if s.list_row_h > 0 && y >= s.list_top {
+                        let row = ((y - s.list_top) / s.list_row_h) as usize;
+                        let idx = s.list_first + row;
+                        if idx < s.list_count {
+                            s.list_click = Some(idx);
+                        }
+                    }
+                } else if in_rect(&s.btn, x, y) {
                     s.pending = Some(OverlayAction::TogglePause);
                 } else if s.seek.right > s.seek.left && in_rect(&s.seek, x, y) {
                     let frac = ((x - s.seek.left) as f64 / (s.seek.right - s.seek.left) as f64)
