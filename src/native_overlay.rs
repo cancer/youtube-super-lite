@@ -29,8 +29,8 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
-    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
+    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_METRICS,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -47,8 +47,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::player::Player;
 
-/// 下部コントローラ帯の高さ（2 段: シーク行＋コントロール行）。
-const BAR_H: i32 = 104;
+/// 下部コントローラ帯の高さ（薄い半透明帯: 細いシークライン＋1 行のフラット操作）。
+const BOTTOM_H: i32 = 52;
+/// 上部 UI 帯の高さ（URL 行＋ナビ行＋タイトル行）。
+const TOP_H: i32 = 86;
+/// フラットなテキスト行の高さ（クリック判定用）。
+const ROW_H: i32 = 26;
 
 /// 上部バーのタブが指す一覧ソース（NativeApp 側の ListSource へ写す）。
 #[derive(Clone, Copy)]
@@ -253,15 +257,17 @@ pub fn clipboard_text() -> Option<String> {
     }
 }
 
-/// 描画ヘルパー。Direct2D の塗り/テキスト/ボタンをまとめる（render の各所から呼ぶ）。
+/// 描画ヘルパー。Direct2D の塗り/テキストをまとめる（render の各所から呼ぶ）。
 /// 中身は COM ポインタ（参照カウント）のクローンを持つので Overlay 本体を借用しない
 /// （描画中に thumb_cache を &mut で触る draw_list と両立させるため）。
 struct Painter {
     rt: ID2D1DCRenderTarget,
-    /// 左寄せテキスト用フォーマット。
+    /// 主フォント（タイトル・URL、22px）。
     tf: IDWriteTextFormat,
-    /// 中央寄せ（ボタンラベル用）フォーマット。
-    tf_c: IDWriteTextFormat,
+    /// 小フォント（コントロール・タブ・時間、15px）。
+    tfs: IDWriteTextFormat,
+    /// テキスト幅計測用（フラットボタンのヒット矩形算出）。
+    dw: IDWriteFactory,
 }
 
 impl Painter {
@@ -284,13 +290,22 @@ impl Painter {
         }
     }
 
-    /// 左寄せテキスト。
+    /// 主フォントの左寄せテキスト（タイトル・URL）。
     unsafe fn text(&self, s: &str, r: D2D_RECT_F, c: D2D1_COLOR_F) {
+        self.draw(&self.tf, s, r, c);
+    }
+
+    /// 小フォントの左寄せテキスト（コントロール・タブ・時間）。
+    unsafe fn text_s(&self, s: &str, r: D2D_RECT_F, c: D2D1_COLOR_F) {
+        self.draw(&self.tfs, s, r, c);
+    }
+
+    unsafe fn draw(&self, tf: &IDWriteTextFormat, s: &str, r: D2D_RECT_F, c: D2D1_COLOR_F) {
         if let Ok(b) = self.rt.CreateSolidColorBrush(&c, None) {
             let wt: Vec<u16> = s.encode_utf16().collect();
             self.rt.DrawText(
                 &wt,
-                &self.tf,
+                tf,
                 &r,
                 &b,
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
@@ -299,30 +314,60 @@ impl Painter {
         }
     }
 
-    /// 中央寄せテキスト。
-    unsafe fn text_center(&self, s: &str, r: D2D_RECT_F, c: D2D1_COLOR_F) {
-        if let Ok(b) = self.rt.CreateSolidColorBrush(&c, None) {
-            let wt: Vec<u16> = s.encode_utf16().collect();
-            self.rt.DrawText(
-                &wt,
-                &self.tf_c,
-                &r,
-                &b,
-                D2D1_DRAW_TEXT_OPTIONS_NONE,
-                DWRITE_MEASURING_MODE_NATURAL,
-            );
+    /// 小フォントでのテキスト幅（px）を計測する。
+    unsafe fn measure_s(&self, s: &str) -> f32 {
+        let wt: Vec<u16> = s.encode_utf16().collect();
+        if let Ok(layout) = self.dw.CreateTextLayout(&wt, &self.tfs, 4096.0, 64.0) {
+            let mut m = DWRITE_TEXT_METRICS::default();
+            if layout.GetMetrics(&mut m).is_ok() {
+                return m.width;
+            }
         }
+        s.chars().count() as f32 * 9.0
     }
 
-    /// ボタン（角丸背景＋中央ラベル）。`hot` で強調色。
-    unsafe fn button(&self, r: RECT, label: &str, hot: bool) {
-        let bg = if hot {
-            color(0.26, 0.42, 0.72, 0.95)
-        } else {
-            color(0.22, 0.22, 0.27, 0.88)
+    /// 左端 `x`・縦中心 `cy` に小フォントのフラットなテキストボタンを描き、ヒット矩形を返す。
+    unsafe fn flat(&self, x: i32, cy: i32, label: &str, col: D2D1_COLOR_F) -> RECT {
+        let tw = self.measure_s(label).ceil() as i32;
+        let r = RECT {
+            left: x,
+            top: cy - ROW_H / 2,
+            right: x + tw + 8,
+            bottom: cy + ROW_H / 2,
         };
-        self.fill_round(rf(r), 8.0, bg);
-        self.text_center(label, rf(r), color(0.95, 0.95, 0.98, 1.0));
+        self.text_s(
+            label,
+            D2D_RECT_F {
+                left: (x + 4) as f32,
+                top: (cy - 9) as f32,
+                right: (x + 4 + tw) as f32,
+                bottom: (cy + 9) as f32,
+            },
+            col,
+        );
+        r
+    }
+
+    /// 右端 `xr`・縦中心 `cy` に右寄せでフラットなテキストボタンを描き、ヒット矩形を返す。
+    unsafe fn flat_right(&self, xr: i32, cy: i32, label: &str, col: D2D1_COLOR_F) -> RECT {
+        let tw = self.measure_s(label).ceil() as i32;
+        let r = RECT {
+            left: xr - tw - 8,
+            top: cy - ROW_H / 2,
+            right: xr,
+            bottom: cy + ROW_H / 2,
+        };
+        self.text_s(
+            label,
+            D2D_RECT_F {
+                left: (r.left + 4) as f32,
+                top: (cy - 9) as f32,
+                right: (xr - 4) as f32,
+                bottom: (cy + 9) as f32,
+            },
+            col,
+        );
+        r
     }
 }
 
@@ -331,9 +376,11 @@ pub struct Overlay {
     hwnd: HWND,
     _factory: ID2D1Factory,
     dc_rt: ID2D1DCRenderTarget,
+    /// 主フォント（タイトル・URL 用、22px）。
     text_format: IDWriteTextFormat,
-    text_format_center: IDWriteTextFormat,
-    _dwrite: IDWriteFactory,
+    /// 小フォント（コントロール・タブ・時間用、15px）。
+    text_format_small: IDWriteTextFormat,
+    dwrite: IDWriteFactory,
     mem_dc: HDC,
     dib: HBITMAP,
     old_obj: HGDIOBJ,
@@ -392,18 +439,16 @@ impl Overlay {
                 22.0,
                 w!("ja-jp"),
             )?;
-            // ボタンラベル用に中央寄せ（水平・垂直）したフォーマットを別途作る。
-            let text_format_center: IDWriteTextFormat = dwrite.CreateTextFormat(
+            // コントロール・タブ・時間用の小フォント（フラット表示、egui 相当のコンパクトさ）。
+            let text_format_small: IDWriteTextFormat = dwrite.CreateTextFormat(
                 w!("Yu Gothic UI"),
                 None,
-                DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                DWRITE_FONT_WEIGHT_NORMAL,
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
-                20.0,
+                15.0,
                 w!("ja-jp"),
             )?;
-            let _ = text_format_center.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-            let _ = text_format_center.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
             let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
                 r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
                 pixelFormat: D2D1_PIXEL_FORMAT {
@@ -434,8 +479,8 @@ impl Overlay {
                 _factory: factory,
                 dc_rt,
                 text_format,
-                text_format_center,
-                _dwrite: dwrite,
+                text_format_small,
+                dwrite,
                 mem_dc: HDC::default(),
                 dib: HBITMAP::default(),
                 old_obj: HGDIOBJ::default(),
@@ -515,8 +560,10 @@ impl Overlay {
         list_header: &str,
         auth_label: &str,
         logged_in: bool,
+        has_recommend: bool,
         quality_label: &str,
         codec_label: &str,
+        chat_available: bool,
         chat_open: bool,
         chat_lines: &[String],
     ) {
@@ -546,7 +593,8 @@ impl Overlay {
             let p = Painter {
                 rt: dc_rt.clone(),
                 tf: self.text_format.clone(),
-                tf_c: self.text_format_center.clone(),
+                tfs: self.text_format_small.clone(),
+                dw: self.dwrite.clone(),
             };
 
             // このフレームで確定する各ヒット矩形（OV_STATE へ最後に書き出す）。
@@ -565,7 +613,16 @@ impl Overlay {
             // コントロール（上部バー＋下部コントローラ）は active 時のみ描画＆ヒット登録。
             if active && !list_open {
                 let title = player.media_title();
-                self.draw_top_bar(&p, w, url_input, auth_label, logged_in, &title, &mut hits);
+                self.draw_top_bar(
+                    &p,
+                    w,
+                    url_input,
+                    auth_label,
+                    logged_in,
+                    has_recommend,
+                    &title,
+                    &mut hits,
+                );
                 self.draw_controller(
                     &p,
                     w,
@@ -573,6 +630,7 @@ impl Overlay {
                     player,
                     quality_label,
                     codec_label,
+                    chat_available,
                     chat_open,
                     &mut hits,
                 );
@@ -627,7 +685,9 @@ impl Overlay {
         }
     }
 
-    /// 上部バー（URL 欄 / タブ / ログイン・認証状態 / 動画タイトル）を描画する。
+    /// 上部 UI 帯（URL 行 / ナビ行 / タイトル行）を egui 版に倣ってコンパクトに描画する。
+    /// 背景は薄い半透明帯、ボタンは枠なしフラットなテキスト（背景塗りなし）で動画を覆わない。
+    #[allow(clippy::too_many_arguments)]
     unsafe fn draw_top_bar(
         &self,
         p: &Painter,
@@ -635,91 +695,97 @@ impl Overlay {
         url_input: &str,
         auth_label: &str,
         logged_in: bool,
+        has_recommend: bool,
         title: &str,
         hits: &mut OvShared,
     ) {
-        // 上部 UI 帯（URL バー＋タブ行＋タイトル行）のクリック捕捉領域。
+        // タイトルが無ければ 2 行ぶんに縮める。
+        let strip_h = if title.is_empty() { TOP_H - ROW_H } else { TOP_H };
         hits.region_top = RECT {
             left: 0,
             top: 0,
             right: w,
-            bottom: 140,
+            bottom: strip_h,
         };
-        // 上部バー帯（URL 欄＋ログイン）。
-        let top = RECT {
-            left: 12,
-            top: 10,
-            right: w - 12,
-            bottom: 54,
-        };
-        p.fill_round(rf(top), 10.0, color(0.10, 0.10, 0.12, 0.78));
+        // 薄い半透明帯（上から下へ少しフェード気味の濃さ）。
+        p.fill_rect(
+            D2D_RECT_F {
+                left: 0.0,
+                top: 0.0,
+                right: w as f32,
+                bottom: strip_h as f32,
+            },
+            color(0.04, 0.04, 0.06, 0.55),
+        );
 
-        // ログイン/認証（右寄せ）。未ログイン時はボタンとして機能（Login）。
-        let login = RECT {
-            left: w - 12 - 240,
-            top: 13,
-            right: w - 16,
-            bottom: 51,
-        };
-        if logged_in {
-            // ログイン済みはチャンネル名を表示するだけ（クリック不可）。
-            p.text(auth_label, rf(shrink(login, 8, 6)), color(0.60, 0.85, 1.0, 1.0));
+        // 右端: ログイン/認証（ナビ行に右寄せ）。
+        let nav_cy = 6 + ROW_H + ROW_H / 2;
+        let acc_col = if logged_in {
+            color(0.70, 0.88, 1.0, 1.0)
         } else {
-            p.button(login, auth_label, false);
-            hits.login = login;
+            color(1.0, 0.92, 0.55, 1.0)
+        };
+        let acc_rect = p.flat_right(w - 12, nav_cy, auth_label, acc_col);
+        if !logged_in {
+            hits.login = acc_rect; // 未ログイン時のみクリックでログイン。
         }
 
-        // URL 欄テキスト（ログイン領域の手前まで）。
+        // URL 行（先頭）。
         let (txt, col) = if url_input.is_empty() {
             (
-                "URL を入力して Enter で再生（英数字キー / Ctrl+V 貼付 / Esc クリア）".to_string(),
-                color(0.62, 0.62, 0.65, 1.0),
+                "URL: YouTube の URL を入力して Enter（英数字キー / Ctrl+V 貼付 / Esc クリア）".to_string(),
+                color(0.66, 0.66, 0.70, 1.0),
             )
         } else {
             (format!("URL: {url_input}"), color(1.0, 1.0, 1.0, 1.0))
         };
-        let url_rect = D2D_RECT_F {
-            left: top.left as f32 + 14.0,
-            top: top.top as f32 + 10.0,
-            right: login.left as f32 - 12.0,
-            bottom: top.bottom as f32,
-        };
-        p.text(&txt, url_rect, col);
+        p.text_s(
+            &txt,
+            D2D_RECT_F {
+                left: 12.0,
+                top: 6.0,
+                right: w as f32 - 12.0,
+                bottom: (6 + ROW_H) as f32,
+            },
+            col,
+        );
 
-        // タブ行（おすすめ / 登録チャンネル / 再生リスト / 履歴）。
-        let ty = 60;
-        let th = 36;
-        let gap = 8;
+        // ナビ行（フラットなテキストボタン）。おすすめは候補がある時のみ、
+        // 再生リスト/登録チャンネル/履歴はログイン時のみ（egui 版に準拠）。
+        let tab_col = color(0.85, 0.90, 1.0, 1.0);
         let mut x = 12;
-        let mut place = |label: &str, width: i32| -> RECT {
-            let r = RECT {
-                left: x,
-                top: ty,
-                right: x + width,
-                bottom: ty + th,
-            };
-            p.button(r, label, false);
-            x += width + gap;
-            r
-        };
-        hits.tab_recommend = place("おすすめ", 96);
-        hits.tab_subs = place("登録チャンネル", 150);
-        hits.tab_playlist = place("再生リスト", 120);
-        hits.tab_history = place("履歴", 84);
+        if has_recommend {
+            let r = p.flat(x, nav_cy, "📋 おすすめ", tab_col);
+            hits.tab_recommend = r;
+            x = r.right + 10;
+        }
+        if logged_in {
+            let r = p.flat(x, nav_cy, "📃 再生リスト", tab_col);
+            hits.tab_playlist = r;
+            x = r.right + 10;
+            let r = p.flat(x, nav_cy, "📺 登録チャンネル", tab_col);
+            hits.tab_subs = r;
+            x = r.right + 10;
+            let r = p.flat(x, nav_cy, "🕘 履歴", tab_col);
+            hits.tab_history = r;
+        }
 
-        // 動画タイトル行（タブ行の下、左寄せ・薄め）。
+        // タイトル行（あれば）。
         if !title.is_empty() {
-            let r = D2D_RECT_F {
-                left: 16.0,
-                top: 102.0,
-                right: w as f32 - 16.0,
-                bottom: 134.0,
-            };
-            p.text(&title, r, color(0.92, 0.92, 0.96, 0.96));
+            p.text_s(
+                title,
+                D2D_RECT_F {
+                    left: 12.0,
+                    top: (6 + ROW_H * 2) as f32,
+                    right: w as f32 - 12.0,
+                    bottom: strip_h as f32,
+                },
+                color(1.0, 1.0, 1.0, 1.0),
+            );
         }
     }
 
-    /// 下部コントローラ（シーク行＋コントロール行）を描画する。
+    /// 下部コントローラ（細いシークライン＋1 行のフラット操作）を egui 版に倣って描画する。
     #[allow(clippy::too_many_arguments)]
     unsafe fn draw_controller(
         &self,
@@ -729,203 +795,187 @@ impl Overlay {
         player: &Player,
         quality_label: &str,
         codec_label: &str,
+        chat_available: bool,
         chat_open: bool,
         hits: &mut OvShared,
     ) {
-        let bar = RECT {
-            left: 12,
-            top: h - BAR_H + 8,
-            right: w - 12,
-            bottom: h - 8,
+        // 薄い半透明帯（下端いっぱい）。
+        let strip = RECT {
+            left: 0,
+            top: h - BOTTOM_H,
+            right: w,
+            bottom: h,
         };
-        // 下部コントローラ帯のクリック捕捉領域（バーいっぱい）。
-        hits.region_bottom = bar;
-        p.fill_round(rf(bar), 14.0, color(0.10, 0.10, 0.12, 0.80));
+        hits.region_bottom = strip;
+        p.fill_rect(rf(strip), color(0.03, 0.03, 0.05, 0.72));
 
         let pos = player.time_pos();
         let dur = player.duration();
         let paused = player.paused();
         let seekable = hits.seekable;
 
-        // --- シーク行 ---
-        let seek_cy = (bar.top + 22) as f32;
-        let seek_l = (bar.left + 20) as f32;
-        let time_w = 150.0;
-        let seek_r = ((bar.right - 20) as f32 - time_w).max(seek_l + 24.0);
-        let track_h = 6.0;
+        // --- シークライン（フル幅・細い、上段）---
+        let sx0 = 14.0;
+        let sx1 = w as f32 - 14.0;
+        let sy = (h - BOTTOM_H + 13) as f32;
+        let track_h = 3.0;
         let frac = if dur > 0.0 {
             (pos / dur).clamp(0.0, 1.0) as f32
-        } else {
+        } else if seekable {
             0.0
+        } else {
+            1.0 // DVR 無しライブはバー 100% 固定。
         };
-        // トラック（背景）。
         p.fill_round(
             D2D_RECT_F {
-                left: seek_l,
-                top: seek_cy - track_h / 2.0,
-                right: seek_r,
-                bottom: seek_cy + track_h / 2.0,
+                left: sx0,
+                top: sy - track_h / 2.0,
+                right: sx1,
+                bottom: sy + track_h / 2.0,
             },
-            3.0,
-            if seekable {
-                color(0.45, 0.45, 0.5, 0.9)
-            } else {
-                color(0.55, 0.20, 0.20, 0.9)
+            1.5,
+            color(1.0, 1.0, 1.0, 0.25),
+        );
+        let prog_col = if seekable {
+            color(0.92, 0.20, 0.20, 1.0) // 本家風の赤。
+        } else {
+            color(0.55, 0.55, 0.60, 0.9) // ライブ固定はグレー。
+        };
+        p.fill_round(
+            D2D_RECT_F {
+                left: sx0,
+                top: sy - track_h / 2.0,
+                right: (sx0 + (sx1 - sx0) * frac).max(sx0),
+                bottom: sy + track_h / 2.0,
             },
+            1.5,
+            prog_col,
         );
         if seekable {
-            let knob_x = seek_l + (seek_r - seek_l) * frac;
-            p.fill_round(
-                D2D_RECT_F {
-                    left: seek_l,
-                    top: seek_cy - track_h / 2.0,
-                    right: knob_x.max(seek_l),
-                    bottom: seek_cy + track_h / 2.0,
-                },
-                3.0,
-                color(0.30, 0.60, 1.0, 1.0),
-            );
-            if let Ok(b) = p.rt.CreateSolidColorBrush(&color(1.0, 1.0, 1.0, 1.0), None) {
+            let knob_x = sx0 + (sx1 - sx0) * frac;
+            if let Ok(b) = p.rt.CreateSolidColorBrush(&color(0.92, 0.20, 0.20, 1.0), None) {
                 p.rt.FillEllipse(
                     &D2D1_ELLIPSE {
-                        point: D2D_POINT_2F {
-                            x: knob_x,
-                            y: seek_cy,
-                        },
-                        radiusX: 8.0,
-                        radiusY: 8.0,
+                        point: D2D_POINT_2F { x: knob_x, y: sy },
+                        radiusX: 6.0,
+                        radiusY: 6.0,
                     },
                     &b,
                 );
             }
             hits.seek = RECT {
-                left: seek_l as i32,
-                top: (seek_cy - 12.0) as i32,
-                right: seek_r as i32,
-                bottom: (seek_cy + 12.0) as i32,
+                left: sx0 as i32,
+                top: (sy - 9.0) as i32,
+                right: sx1 as i32,
+                bottom: (sy + 9.0) as i32,
             };
-        } else {
-            // DVR 無しライブ: 固定表示で操作無効。LIVE 表示。
-            p.text_center(
-                "● LIVE",
-                D2D_RECT_F {
-                    left: seek_l,
-                    top: seek_cy - 14.0,
-                    right: seek_l + 90.0,
-                    bottom: seek_cy + 14.0,
-                },
-                color(1.0, 0.45, 0.45, 1.0),
-            );
         }
-        // 時間表示。
+
+        // --- コントロール行（フラット、下段）---
+        let cy = h - 16;
+        let fg = color(0.96, 0.96, 0.98, 1.0);
+
+        // 左フロー: ▶/⏸ → 時間 → 👍 →（チャットがあれば）💬。
+        let mut x = 14;
+        let r = p.flat(x, cy, if paused { "▶" } else { "⏸" }, fg);
+        hits.btn = r;
+        x = r.right + 12;
+
         let time_str = format!("{} / {}", fmt_time(pos), fmt_time(dur));
-        p.text(
+        let tw = p.measure_s(&time_str).ceil() as i32;
+        p.text_s(
             &time_str,
             D2D_RECT_F {
-                left: seek_r + 12.0,
-                top: seek_cy - 14.0,
-                right: bar.right as f32 - 8.0,
-                bottom: seek_cy + 14.0,
+                left: x as f32,
+                top: (cy - 9) as f32,
+                right: (x + tw + 4) as f32,
+                bottom: (cy + 9) as f32,
             },
-            color(0.95, 0.95, 0.98, 1.0),
+            fg,
         );
+        x += tw + 16;
 
-        // --- コントロール行 ---
-        let cy = bar.top + 66;
-        let bh = 36;
-        let row = |x: i32, width: i32| -> RECT {
-            RECT {
-                left: x,
-                top: cy - bh / 2,
-                right: x + width,
-                bottom: cy + bh / 2,
-            }
+        let r = p.flat(x, cy, "👍", fg);
+        hits.like = r;
+        x = r.right + 10;
+
+        if chat_available {
+            let r = p.flat(
+                x,
+                cy,
+                if chat_open { "💬 非表示" } else { "💬 チャット" },
+                if chat_open { color(0.55, 0.80, 1.0, 1.0) } else { fg },
+            );
+            hits.chat = r;
+        }
+
+        // 右フロー（右→左）: 音量バー → 🔊/🔇 → コーデック → 画質。
+        let mut xr = w - 14;
+
+        // 音量バー（幅 110）。
+        let vol_w = 110;
+        let vol = RECT {
+            left: xr - vol_w,
+            top: cy - ROW_H / 2,
+            right: xr,
+            bottom: cy + ROW_H / 2,
         };
-        let mut x = bar.left + 20;
-
-        // 再生/一時停止。
-        let btn = row(x, 44);
-        p.button(btn, if paused { "▶" } else { "⏸" }, false);
-        hits.btn = btn;
-        x += 44 + 12;
-
-        // ミュート。
-        let muted = player.muted();
-        let mute = row(x, 44);
-        p.button(mute, if muted { "🔇" } else { "🔊" }, muted);
-        hits.mute = mute;
-        x += 44 + 8;
-
-        // 音量バー（0–130）。
-        let vol = row(x, 130);
         let vol_frac = (player.volume() / 130.0).clamp(0.0, 1.0) as f32;
         let vcy = cy as f32;
         p.fill_round(
             D2D_RECT_F {
                 left: vol.left as f32,
-                top: vcy - 3.0,
+                top: vcy - 2.0,
                 right: vol.right as f32,
-                bottom: vcy + 3.0,
+                bottom: vcy + 2.0,
             },
-            3.0,
-            color(0.45, 0.45, 0.5, 0.9),
+            2.0,
+            color(1.0, 1.0, 1.0, 0.25),
         );
-        let vx = vol.left as f32 + (vol.right - vol.left) as f32 * vol_frac;
+        let vx = vol.left as f32 + vol_w as f32 * vol_frac;
         p.fill_round(
             D2D_RECT_F {
                 left: vol.left as f32,
-                top: vcy - 3.0,
+                top: vcy - 2.0,
                 right: vx.max(vol.left as f32),
-                bottom: vcy + 3.0,
+                bottom: vcy + 2.0,
             },
-            3.0,
-            color(0.30, 0.60, 1.0, 1.0),
+            2.0,
+            color(0.92, 0.92, 0.96, 1.0),
         );
         if let Ok(b) = p.rt.CreateSolidColorBrush(&color(1.0, 1.0, 1.0, 1.0), None) {
             p.rt.FillEllipse(
                 &D2D1_ELLIPSE {
                     point: D2D_POINT_2F { x: vx, y: vcy },
-                    radiusX: 7.0,
-                    radiusY: 7.0,
+                    radiusX: 5.0,
+                    radiusY: 5.0,
                 },
                 &b,
             );
         }
         hits.vol = vol;
-        x += 130 + 18;
+        xr = vol.left - 10;
 
-        // 画質。
-        let quality = row(x, 96);
-        p.button(quality, quality_label, false);
-        hits.quality = quality;
-        x += 96 + 8;
+        let muted = player.muted();
+        let r = p.flat_right(xr, cy, if muted { "🔇" } else { "🔊" }, fg);
+        hits.mute = r;
+        xr = r.left - 14;
 
-        // コーデック。
-        let codec = row(x, 88);
-        p.button(codec, codec_label, false);
-        hits.codec = codec;
-        x += 88 + 18;
+        let r = p.flat_right(xr, cy, &format!("コーデック: {codec_label}"), fg);
+        hits.codec = r;
+        xr = r.left - 12;
 
-        // 高評価。
-        let like = row(x, 48);
-        p.button(like, "👍", false);
-        hits.like = like;
-        x += 48 + 8;
-
-        // チャットトグル。
-        let chat = row(x, 48);
-        p.button(chat, "💬", chat_open);
-        hits.chat = chat;
+        let r = p.flat_right(xr, cy, &format!("画質: {quality_label}"), fg);
+        hits.quality = r;
     }
 
     /// チャットパネル（右側。video-margin-ratio-right で空けた領域に重ねる）。
     /// パネル矩形を hits.chat_panel に保存し、領域内クリックを無視できるようにする。
     unsafe fn draw_chat(&self, p: &Painter, w: i32, h: i32, chat_lines: &[String], hits: &mut OvShared) {
-        let bar_top = (h - BAR_H + 8) as f32;
         let pw = w as f32 * 0.28;
         let px = w as f32 - pw;
-        let ptop = 60.0;
-        let pbot = bar_top - 8.0;
+        let ptop = (TOP_H + 4) as f32;
+        let pbot = (h - BOTTOM_H - 4) as f32;
         if pbot <= ptop + 40.0 {
             return;
         }
@@ -1108,17 +1158,6 @@ impl Drop for Overlay {
 #[inline]
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
-}
-
-/// 矩形を内側に縮める（テキストのパディング用）。
-#[inline]
-fn shrink(r: RECT, dx: i32, dy: i32) -> RECT {
-    RECT {
-        left: r.left + dx,
-        top: r.top + dy,
-        right: r.right - dx,
-        bottom: r.bottom - dy,
-    }
 }
 
 fn fmt_time(secs: f64) -> String {

@@ -304,6 +304,9 @@ impl NativeRunning {
         };
         let quality_label = self.core.quality.label();
         let codec_label = self.core.codec.label();
+        let has_recommend = !self.core.recommend_items.is_empty();
+        // egui 版と同じく、チャット接続中 or メッセージがある時のみ 💬 を出す。
+        let chat_available = !self.core.chat_status.is_empty();
         let chat_open = self.chat_open;
         let chat_lines: Vec<String> = if chat_open {
             self.core
@@ -337,8 +340,10 @@ impl NativeRunning {
                 &header,
                 &auth_label,
                 logged_in,
+                has_recommend,
                 quality_label,
                 codec_label,
+                chat_available,
                 chat_open,
                 &chat_lines,
             );
