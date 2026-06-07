@@ -1,52 +1,52 @@
 # YouTube Super Lite
 
-Rust 製の YouTube プレーヤー（Windows / macOS）。
+Rust 製の YouTube プレーヤー（**Windows**。macOS は将来対応予定）。
 
-- 再生エンジン: **libmpv (mpv)** の Render API（OpenGL）
-- ウィンドウ / GL コンテキスト: **winit** + **glutin**
-- 操作 UI: **egui**（動画と並べてサイドパネル、操作系は重ねて表示）
+- 再生エンジン: **libmpv (mpv)** を `wid`（ウィンドウハンドル）に埋め込み、`vo=gpu-next` `gpu-api=d3d11` で
+  **mpv 自身が D3D11 にウィンドウへ直接描画**する（OpenGL は一切使わない）
+- ウィンドウ / イベントループ: **winit**（生成したウィンドウの HWND を mpv の `wid` に渡す）
+- 操作 UI: **Direct2D + DirectWrite + WIC** による透過オーバーレイ（`WS_EX_LAYERED` 窓に描画し、
+  `UpdateLayeredWindow(ULW_ALPHA)` で動画の上に per-pixel alpha 合成）
 - YouTube URL の解決: **yt-dlp**（mpv の ytdl_hook ではなくアプリ側で直接呼ぶ）
 - DASH manifest の処理: **`dash-mpd`** クレートでパースし mpv EDL に変換（ffmpeg に DASH demuxer がなくても再生可能）
+
+> 設計の経緯: 以前は mpv の OpenGL Render API ＋ egui を単一 GL コンテキストで合成していたが、
+> 起動時の OpenGL ドライバ bring-up が他アプリの GPU 再生を一瞬妨げる問題があり、
+> 「mpv 埋め込み(D3D11) + Direct2D 2D UI」へ移行した（egui / glutin / glow は撤去済み）。
+> 移行の記録は [inbox/opengl-to-native-migration.md](inbox/opengl-to-native-migration.md) を参照。
 
 ## 主な機能
 
 | 機能 | 説明 | 認証 |
 |------|------|------|
 | 動画再生 | 短尺動画・配信中ライブ・終了ライブのアーカイブをすべて再生 | 不要 |
-| 高評価 | ログイン中ユーザーで `videos.rate` を呼んで高評価を付ける | OAuth |
-| ライブチャット | InnerTube `get_live_chat` 経由でメッセージを取得し動画の右側にサイドパネル表示 | 不要 |
-| メンバーシップスタンプ | カスタム絵文字を YouTube CDN から動的に取得してインライン画像描画 | 不要 |
-| おすすめ動画 | ウォッチページの `ytInitialData.secondaryResults` から関連動画一覧をカードグリッドで表示 | 不要 |
-| 登録チャンネル | InnerTube `FEsubscriptions` で全登録チャンネルの新着をカードグリッド表示。左に登録チャンネル一覧（Data API `subscriptions.list`）、選択でそのチャンネルのアップロード一覧に絞り込み | OAuth |
-| 再生履歴 | InnerTube `FEhistory`（TVHTML5 + OAuth）から視聴履歴をカードグリッド表示 | OAuth |
-| 自分の再生リスト | Data API v3 `playlists.list?mine=true` → `playlistItems.list` で 2 段階オーバーレイ表示 | OAuth |
-| 画像キャッシュ | サムネ・チャンネルアイコン・カスタム絵文字を自前 `BytesLoader` で取得し、メモリ + 永続ディスクキャッシュ（同時取得数制限つき） | 不要 |
+| コントローラ | 動画下部に再生/一時停止・シークバー・時間・画質/コーデック表示を Direct2D で重ねる。無操作で自動非表示 | 不要 |
+| 高評価 | ログイン中ユーザーで `videos.rate` を呼んで高評価を付ける（Ctrl+G） | OAuth |
+| ライブチャット | InnerTube `get_live_chat` 経由で取得し、動画を左に縮めて右側にチャットパネル表示（Ctrl+T） | 不要 |
+| 一覧（おすすめ/登録新着/履歴/再生リスト） | 全画面の一覧オーバーレイ（Tab）。1/2/3/4 でソース切替、↑↓/クリックで選択、Enter で再生。サムネは WIC でデコード | 一部 OAuth |
+| 再生リスト | Data API v3 `playlists.list?mine=true` → `playlistItems.list` を 2 階層（一覧→中身）で表示 | OAuth |
+| 画像キャッシュ | サムネを自前取得して OS のキャッシュ領域に保存（URL→FNV ハッシュのファイル名）。WIC でデコードしてビットマップキャッシュ | 不要 |
 
 ## アーキテクチャ
 
 ```
-[main.rs / Running]
-  ├ player::Player          — libmpv ラッパー。動画を内部 FBO/テクスチャに描画
-  ├ gl_quad::FullscreenQuad — テクスチャを画面に描画するクワッド
-  ├ egui_glow::EguiGlow     — UI 描画
-  ├ image_cache::DiskImageCache — 画像の永続キャッシュ（egui の BytesLoader 実装）
-  └ 各機能モジュール（chat / recommend / subscriptions / playlist / history / resolve / auth / mark_watched）
+[main.rs]                  — CLI 解析 → NativeApp 起動。共有の値型(Quality/Codec 等)と build_ytdlp_format を保持
+[native_app::NativeApp]    — winit アプリ本体。HWND→mpv 埋め込み、キーボード/状態、各種 poll、Controller を駆動
+[native_overlay::Overlay]  — 透過オーバーレイ。Direct2D/DirectWrite/WIC でコントローラ・URL欄・一覧・チャットを描画
+[controller::Controller]   — UI 非依存のアプリ状態とロジック（mpv 制御・認証/API・yt-dlp 解決・各種 poll）
+[player::Player]           — libmpv ラッパー。mpv を wid に D3D11 埋め込み（render API/OpenGL は使わない）
+[image_cache]              — サムネのディスクキャッシュ（cache_dir/cached_path/ensure_cached_async）
+[各機能モジュール]          — chat / recommend / subscriptions / playlist / history / resolve / auth / mark_watched / gpu_usage
 ```
 
-- 動画は `Player` 内部のテクスチャに描画され、UI 層はそのテクスチャを背景として配置する分離設計。
-- mpv は `Box::leak` で `'static` 化し、`RenderContext<'static>` の自己参照を回避。
-- すべての I/O（API 呼び出し・yt-dlp 解決・チャットポーリング・画像取得）はバックグラウンドスレッドで実行し、結果は `mpsc::channel` でメインスレッドに送信される。
-- egui のクロージャ内では `egui_glow` が `&mut self` として借用されているため、UI イベントは intent flag (`like_clicked` 等) を立てるだけにし、実際の処理は `egui_glow.run` の戻り後に実行。
-
-> **今後の計画**: 現在の描画は mpv の OpenGL Render API ＋ egui を単一 GL コンテキストで合成している。起動時の OpenGL ドライバ bring-up が他アプリの GPU 再生を一瞬妨げる問題があり、これを解消する「mpv 埋め込み(D3D11/Metal/Vulkan) + 2D UI」への移行を検討中。詳細は [inbox/](inbox/) を参照。
+- **描画の分離**: 動画は mpv が D3D11 で直接描く。UI は別の透過レイヤード窓に Direct2D で描き、OS コンポジタが重ねる
+  （両者は GPU コンテキストを共有しない）。チャット表示時は mpv の `video-margin-ratio-right` で動画を左に縮め、
+  空いた右側にチャットパネルを描く（真の左右分割）。
+- **UI 非依存コア**: 状態とロジックは `Controller` に集約され、フロントエンド（描画/入力）から分離されている。
+- すべての I/O（API 呼び出し・yt-dlp 解決・チャットポーリング・サムネ取得）はバックグラウンドスレッドで実行し、
+  結果は `mpsc::channel` でメインスレッドへ送る。完了時は winit の `EventLoopProxy` でイベントループを起こす。
 
 ## 必要環境
-
-### macOS
-```sh
-brew install mpv yt-dlp
-```
-`build.rs` が `pkg-config --libs-only-L mpv` で libmpv のリンクパスを解決する。
 
 ### Windows
 - Rust (MSVC toolchain) … `rustup default stable-x86_64-pc-windows-msvc`
@@ -61,20 +61,13 @@ lib /def:mpv.def /name:libmpv-2.dll /out:mpv.lib /machine:x64
 
 ## ビルド
 
-### macOS
-```sh
-cargo build               # debug
-cargo build --release     # release
-```
-
-### Windows
 ```powershell
 .\build.ps1            # debug
 .\build.ps1 -Release   # release
 ```
 ビルド後、実行に必要な `libmpv-2.dll` と `yt-dlp.exe` が `target\debug`（または `release`）にコピーされる。
 
-## ログインの設定（高評価・登録チャンネル・再生リストに必要）
+## ログインの設定（高評価・登録チャンネル・再生リスト・履歴に必要）
 
 **client_secret は配布アプリには持たせない。** 認証の同意画面のみブラウザに委譲し、secret が必要なトークン交換は **Cloudflare Worker**（[auth-worker/](auth-worker/)）が代行する。アプリは「Worker の URL」だけを知り、トークン取得後は Data API を直接呼ぶ。
 
@@ -100,24 +93,18 @@ wrangler deploy                            # → https://<worker-name>.<account>
 ```
 
 ### 3. アプリ側
-既定では本番 Worker（`https://youtube-super-lite-backend.cancer6.workers.dev`）に接続する。ローカル `wrangler dev` 等で別の Worker を使う場合のみ `--debug-backend` で上書きする。
-
-```sh
-./target/debug/youtube-super-lite                                          # 本番Worker
-./target/debug/youtube-super-lite --debug-backend http://127.0.0.1:8787    # ローカル開発
-```
+既定では本番 Worker（`https://youtube-super-lite-backend.cancer6.workers.dev`）に接続する。ローカル `wrangler dev` 等で別の Worker を使う場合のみ `--debug-backend` で上書きする。アプリ内では **Ctrl+L** でログインを開始する。
 
 - リフレッシュトークンは次のパスに保存され、次回は自動ログインを試みる:
-  - macOS: `~/Library/Application Support/YouTubeSuperLite/auth.json`
   - Windows: `%APPDATA%\YouTubeSuperLite\auth.json`
 
 ## 実行
 
-```sh
-./target/debug/youtube-super-lite "https://www.youtube.com/watch?v=..."
+```powershell
+.\target\debug\youtube-super-lite.exe "https://www.youtube.com/watch?v=..."
 ```
 
-引数で URL を渡すと起動時に再生。引数なしでも起動でき、URL 欄に貼り付けて Enter で再生できる。
+引数で URL を渡すと起動時に再生。引数なしでも起動でき、英数字キーで URL を入力（または Ctrl+V で貼り付け）して Enter で再生できる。
 
 ### CLI オプション
 
@@ -125,77 +112,40 @@ wrangler deploy                            # → https://<worker-name>.<account>
 youtube-super-lite [OPTIONS] [URL]
   -v, --verbose             mpv の詳細ログを出力（動作確認用）
       --debug-backend URL   認証バックエンドを上書き（デバッグ用、既定: 本番Worker）
-      --enable-dev-tools    ローカル HTTP サーバを起動して検証用 API を公開（後述）
+      --volume N            初期音量 0-130（デバッグ用。例: --volume 0 で無音）
   -h, --help                ヘルプを表示
 ```
 
-### 操作
-- 動画は左側に表示。チャット表示中は動画を縮小して右側にチャットパネル（幅 320 dp）を並べる。
-- ウィンドウ上部に URL 欄とタイトル、下部のコントローラに **再生/一時停止・シーク・音量・ミュート・画質/コーデック選択・👍高評価・💬チャット開閉** を配置。
-- ログイン / おすすめ / 登録チャンネル / 再生リスト / 履歴 などのオーバーレイを開閉できる。
-- 動画一覧（おすすめ・登録チャンネル新着・履歴・チャンネルのアップロード）は 16:9 サムネのカードグリッドで表示。登録チャンネルはカードをクリックで再生。
-- キーボードショートカット（URL 欄に入力中は無効）:
-  - `Space` 再生/一時停止
-  - `←` / `→` 5秒シーク
-  - `↑` / `↓` 音量 ±5
-  - `Esc` 開いているオーバーレイを閉じる
-- 約3秒間マウス/キー操作がないと、URL欄・コントロール・マウスカーソルを自動的に隠す（動かすと再表示）。チャットパネルは恒常表示。
+### 操作（キーボード中心）
 
-## 開発者向けツール (`--enable-dev-tools`)
+- 動画は全画面。下部のコントローラ（Direct2D）に再生/一時停止・シークバー・時間・画質/コーデックを表示。
+- 一覧・チャットは透過オーバーレイで重ねる（チャットは動画を左に縮めて右側に表示）。
 
-`--enable-dev-tools` を付けて起動すると、`127.0.0.1` の OS 割当て ephemeral ポートで HTTP サーバが立ち上がり、検証用 API を公開する。フォーカス奪取や Accessibility 権限を必要とする `screencapture` / `cliclick` / `osascript` を経由せずに、アプリ自身が画面の状態を返せるようにすることが目的。
+| キー | 動作 |
+|------|------|
+| 英数字 / 記号 | URL 欄へ入力（URL は空白を含まないため Space は再生に使える） |
+| `Ctrl`+`V` | クリップボードの URL を貼り付け |
+| `Enter` | URL 欄の URL を再生 |
+| `Space` | 再生 / 一時停止 |
+| `←` / `→` | 5 秒シーク |
+| `↑` / `↓` | 音量 ±5 |
+| `Tab` | 一覧オーバーレイの開閉 |
+| 一覧中 `1`/`2`/`3`/`4` | ソース切替（登録新着 / おすすめ / 履歴 / 再生リスト） |
+| 一覧中 `↑`/`↓`・クリック | 項目選択 |
+| 一覧中 `Enter` | 選択を再生（再生リストは中身を開く） |
+| 一覧中 `Backspace` | 再生リストの中身から一覧へ戻る |
+| `Ctrl`+`T` | チャットの開閉 |
+| `Ctrl`+`L` | ログイン開始 |
+| `Ctrl`+`G` | 現在の動画に高評価 |
+| `Ctrl`+`Q` / `Ctrl`+`C` | 画質 / コーデックの切替（再生中なら取り直す） |
+| `Esc` | 一覧を閉じる / URL 欄をクリア |
 
-- バインドアドレスは **常に `127.0.0.1`**（ループバック固定。LAN からは到達不能）
-- 起動時に stderr に `[dev-tools] http://127.0.0.1:NNNN` を出力するので、ポートはそこから取得する
-- 認証なし。`--enable-dev-tools` を付けたプロセスを動かしているローカルユーザーが自身のために使うことを前提とする
-
-### エンドポイント
-
-| メソッド | パス | 返り値 | 説明 |
-|----------|------|--------|------|
-| `GET` | `/screenshot` | `image/png` | 現在の back buffer を PNG で返す（物理ピクセル解像度、HiDPI ではウィンドウサイズの 2 倍） |
-| `POST` | `/action/<name>` | `text/plain` | UI 操作の intent flag を立てる（マウス/キー操作の代替）。`<name>` が既知なら `200 ok`、未知なら `400 unknown action: ...` |
-| `POST` | `/click?x=<px>&y=<px>` | `text/plain` | 指定座標（`/screenshot` と同じ物理ピクセル）に左クリックを合成注入。動画クリックでの再生/一時停止やボタン操作の検証に使える |
-| `POST` | `/type` (body=text, `?enter=1`) | `text/plain` | フォーカス中のウィジェット（URL欄等）へテキストを貼り付け、`enter=1` なら Enter を送る |
-
-スクショは egui の描画後・`swap_buffers` の直前に `glReadPixels` で取得するため、画面に映る内容（動画 + UI + ロード状態オーバーレイ）がそのままバイト列になる。動画未ロード時は中央に「動画を解決中…」「再生準備中…」「読み込み失敗 …」のいずれかが描画されるので、「真っ黒な画像」は実際に画面が黒い状態（つまりアプリの状態異常）を意味する。
-
-`/action/<name>` で受け付けるアクション一覧:
-
-| アクション名 | 効果 |
-|--------------|------|
-| `toggle_chat` | チャットパネルの表示切り替え |
-| `toggle_recommend` | おすすめ動画オーバーレイの表示切り替え |
-| `toggle_subs` | 登録チャンネルオーバーレイの表示切り替え（未取得なら自動取得） |
-| `toggle_playlist` | 再生リストオーバーレイの表示切り替え（未取得なら自動取得） |
-| `toggle_history` | 再生履歴オーバーレイの表示切り替え（未取得なら自動取得） |
-| `play_pause` | 再生 / 一時停止トグル（Space キー相当） |
-| `login` | OAuth ログイン開始 |
-| `like` | 現在再生中の動画に高評価 |
-| `close_overlay` | 最前面のオーバーレイを閉じる（Esc キー相当） |
-
-### 使用例
-
-```sh
-./target/debug/youtube-super-lite --enable-dev-tools "https://www.youtube.com/watch?v=..." 2>/tmp/yt.stderr &
-APP_PID=$!
-sleep 3
-PORT=$(grep -oE 'http://127.0.0.1:[0-9]+' /tmp/yt.stderr | head -1 | grep -oE '[0-9]+$')
-
-# スクショ取得
-curl -sS -o /tmp/shot.png "http://127.0.0.1:$PORT/screenshot"
-
-# 履歴オーバーレイを開いてスクショ
-curl -sS -X POST "http://127.0.0.1:$PORT/action/toggle_history"
-sleep 1
-curl -sS -o /tmp/history.png "http://127.0.0.1:$PORT/screenshot"
-
-kill $APP_PID
-```
+- 約 3 秒間マウス/キー操作がないと、オーバーレイ（コントローラ・URL 欄）を自動的に隠す（動かすと再表示）。
+  一覧・チャット表示中は隠さない。
 
 ## DASH 対応の仕組み
 
-ffmpeg（Homebrew 標準ビルド）は DASH demuxer 非対応のため、YouTube が DASH manifest しか返さないケース（終了ライブのアーカイブ等）は通常再生できない。本アプリでは:
+ffmpeg（標準ビルド）は DASH demuxer 非対応のため、YouTube が DASH manifest しか返さないケース（終了ライブのアーカイブ等）は通常再生できない。本アプリでは:
 
 1. `yt-dlp -g` でストリーム URL を取得
 2. URL が DASH manifest（`manifest.googlevideo.com/api/manifest/dash/...`）と判定したら `dash-mpd` で MPD XML をパース
@@ -206,10 +156,12 @@ ffmpeg（Homebrew 標準ビルド）は DASH demuxer 非対応のため、YouTub
 
 ## 制限事項・今後
 
-計画中の作業は [inbox/](inbox/) に置く（例: OpenGL 合成からの脱却＝「mpv 埋め込み + 2D UI」移行）。
+計画・未着手メモは [inbox/](inbox/) に置く。
 
-- 配布形態は未確定（現状はソースビルド前提）。リリース時は LGPL ビルドの mpv 同梱と `.app` バンドル化が必要。
+- **macOS 未対応**（D3D11 + Direct2D は Windows 前提。Metal + CoreAnimation への対応が今後の課題）。
+- 登録チャンネルは新着フィードのみ対応（特定チャンネルのアップロード一覧へのドリルダウンは未移植）。
 - 高評価の現在状態表示・トグル（`videos.getRating`）未実装。
-- 検索機能未実装。
+- 検索機能未実装（日本語 IME も未対応。現状の入力は ASCII の URL のみ）。
 - フルスクリーン切替未実装。
-- カスタム絵文字のうち画像 URL のみ対応。Author Badges（メンバー継続バッジ等）は未対応。
+- カスタム絵文字（チャットのメンバーシップスタンプ等）の画像描画は未対応（alt テキスト表示）。
+- 配布形態は未確定（現状はソースビルド前提）。

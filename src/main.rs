@@ -17,10 +17,9 @@ use anyhow::{anyhow, bail, Result};
 use std::path::PathBuf;
 use winit::event_loop::{ControlFlow, EventLoop};
 
-/// イベントループを起こす要求（mpv の新フレーム / 背景スレッド完了）。
+/// イベントループを起こす要求（背景スレッド完了時に送る）。
 #[derive(Debug, Clone, Copy)]
 enum UserEvent {
-    MpvRedraw,
     Background,
 }
 
