@@ -53,11 +53,27 @@ impl Player {
     pub fn duration(&self) -> f64 {
         self.mpv.get_property("duration").unwrap_or(0.0)
     }
+    /// シーク可能か（VOD / DVR ありライブ = true、DVR 無しライブ = false）。
+    pub fn seekable(&self) -> bool {
+        self.mpv.get_property("seekable").unwrap_or(false)
+    }
     pub fn volume(&self) -> f64 {
         self.mpv.get_property("volume").unwrap_or(100.0)
     }
     pub fn set_volume(&self, v: f64) {
         let _ = self.mpv.set_property("volume", v);
+    }
+    pub fn muted(&self) -> bool {
+        self.mpv.get_property("mute").unwrap_or(false)
+    }
+    pub fn set_muted(&self, m: bool) {
+        let _ = self.mpv.set_property("mute", m);
+    }
+    /// 再生中メディアのタイトル（mpv が解決したもの）。
+    pub fn media_title(&self) -> String {
+        self.mpv
+            .get_property::<String>("media-title")
+            .unwrap_or_default()
     }
     pub fn seek_relative(&self, secs: f64) {
         let _ = self
