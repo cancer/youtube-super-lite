@@ -103,6 +103,8 @@ struct OvShared {
     codec: RECT,
     like: RECT,
     chat: RECT,
+    /// チャットパネル領域（クリックを無視して動画クリック=一時停止に落とさない）。
+    chat_panel: RECT,
     // 上部バーの各ヒット矩形。
     tab_recommend: RECT,
     tab_subs: RECT,
@@ -553,9 +555,10 @@ impl Overlay {
                 ..Default::default()
             };
 
-            // チャットパネルは（active と無関係に）チャット表示中なら常に描く。
-            if chat_open {
-                self.draw_chat(&p, w, h, chat_lines);
+            // チャットパネルは（active と無関係に）チャット表示中なら描く。一覧表示中は
+            // 一覧が全面を覆うため描かない（クリックは行選択に使う）。
+            if chat_open && !list_open {
+                self.draw_chat(&p, w, h, chat_lines, &mut hits);
             }
 
             // コントロール（上部バー＋下部コントローラ）は active 時のみ描画＆ヒット登録。
@@ -906,7 +909,8 @@ impl Overlay {
     }
 
     /// チャットパネル（右側。video-margin-ratio-right で空けた領域に重ねる）。
-    unsafe fn draw_chat(&self, p: &Painter, w: i32, h: i32, chat_lines: &[String]) {
+    /// パネル矩形を hits.chat_panel に保存し、領域内クリックを無視できるようにする。
+    unsafe fn draw_chat(&self, p: &Painter, w: i32, h: i32, chat_lines: &[String], hits: &mut OvShared) {
         let bar_top = (h - BAR_H + 8) as f32;
         let pw = w as f32 * 0.28;
         let px = w as f32 - pw;
@@ -915,6 +919,12 @@ impl Overlay {
         if pbot <= ptop + 40.0 {
             return;
         }
+        hits.chat_panel = RECT {
+            left: px as i32,
+            top: ptop as i32,
+            right: w,
+            bottom: pbot as i32,
+        };
         p.fill_rect(
             D2D_RECT_F {
                 left: px,
@@ -1174,6 +1184,8 @@ unsafe extern "system" fn overlay_wndproc(
                             s.actions.push(OverlayAction::PlayIndex(idx));
                         }
                     }
+                } else if in_rect(&s.chat_panel, x, y) {
+                    // チャットパネル領域: クリックを無視（動画クリック=一時停止に落とさない）。
                 } else if s.active {
                     let act = dispatch_hit(&s, x, y);
                     s.actions.push(act);
