@@ -27,6 +27,7 @@ enum ListSource {
     Subs,
     Recommend,
     History,
+    Playlist,
 }
 
 /// `--native` 起動時のアプリケーション。
@@ -162,52 +163,67 @@ impl NativeApp {
 }
 
 impl NativeRunning {
-    /// 現在の一覧ソースの (ヘッダ, 行[(タイトル, サムネURL, video_id)]) を返す。
+    /// 現在の一覧ソースの (ヘッダ, 行[(タイトル, サムネURL, video_id|playlist_id)]) を返す。
     fn list_rows(&self) -> (String, Vec<(String, String, String)>) {
-        let nav = "  （1新着 2おすすめ 3履歴 / ↑↓ 選択 / Enter 再生 / Tab・Esc 閉じる）";
-        let (base, items): (&str, Vec<(String, String, String)>) = match self.list_source {
+        let nav = "  （1新着 2おすすめ 3履歴 4リスト / ↑↓ 選択 / Enter 決定 / Backspace 戻る / Tab・Esc 閉じる）";
+        let video_row = |title: &str, channel: &str, thumb: String, id: &str| {
+            (format!("{title}   |   {channel}"), thumb, id.to_string())
+        };
+        let (base, items): (String, Vec<(String, String, String)>) = match self.list_source {
             ListSource::Subs => (
-                "登録チャンネルの新着",
+                "登録チャンネルの新着".to_string(),
                 self.core
                     .sub_feed
                     .iter()
-                    .map(|v| {
-                        (
-                            format!("{}   |   {}", v.title, v.channel),
-                            v.thumbnail.clone(),
-                            v.video_id.clone(),
-                        )
-                    })
+                    .map(|v| video_row(&v.title, &v.channel, v.thumbnail.clone(), &v.video_id))
                     .collect(),
             ),
             ListSource::Recommend => (
-                "おすすめ",
+                "おすすめ".to_string(),
                 self.core
                     .recommend_items
                     .iter()
-                    .map(|v| {
-                        (
-                            format!("{}   |   {}", v.title, v.channel),
-                            v.thumbnail.clone(),
-                            v.video_id.clone(),
-                        )
-                    })
+                    .map(|v| video_row(&v.title, &v.channel, v.thumbnail.clone(), &v.video_id))
                     .collect(),
             ),
             ListSource::History => (
-                "再生履歴",
+                "再生履歴".to_string(),
                 self.core
                     .history_items
                     .iter()
-                    .map(|v| {
-                        (
-                            format!("{}   |   {}", v.title, v.channel),
-                            v.thumbnail.clone(),
-                            v.video_id.clone(),
-                        )
-                    })
+                    .map(|v| video_row(&v.title, &v.channel, v.thumbnail.clone(), &v.video_id))
                     .collect(),
             ),
+            ListSource::Playlist => {
+                if !self.core.playlist_items.is_empty() {
+                    // 2 階層目: 選択した再生リストの中身（動画）。
+                    let rows = self
+                        .core
+                        .playlist_items
+                        .iter()
+                        .map(|v| video_row(&v.title, &v.channel, String::new(), &v.video_id))
+                        .collect();
+                    (
+                        format!("再生リスト: {}", self.core.playlist_items_title),
+                        rows,
+                    )
+                } else {
+                    // 1 階層目: 再生リスト一覧（Enter で中身を開く）。
+                    let rows = self
+                        .core
+                        .playlist_lists
+                        .iter()
+                        .map(|p| {
+                            (
+                                format!("{}（{} 件）", p.title, p.item_count),
+                                String::new(),
+                                p.playlist_id.clone(),
+                            )
+                        })
+                        .collect();
+                    ("再生リスト".to_string(), rows)
+                }
+            }
         };
         (format!("{base}{nav}"), items)
     }
@@ -223,6 +239,14 @@ impl NativeRunning {
             ListSource::History => {
                 if self.core.history_items.is_empty() && !self.core.history_busy {
                     self.core.start_history();
+                }
+            }
+            ListSource::Playlist => {
+                if self.core.playlist_lists.is_empty()
+                    && self.core.playlist_items.is_empty()
+                    && !self.core.playlist_busy
+                {
+                    self.core.start_playlist_list();
                 }
             }
             ListSource::Recommend => {}
@@ -521,16 +545,40 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                             }
                         }
                         Key::Named(NamedKey::Enter) => {
-                            let rows = state.list_rows().1;
-                            if let Some((_, _, vid)) = rows.get(state.list_sel) {
-                                let url = format!("https://www.youtube.com/watch?v={vid}");
-                                state.list_open = false;
-                                state.url_input = url.clone();
-                                state.core.load(&url);
-                                if let Some(v) = auth::extract_video_id(&state.core.current_url) {
-                                    state.core.start_chat(v.clone());
-                                    state.core.start_recommend(v);
+                            if state.list_source == ListSource::Playlist
+                                && state.core.playlist_items.is_empty()
+                            {
+                                // 再生リスト一覧で Enter → その中身を開く（2 階層目へ）。
+                                if let Some(pl) = state.core.playlist_lists.get(state.list_sel) {
+                                    let id = pl.playlist_id.clone();
+                                    let title = pl.title.clone();
+                                    state.list_sel = 0;
+                                    state.core.start_playlist_items(id, title);
                                 }
+                            } else {
+                                let rows = state.list_rows().1;
+                                if let Some((_, _, vid)) = rows.get(state.list_sel) {
+                                    let url = format!("https://www.youtube.com/watch?v={vid}");
+                                    state.list_open = false;
+                                    state.url_input = url.clone();
+                                    state.core.load(&url);
+                                    if let Some(v) =
+                                        auth::extract_video_id(&state.core.current_url)
+                                    {
+                                        state.core.start_chat(v.clone());
+                                        state.core.start_recommend(v);
+                                    }
+                                }
+                            }
+                        }
+                        Key::Named(NamedKey::Backspace) => {
+                            // 再生リストの中身表示中なら一覧へ戻る。
+                            if state.list_source == ListSource::Playlist
+                                && !state.core.playlist_items.is_empty()
+                            {
+                                state.core.playlist_items.clear();
+                                state.core.playlist_items_title.clear();
+                                state.list_sel = 0;
                             }
                         }
                         Key::Named(NamedKey::Escape) => state.list_open = false,
@@ -539,6 +587,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                                 "1" => Some(ListSource::Subs),
                                 "2" => Some(ListSource::Recommend),
                                 "3" => Some(ListSource::History),
+                                "4" => Some(ListSource::Playlist),
                                 _ => None,
                             };
                             if let Some(src) = next {

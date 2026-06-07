@@ -131,8 +131,13 @@
   - **チャット左右分割** ✅ **完了**: Ctrl+T で開閉。`Player::set_video_margin_right(0.28)` で
     mpv の映像を左に縮め、空いた右 28% に Direct2D でチャットパネルを描画（`core.chat_messages` の
     author: text を末尾から表示。ChatRun::Image は alt テキスト）。閉じると margin を 0 に戻す。
-  - 残り P3 本体: 再生リスト一覧（2階層）、検索等の日本語入力 IME(DirectWrite/TSF)。
-    すべて `Controller` を駆動して順次移植。その後 P4 で egui/OpenGL 経路を撤去して移行完了。
+  - **再生リスト一覧（2階層）** ✅ **完了**: ListSource::Playlist を追加。4 キーで選択、未取得なら
+    start_playlist_list。1 階層目（リスト一覧）で Enter → start_playlist_items で中身を開く、
+    2 階層目（動画）で Enter → 再生、Backspace で一覧へ戻る。
+  - **IME 不要と判断**: このアプリの唯一のテキスト入力は URL 欄（ASCII のみ）でチャット投稿も無いため、
+    日本語 IME は実機能上の parity ギャップではない（URL タイプ＋Ctrl+V 貼り付けで充足）。
+  - → **P3 の機能 parity 完了**。egui 版の UI 機能はネイティブ版(`--native`)に出揃った。
+    次は **P4: egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を撤去**して移行完了。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 
