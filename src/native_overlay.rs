@@ -642,12 +642,16 @@ impl Overlay {
                 for idx in first..(first + visible).min(list_thumbs.len()) {
                     let url = &list_thumbs[idx];
                     if !url.is_empty() && !self.thumb_cache.contains_key(url) {
-                        if let Some(ps) =
-                            crate::image_cache::cached_path(url).and_then(|p| p.to_str().map(String::from))
+                        match crate::image_cache::cached_path(url)
+                            .and_then(|p| p.to_str().map(String::from))
                         {
-                            if let Ok(bmp) = load_wic_bitmap(&dc_rt_clone, &ps) {
-                                self.thumb_cache.insert(url.clone(), bmp);
+                            Some(ps) => {
+                                if let Ok(bmp) = load_wic_bitmap(&dc_rt_clone, &ps) {
+                                    self.thumb_cache.insert(url.clone(), bmp);
+                                }
                             }
+                            // 未キャッシュなら自前で取得（次回以降の render で当たる）。
+                            None => crate::image_cache::ensure_cached_async(url),
                         }
                     }
                 }
