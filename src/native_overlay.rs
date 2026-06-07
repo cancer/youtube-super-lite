@@ -90,8 +90,6 @@ pub enum OverlayAction {
 /// コントロール矩形は `active`（コントロール描画中）の時のみ有効。一覧表示中は list_* を使う。
 #[derive(Default)]
 struct OvShared {
-    /// コントロールを描画・操作可能にしているか（false の時は全クリック=TogglePause）。
-    active: bool,
     /// シーク可能か（false の時はシークバーを操作不可にする）。
     seekable: bool,
     // 下部コントローラの各ヒット矩形。
@@ -105,6 +103,10 @@ struct OvShared {
     chat: RECT,
     /// チャットパネル領域（クリックを無視して動画クリック=一時停止に落とさない）。
     chat_panel: RECT,
+    /// クリックを捕捉する領域（上部 UI 帯・下部コントローラ帯）。この外側は HTTRANSPARENT に
+    /// して親 winit ウィンドウへ通し、動画クリック=一時停止を winit 側で処理させる。
+    region_top: RECT,
+    region_bottom: RECT,
     // 上部バーの各ヒット矩形。
     tab_recommend: RECT,
     tab_subs: RECT,
@@ -549,7 +551,6 @@ impl Overlay {
 
             // このフレームで確定する各ヒット矩形（OV_STATE へ最後に書き出す）。
             let mut hits = OvShared {
-                active,
                 seekable: player.seekable(),
                 list_open,
                 ..Default::default()
@@ -637,6 +638,13 @@ impl Overlay {
         title: &str,
         hits: &mut OvShared,
     ) {
+        // 上部 UI 帯（URL バー＋タブ行＋タイトル行）のクリック捕捉領域。
+        hits.region_top = RECT {
+            left: 0,
+            top: 0,
+            right: w,
+            bottom: 140,
+        };
         // 上部バー帯（URL 欄＋ログイン）。
         let top = RECT {
             left: 12,
@@ -730,6 +738,8 @@ impl Overlay {
             right: w - 12,
             bottom: h - 8,
         };
+        // 下部コントローラ帯のクリック捕捉領域（バーいっぱい）。
+        hits.region_bottom = bar;
         p.fill_round(rf(bar), 14.0, color(0.10, 0.10, 0.12, 0.80));
 
         let pos = player.time_pos();
@@ -1163,14 +1173,35 @@ unsafe extern "system" fn overlay_wndproc(
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Graphics::Gdi::ScreenToClient;
     use windows::Win32::Foundation::LRESULT;
-    use windows::Win32::UI::WindowsAndMessaging::{HTCLIENT, WM_LBUTTONDOWN, WM_NCHITTEST};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HTCLIENT, HTTRANSPARENT, WM_LBUTTONDOWN, WM_NCHITTEST,
+    };
     match msg {
-        // フォーカス中は窓が可視＝このメッセージが届く。全クライアントを HTCLIENT にして
-        // 全クリックを捕捉する（動画クリック=一時停止を成立させるため）。
-        WM_NCHITTEST => LRESULT(HTCLIENT as isize),
-        // クリック: 一覧表示中は行選択、active 時はコントロール矩形へ振り分け、
-        // それ以外（非 active／非ヒット）は動画クリック=TogglePause。
+        // コントロール帯（上部 UI／下部コントローラ）・チャットパネル・一覧の上だけ HTCLIENT で
+        // 捕捉し、それ以外は HTTRANSPARENT で親 winit ウィンドウへ通す（動画クリック=一時停止は
+        // winit 側の MouseInput で処理）。
+        WM_NCHITTEST => {
+            let sx = (lparam.0 & 0xFFFF) as i16 as i32;
+            let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let mut pt = POINT { x: sx, y: sy };
+            let _ = ScreenToClient(hwnd, &mut pt);
+            let hit = OV_STATE.with(|s| {
+                let s = s.borrow();
+                s.list_open
+                    || in_rect(&s.chat_panel, pt.x, pt.y)
+                    || in_rect(&s.region_top, pt.x, pt.y)
+                    || in_rect(&s.region_bottom, pt.x, pt.y)
+            });
+            if hit {
+                LRESULT(HTCLIENT as isize)
+            } else {
+                LRESULT(HTTRANSPARENT as isize)
+            }
+        }
+        // クリック: 一覧表示中は行選択、チャットパネルは無視、コントロール帯はコントロールへ
+        // 振り分け（バー余白の非ヒットは TogglePause）。動画領域のクリックはここには来ない。
         WM_LBUTTONDOWN => {
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
@@ -1185,12 +1216,10 @@ unsafe extern "system" fn overlay_wndproc(
                         }
                     }
                 } else if in_rect(&s.chat_panel, x, y) {
-                    // チャットパネル領域: クリックを無視（動画クリック=一時停止に落とさない）。
-                } else if s.active {
+                    // チャットパネル領域: クリックを無視。
+                } else {
                     let act = dispatch_hit(&s, x, y);
                     s.actions.push(act);
-                } else {
-                    s.actions.push(OverlayAction::TogglePause);
                 }
             });
             LRESULT(0)

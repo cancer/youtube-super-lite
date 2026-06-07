@@ -15,7 +15,12 @@
 - [x] #1 Player 状態 API の復活（`muted` / `set_muted` / `seekable` / `media_title`）
 - [x] #2 `OverlayAction` 拡張（TogglePause/Seek/SetVolume/ToggleMute/Like/ToggleChat/OpenList(tab)/CycleQuality/CycleCodec/Login/PlayIndex）+ `OvShared` に全コントロールのヒット矩形とアクションキュー（`actions: Vec`）
 - [x] #3 `render` 再設計（上部バー＋2段コントローラ＋タイトル行を描画し各矩形を保存）。描画ヘルパーは `OverlayView` 構造体ではなく `Painter`（fill_round/fill_rect/text/text_center/button）として実装。ヒット矩形は毎フレーム `hits: OvShared` に蓄積→OV_STATE へ書出。[判断: 別名 struct より既存スタイルに沿った軽量ヘルパーが妥当]
-- [x] #4 入力モデル: フォーカス中は常時可視・WM_NCHITTEST=HTCLIENT で全クリック捕捉。active=false 時はコントロール非描画＝全クリック TogglePause。active 時は `dispatch_hit` で矩形ヒットを各 Action に振り分け、非ヒットは TogglePause
+- [x] #4 入力モデル: コントロール帯（上部 UI／下部コントローラ）・チャット・一覧の上だけ
+      WM_NCHITTEST=HTCLIENT で捕捉し、それ以外は HTTRANSPARENT で親 winit へ通す。active 時のみ
+      オーバーレイ可視。`dispatch_hit` でコントロール矩形へ振り分け（バー余白の非ヒットは TogglePause）。
+      [修正: 当初は「常時可視＋全画面 HTCLIENT」だったが、クリック時に画面が一瞬真っ白になる不具合が
+      出たため撤回。動画クリック=一時停止は winit の `MouseInput`（透過領域のクリックが親へ届く）で
+      処理する方式に変更。#21 のゴールはより確実に達成]
 
 ## 上部バー
 - [x] #5 URL 入力欄（英数字入力・Ctrl+V・Enter 再生。維持）
@@ -38,7 +43,8 @@
 - [x] #20 チャットトグル 💬（表示/非表示。set_video_margin_right 連動。チャット中は hot 強調）
 
 ## 操作
-- [x] #21 動画クリックで再生/一時停止（コントロール矩形外・active=false 時とも TogglePause）
+- [x] #21 動画クリックで再生/一時停止（オーバーレイ透過領域のクリックを winit `MouseInput` で受けて
+      TogglePause。UI 非表示中＝オーバーレイ非表示時も親 winit がクリックを受けるので有効）
 - [x] #22 一覧のクリック選択（行クリック → PlayIndex で再生/ドリル）
 - [x] #23 チャット左右分割（維持。draw_chat を active と独立に chat_open で描画）
 

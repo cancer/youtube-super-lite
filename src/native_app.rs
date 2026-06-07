@@ -11,7 +11,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
@@ -492,19 +492,21 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     _state.last_cursor = (p.x, p.y);
                     _state.last_activity = Instant::now();
                 }
-                // 窓の可視はフォーカスに連動（フォーカス中は常時可視＝全クリック捕捉）。
-                if _state.focused != _state.overlay_visible {
-                    _state.overlay_visible = _state.focused;
-                    if let Some(ov) = _state.overlay.as_ref() {
-                        ov.set_visible(_state.focused);
-                    }
-                }
                 // コントロール描画（active）: 一覧/チャット表示中は常時、それ以外は 3 秒無操作で隠す。
                 let active = _state.list_open
                     || _state.chat_open
                     || _state.last_activity.elapsed() < Duration::from_secs(3);
+                // 窓の可視は「フォーカス中かつ表示すべき UI がある」時のみ。アイドル時は隠して
+                // 動画全面を素通しにする（動画クリック=一時停止は winit の MouseInput で処理）。
+                let show = _state.focused && active;
+                if show != _state.overlay_visible {
+                    _state.overlay_visible = show;
+                    if let Some(ov) = _state.overlay.as_ref() {
+                        ov.set_visible(show);
+                    }
+                }
 
-                // 窓が可視（フォーカス中）の時のみ再描画。
+                // 窓が可視の時のみ再描画。
                 _state.render_overlay(active);
             }
             event_loop.set_control_flow(ControlFlow::WaitUntil(
@@ -530,6 +532,20 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             }
             WindowEvent::ModifiersChanged(m) => {
                 state.ctrl = m.state().control_key();
+            }
+            // 動画領域（オーバーレイの透過部）の左クリック = 再生/一時停止。
+            // コントロール/一覧/チャットのクリックはオーバーレイ窓が捕捉するためここには来ない。
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                let p = &state.core.player;
+                p.set_paused(!p.paused());
+                #[cfg(windows)]
+                {
+                    state.last_activity = Instant::now();
+                }
             }
             // フォーカスを失ったらオーバーレイを隠す（他アプリの上に残らないように）。
             WindowEvent::Focused(focused) => {
