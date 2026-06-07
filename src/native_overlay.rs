@@ -291,6 +291,7 @@ impl Overlay {
         list_items: &[String],
         list_sel: usize,
         list_thumbs: &[String],
+        list_header: &str,
     ) {
         unsafe {
             let mut rc = RECT::default();
@@ -510,10 +511,7 @@ impl Overlay {
                     .CreateSolidColorBrush(&color(0.20, 0.40, 0.85, 0.85), None)
                     .ok();
                 if let Some(b) = &textb {
-                    let head: Vec<u16> =
-                        "登録チャンネルの新着  （↑↓ 選択 / Enter 再生 / Tab・Esc 閉じる）"
-                            .encode_utf16()
-                            .collect();
+                    let head: Vec<u16> = list_header.encode_utf16().collect();
                     let r = D2D_RECT_F {
                         left: 24.0,
                         top: 18.0,

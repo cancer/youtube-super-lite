@@ -115,8 +115,13 @@
     共有。main.rs の重複 `image_cache_dir` は撤去）。`Overlay` に URL→ID2D1Bitmap キャッシュを持ち、
     表示行のサムネを（ディスクキャッシュ済みのものだけ）WIC デコードして行左に描画（行高 48px、16:9）。
     ネットワーク取得はしない（egui 版 BytesLoader が保存済みのものを読む）。未キャッシュはテキストのみ。
-  - 残り P3 本体: 他の一覧（おすすめ/履歴/再生リスト）への拡張、一覧のクリック選択、
+  - **一覧の複数ソース化** ✅ **完了**: 一覧を 1=登録新着 / 2=おすすめ / 3=履歴 で切替可能に。
+    `NativeRunning::list_rows()` が各ソースを (タイトル, サムネURL, video_id) に正規化、
+    `ensure_source_fetched()` が未取得なら start_subs/start_history を起動（おすすめは再生中動画に紐づく）。
+    ヘッダもソース名に追従。Enter で選択動画を再生。
+  - 残り P3 本体: 再生リスト一覧（2階層）、一覧のクリック選択、ログインUI/Like/画質選択、
     検索等の日本語入力 IME(DirectWrite/TSF)、チャット左右分割。すべて `Controller` を駆動して順次移植。
+    その後 P4 で egui/OpenGL 経路を撤去して移行完了。
 - **P4 切替**: 機能同等になったら egui/glutin/glow/egui_glow/gl_quad と OpenGL 経路を削除。
 - **P5（後日）mac**: CoreAnimation + mpv `gpu-api=metal`。共有コア再利用。
 

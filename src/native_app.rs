@@ -20,6 +20,14 @@ use crate::controller::Controller;
 use crate::player::Player;
 use crate::{auth, gpu_usage, UserEvent};
 
+/// 一覧の表示ソース。1/2/3 キーで切替。
+#[derive(Clone, Copy, PartialEq)]
+enum ListSource {
+    Subs,
+    Recommend,
+    History,
+}
+
 /// `--native` 起動時のアプリケーション。
 pub struct NativeApp {
     proxy: EventLoopProxy<UserEvent>,
@@ -43,9 +51,10 @@ struct NativeRunning {
     /// Ctrl 押下状態（Ctrl+V 貼り付け判定用）。
     #[allow(dead_code)]
     ctrl: bool,
-    /// 登録チャンネル新着の一覧表示中か、および選択位置。
+    /// 一覧表示中か、選択位置、表示ソース。
     list_open: bool,
     list_sel: usize,
+    list_source: ListSource,
     /// 動画に重ねる透過 2D オーバーレイ（コントローラ表示）。Windows のみ。
     #[cfg(windows)]
     overlay: Option<crate::native_overlay::Overlay>,
@@ -135,6 +144,7 @@ impl NativeApp {
             ctrl: false,
             list_open: false,
             list_sel: 0,
+            list_source: ListSource::Subs,
             #[cfg(windows)]
             overlay,
             #[cfg(windows)]
@@ -148,6 +158,73 @@ impl NativeApp {
 }
 
 impl NativeRunning {
+    /// 現在の一覧ソースの (ヘッダ, 行[(タイトル, サムネURL, video_id)]) を返す。
+    fn list_rows(&self) -> (String, Vec<(String, String, String)>) {
+        let nav = "  （1新着 2おすすめ 3履歴 / ↑↓ 選択 / Enter 再生 / Tab・Esc 閉じる）";
+        let (base, items): (&str, Vec<(String, String, String)>) = match self.list_source {
+            ListSource::Subs => (
+                "登録チャンネルの新着",
+                self.core
+                    .sub_feed
+                    .iter()
+                    .map(|v| {
+                        (
+                            format!("{}   |   {}", v.title, v.channel),
+                            v.thumbnail.clone(),
+                            v.video_id.clone(),
+                        )
+                    })
+                    .collect(),
+            ),
+            ListSource::Recommend => (
+                "おすすめ",
+                self.core
+                    .recommend_items
+                    .iter()
+                    .map(|v| {
+                        (
+                            format!("{}   |   {}", v.title, v.channel),
+                            v.thumbnail.clone(),
+                            v.video_id.clone(),
+                        )
+                    })
+                    .collect(),
+            ),
+            ListSource::History => (
+                "再生履歴",
+                self.core
+                    .history_items
+                    .iter()
+                    .map(|v| {
+                        (
+                            format!("{}   |   {}", v.title, v.channel),
+                            v.thumbnail.clone(),
+                            v.video_id.clone(),
+                        )
+                    })
+                    .collect(),
+            ),
+        };
+        (format!("{base}{nav}"), items)
+    }
+
+    /// 現在の一覧ソースが未取得なら取得を開始する（Recommend は再生中の動画に紐づくため何もしない）。
+    fn ensure_source_fetched(&mut self) {
+        match self.list_source {
+            ListSource::Subs => {
+                if self.core.sub_feed.is_empty() && !self.core.sub_busy {
+                    self.core.start_subs();
+                }
+            }
+            ListSource::History => {
+                if self.core.history_items.is_empty() && !self.core.history_busy {
+                    self.core.start_history();
+                }
+            }
+            ListSource::Recommend => {}
+        }
+    }
+
     /// 背景スレッド（認証/API/解決）の結果を取り込む。proxy 起床時に呼ぶ。
     fn poll_all(&mut self) {
         // リプレイチャット用に再生位置を共有。
@@ -234,23 +311,16 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     let url = _state.url_input.clone();
                     let list_open = _state.list_open;
                     let list_sel = _state.list_sel;
-                    let (titles, thumbs): (Vec<String>, Vec<String>) = if list_open {
+                    let (header, titles, thumbs): (String, Vec<String>, Vec<String>) = if list_open
+                    {
+                        let (h, rows) = _state.list_rows();
                         (
-                            _state
-                                .core
-                                .sub_feed
-                                .iter()
-                                .map(|v| format!("{}   |   {}", v.title, v.channel))
-                                .collect(),
-                            _state
-                                .core
-                                .sub_feed
-                                .iter()
-                                .map(|v| v.thumbnail.clone())
-                                .collect(),
+                            h,
+                            rows.iter().map(|r| r.0.clone()).collect(),
+                            rows.iter().map(|r| r.1.clone()).collect(),
                         )
                     } else {
-                        (Vec::new(), Vec::new())
+                        (String::new(), Vec::new(), Vec::new())
                     };
                     if let Some(ov) = _state.overlay.as_mut() {
                         ov.render(
@@ -261,6 +331,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                             &titles,
                             list_sel,
                             &thumbs,
+                            &header,
                         );
                     }
                 }
@@ -310,14 +381,12 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                         }
                     }
                 }
-                // Tab: 登録チャンネル新着の一覧を開閉。
+                // Tab: 一覧を開閉。
                 if let Key::Named(NamedKey::Tab) = event.logical_key {
                     state.list_open = !state.list_open;
                     if state.list_open {
                         state.list_sel = 0;
-                        if state.core.sub_feed.is_empty() && !state.core.sub_busy {
-                            state.core.start_subs();
-                        }
+                        state.ensure_source_fetched();
                     }
                     #[cfg(windows)]
                     {
@@ -325,34 +394,45 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     }
                     return;
                 }
-                // 一覧表示中はキーをナビゲーションに使う。
+                // 一覧表示中はキーをナビゲーション／ソース切替に使う。
                 if state.list_open {
-                    match event.logical_key {
+                    match &event.logical_key {
                         Key::Named(NamedKey::ArrowUp) => {
                             state.list_sel = state.list_sel.saturating_sub(1);
                         }
                         Key::Named(NamedKey::ArrowDown) => {
-                            let n = state.core.sub_feed.len();
+                            let n = state.list_rows().1.len();
                             if n > 0 {
                                 state.list_sel = (state.list_sel + 1).min(n - 1);
                             }
                         }
                         Key::Named(NamedKey::Enter) => {
-                            if let Some(v) = state.core.sub_feed.get(state.list_sel) {
-                                let url =
-                                    format!("https://www.youtube.com/watch?v={}", v.video_id);
+                            let rows = state.list_rows().1;
+                            if let Some((_, _, vid)) = rows.get(state.list_sel) {
+                                let url = format!("https://www.youtube.com/watch?v={vid}");
                                 state.list_open = false;
                                 state.url_input = url.clone();
                                 state.core.load(&url);
-                                if let Some(vid) =
-                                    auth::extract_video_id(&state.core.current_url)
-                                {
-                                    state.core.start_chat(vid.clone());
-                                    state.core.start_recommend(vid);
+                                if let Some(v) = auth::extract_video_id(&state.core.current_url) {
+                                    state.core.start_chat(v.clone());
+                                    state.core.start_recommend(v);
                                 }
                             }
                         }
                         Key::Named(NamedKey::Escape) => state.list_open = false,
+                        Key::Character(c) => {
+                            let next = match c.as_str() {
+                                "1" => Some(ListSource::Subs),
+                                "2" => Some(ListSource::Recommend),
+                                "3" => Some(ListSource::History),
+                                _ => None,
+                            };
+                            if let Some(src) = next {
+                                state.list_source = src;
+                                state.list_sel = 0;
+                                state.ensure_source_fetched();
+                            }
+                        }
                         _ => {}
                     }
                     #[cfg(windows)]
