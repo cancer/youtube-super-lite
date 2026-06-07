@@ -273,10 +273,11 @@ impl NativeRunning {
         self.core.poll_resolve();
     }
 
-    /// オーバーレイを現在のウィンドウ位置・サイズに合わせて再描画する（表示中のみ）。
-    /// リサイズ/移動イベントからも呼び、ウィンドウに即追従させる。
+    /// オーバーレイを現在のウィンドウ位置・サイズに合わせて再描画する（窓が可視の時のみ）。
+    /// `active` はコントロール（上部バー＋下部コントローラ）を描くか。リサイズ/移動イベント
+    /// からも呼び、ウィンドウに即追従させる。
     #[cfg(windows)]
-    fn render_overlay(&mut self) {
+    fn render_overlay(&mut self, active: bool) {
         if !self.overlay_visible {
             return;
         }
@@ -295,15 +296,14 @@ impl NativeRunning {
         } else {
             (String::new(), Vec::new(), Vec::new())
         };
-        let auth_label = match &self.core.channel {
-            Some(ch) if !ch.is_empty() => format!("👤 {ch}"),
-            _ => format!("{}（Ctrl+L）", self.core.auth_status),
+        let logged_in = self.core.channel.as_deref().is_some_and(|c| !c.is_empty());
+        let auth_label = if logged_in {
+            format!("👤 {}", self.core.channel.as_deref().unwrap_or(""))
+        } else {
+            format!("🔑 {}", self.core.auth_status)
         };
-        let info_label = format!(
-            "画質: {} ｜ コーデック: {}  （Ctrl+Q/C 変更・Ctrl+G 高評価・Ctrl+T チャット）",
-            self.core.quality.label(),
-            self.core.codec.label()
-        );
+        let quality_label = self.core.quality.label();
+        let codec_label = self.core.codec.label();
         let chat_open = self.chat_open;
         let chat_lines: Vec<String> = if chat_open {
             self.core
@@ -329,16 +329,118 @@ impl NativeRunning {
                 &self.core.player,
                 parent,
                 &url,
+                active,
                 list_open,
                 &titles,
                 list_sel,
                 &thumbs,
                 &header,
                 &auth_label,
-                &info_label,
+                logged_in,
+                quality_label,
+                codec_label,
                 chat_open,
                 &chat_lines,
             );
+        }
+    }
+
+    /// オーバーレイ操作を一つ適用する（クリック由来）。キーボードショートカットと同じ効果。
+    #[cfg(windows)]
+    fn apply_overlay_action(&mut self, action: crate::native_overlay::OverlayAction) {
+        use crate::native_overlay::{ListTab, OverlayAction};
+        match action {
+            OverlayAction::TogglePause => {
+                let p = &self.core.player;
+                p.set_paused(!p.paused());
+            }
+            OverlayAction::Seek(frac) => {
+                let p = &self.core.player;
+                let dur = p.duration();
+                if p.seekable() && dur > 0.0 {
+                    p.set_time_pos(frac * dur);
+                }
+            }
+            OverlayAction::SetVolume(v) => self.core.player.set_volume(v.clamp(0.0, 130.0)),
+            OverlayAction::ToggleMute => {
+                let p = &self.core.player;
+                p.set_muted(!p.muted());
+            }
+            OverlayAction::ToggleChat => {
+                self.chat_open = !self.chat_open;
+                self.core
+                    .player
+                    .set_video_margin_right(if self.chat_open { 0.28 } else { 0.0 });
+            }
+            OverlayAction::Like => {
+                if let Some(vid) = auth::extract_video_id(&self.core.current_url) {
+                    self.core.start_like(vid);
+                }
+            }
+            OverlayAction::Login => {
+                if !self.core.auth_busy {
+                    self.core.start_login();
+                }
+            }
+            OverlayAction::CycleQuality => {
+                let all = Quality::ALL;
+                let i = all
+                    .iter()
+                    .position(|q| *q == self.core.quality)
+                    .unwrap_or(0);
+                self.core.quality = all[(i + 1) % all.len()];
+                if resolve::is_youtube_url(&self.core.current_url) {
+                    let u = self.core.current_url.clone();
+                    self.core.start_resolve(u);
+                }
+            }
+            OverlayAction::CycleCodec => {
+                let all = Codec::ALL;
+                let i = all.iter().position(|c| *c == self.core.codec).unwrap_or(0);
+                self.core.codec = all[(i + 1) % all.len()];
+                if resolve::is_youtube_url(&self.core.current_url) {
+                    let u = self.core.current_url.clone();
+                    self.core.start_resolve(u);
+                }
+            }
+            OverlayAction::OpenList(tab) => {
+                self.list_source = match tab {
+                    ListTab::Recommend => ListSource::Recommend,
+                    ListTab::Subs => ListSource::Subs,
+                    ListTab::Playlist => ListSource::Playlist,
+                    ListTab::History => ListSource::History,
+                };
+                self.list_open = true;
+                self.list_sel = 0;
+                self.ensure_source_fetched();
+            }
+            OverlayAction::PlayIndex(idx) => self.play_list_index(idx),
+        }
+    }
+
+    /// 一覧の行 index を再生（再生リスト 1 階層目なら中身を開く）。
+    #[cfg(windows)]
+    fn play_list_index(&mut self, idx: usize) {
+        if self.list_source == ListSource::Playlist && self.core.playlist_items.is_empty() {
+            // 再生リスト一覧で選択 → その中身を開く（2 階層目へ）。
+            if let Some(pl) = self.core.playlist_lists.get(idx) {
+                let id = pl.playlist_id.clone();
+                let title = pl.title.clone();
+                self.list_sel = 0;
+                self.core.start_playlist_items(id, title);
+            }
+            return;
+        }
+        let rows = self.list_rows().1;
+        if let Some((_, _, vid)) = rows.get(idx) {
+            let url = format!("https://www.youtube.com/watch?v={vid}");
+            self.list_open = false;
+            self.url_input = url.clone();
+            self.core.load(&url);
+            if let Some(v) = auth::extract_video_id(&self.core.current_url) {
+                self.core.start_chat(v.clone());
+                self.core.start_recommend(v);
+            }
         }
     }
 }
@@ -369,66 +471,41 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             // オーバーレイの操作適用・自動非表示・定期再描画（~10fps）。
             #[cfg(windows)]
             {
-                use crate::native_overlay::OverlayAction;
                 use windows::Win32::Foundation::POINT;
                 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
-                // クリックで溜まった操作を Player に適用。
-                let action = _state.overlay.as_ref().and_then(|ov| ov.take_action());
-                if let Some(action) = action {
-                    let player = &_state.core.player;
-                    match action {
-                        OverlayAction::TogglePause => player.set_paused(!player.paused()),
-                        OverlayAction::Seek(frac) => {
-                            let dur = player.duration();
-                            if dur > 0.0 {
-                                player.set_time_pos(frac * dur);
-                            }
-                        }
-                    }
+                // クリックで溜まった操作をすべて適用（コントロール・動画クリック・一覧行）。
+                let actions = _state
+                    .overlay
+                    .as_ref()
+                    .map(|ov| ov.take_actions())
+                    .unwrap_or_default();
+                for action in actions {
+                    _state.apply_overlay_action(action);
                     _state.last_activity = Instant::now();
                 }
 
-                // 一覧のクリック選択 → 選択動画を再生。
-                if _state.list_open {
-                    if let Some(idx) = _state.overlay.as_ref().and_then(|o| o.take_list_click()) {
-                        let rows = _state.list_rows().1;
-                        if let Some((_, _, vid)) = rows.get(idx) {
-                            let url = format!("https://www.youtube.com/watch?v={vid}");
-                            _state.list_open = false;
-                            _state.url_input = url.clone();
-                            _state.core.load(&url);
-                            if let Some(v) = auth::extract_video_id(&_state.core.current_url) {
-                                _state.core.start_chat(v.clone());
-                                _state.core.start_recommend(v);
-                            }
-                        }
-                        _state.last_activity = Instant::now();
-                    }
-                }
-
-                // カーソル移動を検出して自動非表示を制御。
+                // カーソル移動を検出して自動非表示（active 解除）を制御。
                 let mut p = POINT::default();
                 let _ = unsafe { GetCursorPos(&mut p) };
                 if (p.x, p.y) != _state.last_cursor {
                     _state.last_cursor = (p.x, p.y);
                     _state.last_activity = Instant::now();
                 }
-                // フォーカスを失っている間は隠す。フォーカスありなら
-                // 一覧/チャット表示中は常に表示、それ以外は 3 秒無操作で自動非表示。
-                let show = _state.focused
-                    && (_state.list_open
-                        || _state.chat_open
-                        || _state.last_activity.elapsed() < Duration::from_secs(3));
-                if show != _state.overlay_visible {
-                    _state.overlay_visible = show;
+                // 窓の可視はフォーカスに連動（フォーカス中は常時可視＝全クリック捕捉）。
+                if _state.focused != _state.overlay_visible {
+                    _state.overlay_visible = _state.focused;
                     if let Some(ov) = _state.overlay.as_ref() {
-                        ov.set_visible(show);
+                        ov.set_visible(_state.focused);
                     }
                 }
+                // コントロール描画（active）: 一覧/チャット表示中は常時、それ以外は 3 秒無操作で隠す。
+                let active = _state.list_open
+                    || _state.chat_open
+                    || _state.last_activity.elapsed() < Duration::from_secs(3);
 
-                // 表示中のみ再描画（シークバー/時間・一覧を更新）。
-                _state.render_overlay();
+                // 窓が可視（フォーカス中）の時のみ再描画。
+                _state.render_overlay(active);
             }
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + Duration::from_millis(100),
@@ -479,7 +556,8 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     if let Some(ov) = state.overlay.as_ref() {
                         ov.set_visible(true);
                     }
-                    state.render_overlay();
+                    // リサイズ/移動直後は操作直後なので active で再描画。
+                    state.render_overlay(true);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
