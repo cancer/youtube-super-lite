@@ -62,6 +62,8 @@ struct NativeRunning {
     chat_open: bool,
     /// チャット（コメント）の文字サイズ（px）。UI（A-/A+）で増減する。
     chat_font_px: f32,
+    /// チャット欄の幅（ウィンドウ幅比 0.15..=0.6）。左端ドラッグで変更する。
+    chat_width_ratio: f32,
     /// アプリ窓がフォーカスを持っているか。失っている間はオーバーレイを隠す
     /// （他アプリの上にオーバーレイが残らないようにする）。
     focused: bool,
@@ -182,6 +184,7 @@ impl NativeApp {
             list_source: ListSource::Subs,
             chat_open: false,
             chat_font_px: 16.0,
+            chat_width_ratio: 0.28,
             focused: true,
             #[cfg(windows)]
             overlay,
@@ -438,6 +441,16 @@ impl NativeRunning {
                 self.chat_font_px = (self.chat_font_px - 2.0).clamp(10.0, 28.0);
                 true
             }
+            "chat_wider" | "chat_narrower" => {
+                let d = if name == "chat_wider" { 0.04 } else { -0.04 };
+                self.chat_width_ratio = (self.chat_width_ratio + d).clamp(0.15, 0.6);
+                if self.chat_open {
+                    self.core
+                        .player
+                        .set_video_margin_right(self.chat_width_ratio as f64);
+                }
+                true
+            }
             // --- 認証 / 評価 ---
             "login" => {
                 if !self.core.auth_busy {
@@ -557,6 +570,7 @@ impl NativeRunning {
             "codec": self.core.codec.label(),
             "chat_open": self.chat_open,
             "chat_font_px": self.chat_font_px,
+            "chat_width_ratio": self.chat_width_ratio,
             "chat_available": !self.core.chat_status.is_empty(),
             "chat_messages": self.core.chat_messages.len(),
             "list_open": self.list_open,
@@ -616,6 +630,7 @@ impl NativeRunning {
         let has_recommend = !self.core.recommend_items.is_empty();
         let is_live = self.core.is_live;
         let chat_font_px = self.chat_font_px;
+        let chat_width_ratio = self.chat_width_ratio;
         // egui 版と同じく、チャット接続中 or メッセージがある時のみ 💬 を出す。
         let chat_available = !self.core.chat_status.is_empty();
         let chat_open = self.chat_open;
@@ -668,6 +683,7 @@ impl NativeRunning {
                 chat_available,
                 chat_open,
                 chat_font_px,
+                chat_width_ratio,
                 &chat_lines,
             );
         }
@@ -701,15 +717,22 @@ impl NativeRunning {
             }
             OverlayAction::ToggleChat => {
                 self.chat_open = !self.chat_open;
-                self.core
-                    .player
-                    .set_video_margin_right(if self.chat_open { 0.28 } else { 0.0 });
+                let m = if self.chat_open { self.chat_width_ratio } else { 0.0 };
+                self.core.player.set_video_margin_right(m as f64);
             }
             OverlayAction::ChatFontDec => {
                 self.chat_font_px = (self.chat_font_px - 2.0).clamp(10.0, 28.0);
             }
             OverlayAction::ChatFontInc => {
                 self.chat_font_px = (self.chat_font_px + 2.0).clamp(10.0, 28.0);
+            }
+            OverlayAction::SetChatWidth(r) => {
+                self.chat_width_ratio = (r as f32).clamp(0.15, 0.6);
+                if self.chat_open {
+                    self.core
+                        .player
+                        .set_video_margin_right(self.chat_width_ratio as f64);
+                }
             }
             OverlayAction::Like => {
                 if let Some(vid) = auth::extract_video_id(&self.core.current_url) {

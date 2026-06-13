@@ -93,6 +93,8 @@ pub enum OverlayAction {
     /// チャット（コメント）の文字サイズを小さく / 大きく。
     ChatFontDec,
     ChatFontInc,
+    /// チャット欄の幅（ウィンドウ幅に対する比率 0.15..=0.6）を設定。
+    SetChatWidth(f64),
     /// 一覧（指定タブ）を開く。
     OpenList(ListTab),
     /// 画質を巡回（→ 再生中なら取り直し）。
@@ -112,6 +114,8 @@ enum Drag {
     None,
     Seek,
     Vol,
+    /// チャット欄の左端をドラッグして幅変更中。
+    ChatW,
 }
 
 /// wndproc(C コールバック) と描画/NativeApp の橋渡し。UI スレッド単一なので thread_local。
@@ -136,6 +140,10 @@ struct OvShared {
     /// チャット文字サイズの増減ボタン（チャットパネルのヘッダ）。
     chat_font_dec: RECT,
     chat_font_inc: RECT,
+    /// チャット欄の左端リサイズハンドル（ドラッグで幅変更）。
+    chat_resize: RECT,
+    /// 現在のクライアント幅（チャット幅比率の算出に使う）。
+    win_w: i32,
     /// クリックを捕捉する領域（上部 UI 帯・下部コントローラ帯）。この外側は HTTRANSPARENT に
     /// して親 winit ウィンドウへ通し、動画クリック=一時停止を winit 側で処理させる。
     region_top: RECT,
@@ -690,6 +698,7 @@ impl Overlay {
         chat_available: bool,
         chat_open: bool,
         chat_font_px: f32,
+        chat_width_ratio: f32,
         chat_lines: &[Vec<ChatSeg>],
     ) {
         unsafe {
@@ -726,6 +735,7 @@ impl Overlay {
             let mut hits = OvShared {
                 seekable: player.seekable(),
                 list_open,
+                win_w: w,
                 ..Default::default()
             };
 
@@ -733,7 +743,7 @@ impl Overlay {
             // 一覧が全面を覆うため描かない（クリックは行選択に使う）。
             if chat_open && !list_open {
                 self.ensure_chat_format(chat_font_px);
-                self.draw_chat(&p, w, h, chat_lines, &mut hits);
+                self.draw_chat(&p, w, h, chat_width_ratio, chat_lines, &mut hits);
             }
 
             // コントロール（上部バー＋下部コントローラ）は active 時のみ描画＆ヒット登録。
@@ -1123,10 +1133,11 @@ impl Overlay {
         p: &Painter,
         w: i32,
         h: i32,
+        width_ratio: f32,
         chat_lines: &[Vec<ChatSeg>],
         hits: &mut OvShared,
     ) {
-        let pw = w as f32 * 0.28;
+        let pw = w as f32 * width_ratio.clamp(0.15, 0.6);
         let px = w as f32 - pw;
         let ptop = (TOP_H + 4) as f32;
         let pbot = (h - BOTTOM_H - 4) as f32;
@@ -1147,6 +1158,34 @@ impl Overlay {
                 bottom: pbot,
             },
             color(0.05, 0.05, 0.07, 0.82),
+        );
+        // 左端のリサイズハンドル（ドラッグで幅変更）。パネル内側 8px に収める（外に出すと
+        // その隙間のクリックが動画クリック=一時停止に落ちるため）。境界線＋中央グリップを描く。
+        hits.chat_resize = RECT {
+            left: px as i32,
+            top: ptop as i32,
+            right: (px + 8.0) as i32,
+            bottom: pbot as i32,
+        };
+        p.fill_rect(
+            D2D_RECT_F {
+                left: px,
+                top: ptop,
+                right: px + 2.0,
+                bottom: pbot,
+            },
+            color(0.45, 0.45, 0.55, 0.8),
+        );
+        let grip_cy = (ptop + pbot) / 2.0;
+        p.fill_round(
+            D2D_RECT_F {
+                left: px + 1.0,
+                top: grip_cy - 16.0,
+                right: px + 5.0,
+                bottom: grip_cy + 16.0,
+            },
+            2.0,
+            color(0.75, 0.75, 0.85, 0.95),
         );
         // チャット文字サイズ（ユーザー調整可）。行高・絵文字サイズも追従させる。
         let fs = self.chat_format_px;
@@ -1512,6 +1551,9 @@ unsafe extern "system" fn overlay_wndproc(
                 } else if s.vol.right > s.vol.left && in_rect(&s.vol, x, y) {
                     s.drag = Drag::Vol;
                     capture = true;
+                } else if s.chat_resize.right > s.chat_resize.left && in_rect(&s.chat_resize, x, y) {
+                    s.drag = Drag::ChatW;
+                    capture = true;
                 }
                 if let Some(act) = dispatch_hit(&s, x, y) {
                     s.actions.push(act);
@@ -1536,6 +1578,11 @@ unsafe extern "system" fn overlay_wndproc(
                     Drag::Vol => {
                         let v = vol_from_x(&s, x);
                         s.actions.push(OverlayAction::SetVolume(v));
+                    }
+                    Drag::ChatW => {
+                        // 左端を x に動かす → 幅比率 = (w - x) / w。
+                        let ratio = ((s.win_w - x) as f64 / s.win_w.max(1) as f64).clamp(0.15, 0.6);
+                        s.actions.push(OverlayAction::SetChatWidth(ratio));
                     }
                     Drag::None => {}
                 }

@@ -15,7 +15,7 @@
 //! - 再生: `play_pause`, `seek_fwd`, `seek_back`, `live_edge`
 //! - 音量: `vol_up`, `vol_down`, `mute`
 //! - 画質/コーデック: `quality_next`, `codec_next`
-//! - チャット: `toggle_chat`, `chat_font_inc`, `chat_font_dec`
+//! - チャット: `toggle_chat`, `chat_font_inc`, `chat_font_dec`, `chat_wider`, `chat_narrower`
 //! - 認証/評価: `login`, `like`
 //! - URL: `play_url`（URL 欄の内容を再生）
 //! - 一覧: `toggle_list`, `close_overlay`, `open_recommend`, `open_subs`,
