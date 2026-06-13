@@ -90,6 +90,9 @@ pub enum OverlayAction {
     Like,
     /// チャットパネルの表示トグル。
     ToggleChat,
+    /// チャット（コメント）の文字サイズを小さく / 大きく。
+    ChatFontDec,
+    ChatFontInc,
     /// 一覧（指定タブ）を開く。
     OpenList(ListTab),
     /// 画質を巡回（→ 再生中なら取り直し）。
@@ -130,6 +133,9 @@ struct OvShared {
     live_edge: RECT,
     /// チャットパネル領域（クリックを無視して動画クリック=一時停止に落とさない）。
     chat_panel: RECT,
+    /// チャット文字サイズの増減ボタン（チャットパネルのヘッダ）。
+    chat_font_dec: RECT,
+    chat_font_inc: RECT,
     /// クリックを捕捉する領域（上部 UI 帯・下部コントローラ帯）。この外側は HTTRANSPARENT に
     /// して親 winit ウィンドウへ通し、動画クリック=一時停止を winit 側で処理させる。
     region_top: RECT,
@@ -190,6 +196,16 @@ fn seek_from_x(s: &OvShared, x: i32) -> f64 {
 /// 非ヒット（バー余白・動画）は TogglePause。
 fn dispatch_hit(s: &OvShared, x: i32, y: i32) -> Option<OverlayAction> {
     use OverlayAction::*;
+    // チャットパネル内のボタンを先に判定し、それ以外のパネル内クリックは無視（None）。
+    if in_rect(&s.chat_font_dec, x, y) {
+        return Some(ChatFontDec);
+    }
+    if in_rect(&s.chat_font_inc, x, y) {
+        return Some(ChatFontInc);
+    }
+    if in_rect(&s.chat_panel, x, y) {
+        return None;
+    }
     if s.seek.right > s.seek.left && in_rect(&s.seek, x, y) {
         // seekable 時のみシーク。非 DVR ライブは領域を吸収するだけ（一時停止に落とさない）。
         return if s.seekable {
@@ -376,11 +392,6 @@ impl Painter {
         self.measure(&self.tfs, s, 9.0)
     }
 
-    /// 主フォントでのテキスト幅（px）。
-    unsafe fn measure_main(&self, s: &str) -> f32 {
-        self.measure(&self.tf, s, 12.0)
-    }
-
     /// 左端 `x`・縦中心 `cy` に小フォントのフラットなテキストボタンを描き、ヒット矩形を返す。
     unsafe fn flat(&self, x: i32, cy: i32, label: &str, col: D2D1_COLOR_F) -> RECT {
         let tw = self.measure_s(label).ceil() as i32;
@@ -435,6 +446,9 @@ pub struct Overlay {
     text_format: IDWriteTextFormat,
     /// 小フォント（コントロール・タブ・時間用、15px）。
     text_format_small: IDWriteTextFormat,
+    /// チャット（コメント）用フォント。サイズはユーザーが UI で増減できる（再生成する）。
+    chat_format: IDWriteTextFormat,
+    chat_format_px: f32,
     dwrite: IDWriteFactory,
     mem_dc: HDC,
     dib: HBITMAP,
@@ -504,6 +518,17 @@ impl Overlay {
                 15.0,
                 w!("ja-jp"),
             )?;
+            // チャット（コメント）用フォント。既定 16px。ユーザーが UI で増減すると再生成する。
+            let chat_format_px = 16.0f32;
+            let chat_format: IDWriteTextFormat = dwrite.CreateTextFormat(
+                w!("Yu Gothic UI"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                chat_format_px,
+                w!("ja-jp"),
+            )?;
             let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
                 r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
                 pixelFormat: D2D1_PIXEL_FORMAT {
@@ -535,6 +560,8 @@ impl Overlay {
                 dc_rt,
                 text_format,
                 text_format_small,
+                chat_format,
+                chat_format_px,
                 dwrite,
                 mem_dc: HDC::default(),
                 dib: HBITMAP::default(),
@@ -602,12 +629,32 @@ impl Overlay {
                         s.actions.push(OverlayAction::PlayIndex(idx));
                     }
                 }
-            } else if in_rect(&s.chat_panel, x, y) {
-                // チャットパネル領域: 無視。
             } else if let Some(act) = dispatch_hit(&s, x, y) {
                 s.actions.push(act);
             }
         });
+    }
+
+    /// チャット用フォントを指定 px に合わせる（変化時のみ再生成）。
+    fn ensure_chat_format(&mut self, px: f32) {
+        let px = px.clamp(10.0, 28.0);
+        if (self.chat_format_px - px).abs() < 0.5 {
+            return;
+        }
+        unsafe {
+            if let Ok(f) = self.dwrite.CreateTextFormat(
+                w!("Yu Gothic UI"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                px,
+                w!("ja-jp"),
+            ) {
+                self.chat_format = f;
+                self.chat_format_px = px;
+            }
+        }
     }
 
     /// 表示/非表示を切り替える（フォーカス喪失時に隠す）。
@@ -642,6 +689,7 @@ impl Overlay {
         is_live: bool,
         chat_available: bool,
         chat_open: bool,
+        chat_font_px: f32,
         chat_lines: &[Vec<ChatSeg>],
     ) {
         unsafe {
@@ -684,6 +732,7 @@ impl Overlay {
             // チャットパネルは（active と無関係に）チャット表示中なら描く。一覧表示中は
             // 一覧が全面を覆うため描かない（クリックは行選択に使う）。
             if chat_open && !list_open {
+                self.ensure_chat_format(chat_font_px);
                 self.draw_chat(&p, w, h, chat_lines, &mut hits);
             }
 
@@ -1099,17 +1148,40 @@ impl Overlay {
             },
             color(0.05, 0.05, 0.07, 0.82),
         );
-        let line_h = 36.0;
-        let em = 26.0; // 絵文字の表示サイズ。
+        // チャット文字サイズ（ユーザー調整可）。行高・絵文字サイズも追従させる。
+        let fs = self.chat_format_px;
+        let cf = self.chat_format.clone();
+        let line_h = (fs * 1.6).max(fs + 8.0);
+        let em = fs * 1.5; // 絵文字の表示サイズ。
         let col = color(0.90, 0.90, 0.95, 1.0);
         let left = px + 10.0;
         let right_lim = w as f32 - 10.0;
-        let avail = (((pbot - ptop - 12.0) / line_h).floor() as usize).max(1);
+
+        // ヘッダ行: コメント文字サイズの増減ボタン（A- / A+）を右寄せ。
+        let hdr_cy = ptop as i32 + 14;
+        let acc = color(0.85, 0.90, 1.0, 1.0);
+        let r = p.flat_right(w - 10, hdr_cy, "A+", acc);
+        hits.chat_font_inc = r;
+        let r = p.flat_right(r.left - 6, hdr_cy, "A-", acc);
+        hits.chat_font_dec = r;
+        p.text_s(
+            "コメント",
+            D2D_RECT_F {
+                left,
+                top: ptop + 2.0,
+                right: r.left as f32 - 8.0,
+                bottom: ptop + 24.0,
+            },
+            color(0.70, 0.70, 0.75, 1.0),
+        );
+
+        let body_top = ptop + 28.0;
+        let avail = (((pbot - body_top - 6.0) / line_h).floor() as usize).max(1);
         let n = chat_lines.len();
         let start = n.saturating_sub(avail);
         let dc_rt_clone = self.dc_rt.clone();
         for (rowi, segs) in chat_lines[start..].iter().enumerate() {
-            let y = ptop + 6.0 + rowi as f32 * line_h;
+            let y = body_top + rowi as f32 * line_h;
             let mut cx = left;
             for seg in segs {
                 if cx >= right_lim {
@@ -1117,8 +1189,9 @@ impl Overlay {
                 }
                 match seg {
                     ChatSeg::Text(t) => {
-                        let tw = p.measure_main(t);
-                        p.text(
+                        let tw = p.measure(&cf, t, fs * 0.5);
+                        p.draw(
+                            &cf,
                             t,
                             D2D_RECT_F {
                                 left: cx,
@@ -1161,8 +1234,9 @@ impl Overlay {
                             cx += em + 2.0;
                         } else {
                             // 未デコードは alt テキストで仮表示（次フレーム以降で画像に置き換わる）。
-                            let tw = p.measure_main(alt);
-                            p.text(
+                            let tw = p.measure(&cf, alt, fs * 0.5);
+                            p.draw(
+                                &cf,
                                 alt,
                                 D2D_RECT_F {
                                     left: cx,
@@ -1430,9 +1504,6 @@ unsafe extern "system" fn overlay_wndproc(
                         }
                     }
                     return;
-                }
-                if in_rect(&s.chat_panel, x, y) {
-                    return; // チャットパネル領域: クリックを無視。
                 }
                 // スライダー上で押したらドラッグ開始（マウスキャプチャして領域外でも追従）。
                 if s.seekable && s.seek.right > s.seek.left && in_rect(&s.seek, x, y) {

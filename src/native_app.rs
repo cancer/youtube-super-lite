@@ -60,6 +60,8 @@ struct NativeRunning {
     list_source: ListSource,
     /// チャット（右パネル）表示中か。
     chat_open: bool,
+    /// チャット（コメント）の文字サイズ（px）。UI（A-/A+）で増減する。
+    chat_font_px: f32,
     /// アプリ窓がフォーカスを持っているか。失っている間はオーバーレイを隠す
     /// （他アプリの上にオーバーレイが残らないようにする）。
     focused: bool,
@@ -179,6 +181,7 @@ impl NativeApp {
             list_sel: 0,
             list_source: ListSource::Subs,
             chat_open: false,
+            chat_font_px: 16.0,
             focused: true,
             #[cfg(windows)]
             overlay,
@@ -452,6 +455,7 @@ impl NativeRunning {
         let codec_label = self.core.codec.label();
         let has_recommend = !self.core.recommend_items.is_empty();
         let is_live = self.core.is_live;
+        let chat_font_px = self.chat_font_px;
         // egui 版と同じく、チャット接続中 or メッセージがある時のみ 💬 を出す。
         let chat_available = !self.core.chat_status.is_empty();
         let chat_open = self.chat_open;
@@ -503,6 +507,7 @@ impl NativeRunning {
                 is_live,
                 chat_available,
                 chat_open,
+                chat_font_px,
                 &chat_lines,
             );
         }
@@ -539,6 +544,12 @@ impl NativeRunning {
                 self.core
                     .player
                     .set_video_margin_right(if self.chat_open { 0.28 } else { 0.0 });
+            }
+            OverlayAction::ChatFontDec => {
+                self.chat_font_px = (self.chat_font_px - 2.0).clamp(10.0, 28.0);
+            }
+            OverlayAction::ChatFontInc => {
+                self.chat_font_px = (self.chat_font_px + 2.0).clamp(10.0, 28.0);
             }
             OverlayAction::Like => {
                 if let Some(vid) = auth::extract_video_id(&self.core.current_url) {
