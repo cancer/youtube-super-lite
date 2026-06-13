@@ -120,15 +120,27 @@ youtube-super-lite [OPTIONS] [URL]
 ### dev-tools（`--enable-dev-tools`）
 
 外部の screencapture / クリックツールに依存せず、アプリ自身がローカル HTTP で
-スクリーンショット撮影・UI 操作注入を受け付ける検証用サーバ。起動時に listen ポートを
-stderr に表示する（`[dev-tools] http://127.0.0.1:<port> ...`）。`curl` だけで検証フローを回せる。
+スクリーンショット撮影・状態取得・UI 操作を受け付ける検証用サーバ。起動時に listen ポートを
+stderr に表示する（`[dev-tools] http://127.0.0.1:<port> ...`）。`curl` だけで検証フローを回せ、
+**あらゆる UI 操作をグローバル入力なしで駆動でき、状態も観測できる**（SendKeys 等は他ウィンドウに
+誤爆するため使わない）。
 
 | メソッド / パス | 説明 |
 |------|------|
 | `GET /screenshot` | 現在のウィンドウ（クライアント領域）を PNG で返す。撮影前にウィンドウを前面化し、オーバーレイ込みの合成画を取得する |
-| `POST /action/<name>` | UI 操作を起こす。`<name>`: `toggle_chat` / `play_pause` / `login` / `like` / `close_overlay` / `open_recommend` / `open_subs` / `open_playlist` / `open_history` |
+| `GET /state` | 現在の UI 状態スナップショットを JSON で返す（paused / volume / muted / quality / codec / is_live / chat_open / chat_font_px / list_* / logged_in 等） |
+| `POST /action/<name>` | UI 操作を起こす（下記、キーボード/オーバーレイの全操作を網羅） |
 | `POST /click?x=&y=` | クライアント px 座標に左クリックを注入（コントロール矩形へ振り分け） |
 | `POST /type`（body=text, `?enter=1`） | URL 欄へテキスト入力。`enter=1` で再生 |
+
+`/action/<name>` の `<name>`:
+- 再生: `play_pause` / `seek_fwd` / `seek_back` / `live_edge`
+- 音量: `vol_up` / `vol_down` / `mute`
+- 画質・コーデック: `quality_next` / `codec_next`
+- チャット: `toggle_chat` / `chat_font_inc` / `chat_font_dec`
+- 認証・評価: `login` / `like`
+- URL: `play_url`（URL 欄の内容を再生）
+- 一覧: `toggle_list` / `close_overlay` / `open_recommend` / `open_subs` / `open_playlist` / `open_history` / `list_up` / `list_down` / `list_select` / `list_back`
 
 ### 操作（キーボード中心）
 

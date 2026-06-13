@@ -6,12 +6,20 @@
 //!
 //! 提供エンドポイント:
 //! - `GET /screenshot`         — 現在のウィンドウ(クライアント領域)を PNG で返す
-//! - `POST /action/<name>`     — UI 操作の intent を起こす（GUI 自動操作の代替）
+//! - `GET /state`              — 現在の UI 状態スナップショット（JSON）を返す
+//! - `POST /action/<name>`     — UI 操作を起こす（あらゆる UI 操作を網羅。下記）
 //! - `POST /click?x=&y=`       — 指定座標（/screenshot と同じクライアント px）に左クリックを注入
 //! - `POST /type`（body=text, `?enter=1`）— URL 欄へテキスト入力（任意で Enter 再生）
 //!
-//! `<name>` は: `toggle_chat`, `play_pause`, `login`, `like`, `close_overlay`,
-//! `open_recommend`, `open_subs`, `open_playlist`, `open_history`。
+//! `/action/<name>` の `<name>`（キーボード/オーバーレイの全操作に対応）:
+//! - 再生: `play_pause`, `seek_fwd`, `seek_back`, `live_edge`
+//! - 音量: `vol_up`, `vol_down`, `mute`
+//! - 画質/コーデック: `quality_next`, `codec_next`
+//! - チャット: `toggle_chat`, `chat_font_inc`, `chat_font_dec`
+//! - 認証/評価: `login`, `like`
+//! - URL: `play_url`（URL 欄の内容を再生）
+//! - 一覧: `toggle_list`, `close_overlay`, `open_recommend`, `open_subs`,
+//!   `open_playlist`, `open_history`, `list_up`, `list_down`, `list_select`, `list_back`
 //!
 //! スレッドモデル: HTTP サーバは背景スレッドで動き、各リクエストは [`Command`] を
 //! `Sender` 経由でメインスレッドへ送って `EventLoopProxy` で起こす。メインスレッドは
@@ -27,6 +35,8 @@ use tiny_http::{Header, Method, Response, Server};
 pub enum Command {
     /// スクリーンショット。reply に PNG バイト列を送る。
     Screenshot(Sender<Vec<u8>>),
+    /// 現在の UI 状態スナップショット（JSON 文字列）を返す。
+    State(Sender<String>),
     /// UI アクションの intent。reply にアクション名が既知なら true。
     Action(String, Sender<bool>),
     /// 指定座標（クライアント px）に左クリックを注入する。
@@ -71,6 +81,7 @@ fn handle(
     let path_only = url.split('?').next().unwrap_or(&url);
     match (method, path_only) {
         (Method::Get, "/screenshot") => handle_screenshot(req, cmd_tx, proxy),
+        (Method::Get, "/state") => handle_state(req, cmd_tx, proxy),
         (Method::Post, "/click") => handle_click(req, cmd_tx, proxy, &url),
         (Method::Post, "/type") => handle_type(req, cmd_tx, proxy, &url),
         (Method::Post, path) if path.starts_with("/action/") => {
@@ -121,6 +132,19 @@ fn handle_screenshot(
                 .with_header("Content-Type: image/png".parse::<Header>().unwrap());
             let _ = req.respond(resp);
         }
+    });
+}
+
+fn handle_state(
+    req: tiny_http::Request,
+    cmd_tx: &Sender<Command>,
+    proxy: &winit::event_loop::EventLoopProxy<crate::UserEvent>,
+) {
+    let (tx, rx) = channel();
+    dispatch(req, cmd_tx, proxy, || Command::State(tx), rx, |req, json| {
+        let resp = Response::from_string(json)
+            .with_header("Content-Type: application/json".parse::<Header>().unwrap());
+        let _ = req.respond(resp);
     });
 }
 

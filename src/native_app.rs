@@ -327,6 +327,9 @@ impl NativeRunning {
                     self.pending_shot = Some(reply);
                     self.shot_delay = 3;
                 }
+                Command::State(reply) => {
+                    let _ = reply.send(self.state_json());
+                }
                 Command::Action(name, reply) => {
                     let known = self.devtools_action(&name);
                     let _ = reply.send(known);
@@ -360,14 +363,66 @@ impl NativeRunning {
         }
     }
 
-    /// dev-tools のアクション名を UI 状態に反映する。既知なら true。
+    /// dev-tools のアクション名を UI 状態に反映する（キーボード/オーバーレイの全操作を網羅）。
+    /// 既知なら true。
     fn devtools_action(&mut self, name: &str) -> bool {
         let known = match name {
+            // --- 再生 ---
             "play_pause" => {
                 let p = &self.core.player;
                 p.set_paused(!p.paused());
                 true
             }
+            "seek_fwd" => {
+                self.core.player.seek_relative(5.0);
+                true
+            }
+            "seek_back" => {
+                self.core.player.seek_relative(-5.0);
+                true
+            }
+            "live_edge" => {
+                self.core.player.seek_to_live();
+                true
+            }
+            // --- 音量 ---
+            "vol_up" => {
+                let p = &self.core.player;
+                p.set_volume((p.volume() + 5.0).min(130.0));
+                true
+            }
+            "vol_down" => {
+                let p = &self.core.player;
+                p.set_volume((p.volume() - 5.0).max(0.0));
+                true
+            }
+            "mute" => {
+                let p = &self.core.player;
+                p.set_muted(!p.muted());
+                true
+            }
+            // --- 画質 / コーデック ---
+            "quality_next" => {
+                let all = Quality::ALL;
+                let i = all.iter().position(|q| *q == self.core.quality).unwrap_or(0);
+                self.core.quality = all[(i + 1) % all.len()];
+                if resolve::is_youtube_url(&self.core.current_url) {
+                    let u = self.core.current_url.clone();
+                    self.core.start_resolve(u);
+                }
+                true
+            }
+            "codec_next" => {
+                let all = Codec::ALL;
+                let i = all.iter().position(|c| *c == self.core.codec).unwrap_or(0);
+                self.core.codec = all[(i + 1) % all.len()];
+                if resolve::is_youtube_url(&self.core.current_url) {
+                    let u = self.core.current_url.clone();
+                    self.core.start_resolve(u);
+                }
+                true
+            }
+            // --- チャット ---
             "toggle_chat" => {
                 self.chat_open = !self.chat_open;
                 self.core
@@ -375,6 +430,15 @@ impl NativeRunning {
                     .set_video_margin_right(if self.chat_open { 0.28 } else { 0.0 });
                 true
             }
+            "chat_font_inc" => {
+                self.chat_font_px = (self.chat_font_px + 2.0).clamp(10.0, 28.0);
+                true
+            }
+            "chat_font_dec" => {
+                self.chat_font_px = (self.chat_font_px - 2.0).clamp(10.0, 28.0);
+                true
+            }
+            // --- 認証 / 評価 ---
             "login" => {
                 if !self.core.auth_busy {
                     self.core.start_login();
@@ -384,6 +448,27 @@ impl NativeRunning {
             "like" => {
                 if let Some(vid) = auth::extract_video_id(&self.core.current_url) {
                     self.core.start_like(vid);
+                }
+                true
+            }
+            // --- URL 再生 ---
+            "play_url" => {
+                let url = self.url_input.trim().to_string();
+                if !url.is_empty() {
+                    self.core.load(&url);
+                    if let Some(vid) = auth::extract_video_id(&self.core.current_url) {
+                        self.core.start_chat(vid.clone());
+                        self.core.start_recommend(vid);
+                    }
+                }
+                true
+            }
+            // --- 一覧 ---
+            "toggle_list" => {
+                self.list_open = !self.list_open;
+                if self.list_open {
+                    self.list_sel = 0;
+                    self.ensure_source_fetched();
                 }
                 true
             }
@@ -403,6 +488,31 @@ impl NativeRunning {
                 self.ensure_source_fetched();
                 true
             }
+            "list_up" => {
+                self.list_sel = self.list_sel.saturating_sub(1);
+                true
+            }
+            "list_down" => {
+                let n = self.list_rows().1.len();
+                if n > 0 {
+                    self.list_sel = (self.list_sel + 1).min(n - 1);
+                }
+                true
+            }
+            "list_select" => {
+                self.play_list_index(self.list_sel);
+                true
+            }
+            "list_back" => {
+                if self.list_source == ListSource::Playlist
+                    && !self.core.playlist_items.is_empty()
+                {
+                    self.core.playlist_items.clear();
+                    self.core.playlist_items_title.clear();
+                    self.list_sel = 0;
+                }
+                true
+            }
             _ => false,
         };
         #[cfg(windows)]
@@ -410,6 +520,45 @@ impl NativeRunning {
             self.last_activity = Instant::now();
         }
         known
+    }
+
+    /// 現在の UI 状態を JSON 文字列で返す（dev-tools の /state 用）。
+    fn state_json(&self) -> String {
+        let p = &self.core.player;
+        let source = match self.list_source {
+            ListSource::Subs => "subs",
+            ListSource::Recommend => "recommend",
+            ListSource::History => "history",
+            ListSource::Playlist => "playlist",
+        };
+        let logged_in = self.core.channel.as_deref().is_some_and(|c| !c.is_empty());
+        serde_json::json!({
+            "current_url": self.core.current_url,
+            "url_input": self.url_input,
+            "paused": p.paused(),
+            "time_pos": p.time_pos(),
+            "duration": p.duration(),
+            "seekable": p.seekable(),
+            "is_live": self.core.is_live,
+            "volume": p.volume(),
+            "muted": p.muted(),
+            "media_title": p.media_title(),
+            "quality": self.core.quality.label(),
+            "codec": self.core.codec.label(),
+            "chat_open": self.chat_open,
+            "chat_font_px": self.chat_font_px,
+            "chat_available": !self.core.chat_status.is_empty(),
+            "chat_messages": self.core.chat_messages.len(),
+            "list_open": self.list_open,
+            "list_source": source,
+            "list_sel": self.list_sel,
+            "list_count": self.list_rows().1.len(),
+            "logged_in": logged_in,
+            "channel": self.core.channel,
+            "auth_status": self.core.auth_status,
+            "focused": self.focused,
+        })
+        .to_string()
     }
 
     /// 現在のウィンドウ（クライアント領域）を PNG にして返す（取得不可なら空）。
