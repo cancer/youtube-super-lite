@@ -532,6 +532,16 @@ impl NativeRunning {
             ListSource::Playlist => "playlist",
         };
         let logged_in = self.core.channel.as_deref().is_some_and(|c| !c.is_empty());
+        let overlay_visible = {
+            #[cfg(windows)]
+            {
+                self.overlay_visible
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        };
         serde_json::json!({
             "current_url": self.core.current_url,
             "url_input": self.url_input,
@@ -557,6 +567,7 @@ impl NativeRunning {
             "channel": self.core.channel,
             "auth_status": self.core.auth_status,
             "focused": self.focused,
+            "overlay_visible": overlay_visible,
         })
         .to_string()
     }
@@ -829,10 +840,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 let active = _state.list_open
                     || _state.chat_open
                     || _state.last_activity.elapsed() < Duration::from_secs(3);
-                // 窓の可視は「フォーカス中かつ表示すべき UI がある」時のみ。アイドル時は隠して
-                // 動画全面を素通しにする（動画クリック=一時停止は winit の MouseInput で処理）。
-                // dev-tools 有効時はフォーカスに依らず表示（/screenshot で UI を確実に写すため）。
-                let show = active && (_state.focused || _state.devtools_rx.is_some());
+                // 窓の可視は active（操作後3秒/一覧/チャット）の時。フォーカスには依存しない
+                // ——複数ウィンドウで非アクティブ側のチャット等が消えないように。オーバーレイは
+                // 親に owned なので z-order は親に追従し、他アプリの上には浮かない。
+                // アイドル時は隠して動画全面を素通しにする（動画クリック=一時停止は MouseInput）。
+                let show = active;
                 if show != _state.overlay_visible {
                     _state.overlay_visible = show;
                     if let Some(ov) = _state.overlay.as_ref() {
@@ -911,16 +923,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             // フォーカスを失ったらオーバーレイを隠す（他アプリの上に残らないように）。
             WindowEvent::Focused(focused) => {
                 state.focused = focused;
+                // フォーカス喪失でオーバーレイは隠さない（非アクティブ窓でもチャット等を表示し続ける）。
+                // 可視は about_to_wait の active 判定に委ねる。
                 #[cfg(windows)]
-                {
-                    if focused {
-                        state.last_activity = Instant::now();
-                    } else {
-                        state.overlay_visible = false;
-                        if let Some(ov) = state.overlay.as_ref() {
-                            ov.set_visible(false);
-                        }
-                    }
+                if focused {
+                    state.last_activity = Instant::now();
                 }
             }
             // ウィンドウのリサイズ/移動にオーバーレイを即追従させる
