@@ -844,6 +844,15 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                                 }
                                 return;
                             }
+                            // Ctrl + "-" / "+"（"=" も可）: コメント文字サイズ増減。
+                            "-" => {
+                                state.chat_font_px = (state.chat_font_px - 2.0).clamp(10.0, 28.0);
+                                return;
+                            }
+                            "+" | "=" => {
+                                state.chat_font_px = (state.chat_font_px + 2.0).clamp(10.0, 28.0);
+                                return;
+                            }
                             _ => {}
                         }
                     }
