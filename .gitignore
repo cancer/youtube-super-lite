@@ -26,3 +26,7 @@
 # デバッグ用 stderr キャプチャ
 /dev*.txt
 /devstderr.txt
+
+# dev-tools 検証時の一時リダイレクト出力
+/se.txt
+/so.txt
