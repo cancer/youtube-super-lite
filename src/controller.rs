@@ -207,17 +207,20 @@ impl Controller {
     /// 解決結果を取り込み、mpv に loadfile する。
     pub fn poll_resolve(&mut self) {
         while let Ok(update) = self.resolve_rx.try_recv() {
-            self.resolve_busy = false;
             match update {
                 resolve::ResolveUpdate::Ready(r) => {
-                    self.is_live = r.is_live;
-                    self.mpv_loadfile(
-                        &r.video_url,
-                        r.audio_url.as_deref(),
-                        r.title.as_deref(),
-                    );
+                    // URL が取れ次第すぐ再生（タイトルは後追いの Meta で反映）。
+                    self.mpv_loadfile(&r.video_url, r.audio_url.as_deref(), None);
+                }
+                resolve::ResolveUpdate::Meta { title, is_live } => {
+                    self.resolve_busy = false;
+                    self.is_live = is_live;
+                    if let Some(t) = title {
+                        self.player.set_force_media_title(&t);
+                    }
                 }
                 resolve::ResolveUpdate::Error(e) => {
+                    self.resolve_busy = false;
                     self.load_error = Some(e.clone());
                     eprintln!("resolve failed: {e}");
                 }

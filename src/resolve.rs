@@ -34,24 +34,31 @@ pub struct Resolved {
     pub video_url: String,
     /// 音声ストリーム URL もしくは EDL 文字列（DASH 分離・通常の DASH/直リンクで指定）。
     pub audio_url: Option<String>,
-    /// 動画タイトル（取得失敗時は None）。
-    pub title: Option<String>,
-    /// ライブ配信か（yt-dlp の is_live）。時間表示を「ライブ最新へ」ボタンに置き換える判定に使う。
-    pub is_live: bool,
 }
 
 /// 背景スレッドからメインスレッドへの通知。
 pub enum ResolveUpdate {
+    /// 再生用のストリーム URL が解決できた（できるだけ早く送る＝即再生開始）。
     Ready(Resolved),
+    /// タイトル・ライブ判定（再生開始後に後追いで届く。表示更新のみ）。
+    Meta {
+        title: Option<String>,
+        is_live: bool,
+    },
     Error(String),
 }
 
 /// 指定 URL を yt-dlp で解決し、結果を `tx` に送る。背景スレッドで呼び出す。
 /// `format` は yt-dlp の `-f` 指定（画質/コーデック）。
+///
+/// 再生開始を速くするため、ストリーム URL（-g）が取れたら即 `Ready` を送り、その後に
+/// 別途タイトル/ライブ判定（2 回目の yt-dlp）を取得して `Meta` を送る（再生はブロックしない）。
 pub fn resolve(url: &str, format: &str, tx: &Sender<ResolveUpdate>) {
     match resolve_inner(url, format) {
         Ok(r) => {
             let _ = tx.send(ResolveUpdate::Ready(r));
+            let (title, is_live) = fetch_meta(url);
+            let _ = tx.send(ResolveUpdate::Meta { title, is_live });
         }
         Err(e) => {
             let _ = tx.send(ResolveUpdate::Error(e.to_string()));
@@ -94,13 +101,9 @@ fn resolve_inner(url: &str, format: &str) -> Result<Resolved> {
         other => other,
     };
 
-    let (title, is_live) = fetch_meta(url);
-
     Ok(Resolved {
         video_url,
         audio_url,
-        title,
-        is_live,
     })
 }
 

@@ -16,6 +16,7 @@ mod player;
 mod playlist;
 mod recommend;
 mod resolve;
+mod settings;
 mod subscriptions;
 
 use anyhow::{anyhow, bail, Result};

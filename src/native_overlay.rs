@@ -1496,10 +1496,31 @@ unsafe extern "system" fn overlay_wndproc(
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
     use windows::Win32::UI::WindowsAndMessaging::{
-        HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
-        WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
+        GetCursorPos, LoadCursorW, SetCursor, HTCLIENT, HTTRANSPARENT, IDC_SIZEWE, MA_NOACTIVATE,
+        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
+        WM_SETCURSOR,
     };
     match msg {
+        // リサイズハンドル上では左右リサイズカーソル（↔）に変える。
+        WM_SETCURSOR => {
+            let hit = (lparam.0 & 0xFFFF) as u32;
+            if hit == HTCLIENT as u32 {
+                let mut pt = POINT::default();
+                let _ = GetCursorPos(&mut pt);
+                let _ = ScreenToClient(hwnd, &mut pt);
+                let over = OV_STATE.with(|s| {
+                    let s = s.borrow();
+                    s.chat_resize.right > s.chat_resize.left && in_rect(&s.chat_resize, pt.x, pt.y)
+                });
+                if over {
+                    if let Ok(c) = LoadCursorW(None, IDC_SIZEWE) {
+                        SetCursor(c);
+                    }
+                    return LRESULT(1);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         // クリックされてもこの窓を activate せず、親(winit)も非アクティブ化させない。
         // これを返さないと既定動作で親が WM_KILLFOCUS → winit Focused(false) になり
         // オーバーレイが隠れてしまう（＝クリックで UI が消える）。クリック自体は食わず
@@ -1580,6 +1601,10 @@ unsafe extern "system" fn overlay_wndproc(
                         s.actions.push(OverlayAction::SetVolume(v));
                     }
                     Drag::ChatW => {
+                        // ドラッグ中はキャプチャ中で WM_SETCURSOR が来ないのでここで維持。
+                        if let Ok(c) = LoadCursorW(None, IDC_SIZEWE) {
+                            SetCursor(c);
+                        }
                         // 左端を x に動かす → 幅比率 = (w - x) / w。
                         let ratio = ((s.win_w - x) as f64 / s.win_w.max(1) as f64).clamp(0.15, 0.6);
                         s.actions.push(OverlayAction::SetChatWidth(ratio));

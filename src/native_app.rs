@@ -83,6 +83,10 @@ struct NativeRunning {
     pending_shot: Option<std::sync::mpsc::Sender<Vec<u8>>>,
     /// スクショ前に待つフレーム数（前面化と合成の反映待ち）。
     shot_delay: u32,
+    /// 最後に永続化した設定スナップショット（現在値と異なれば保存する）。
+    saved_settings: crate::settings::Settings,
+    /// 最後に設定を保存した時刻（保存をデバウンスするため）。
+    last_settings_save: Instant,
 }
 
 impl NativeApp {
@@ -173,6 +177,9 @@ impl NativeApp {
             }
         };
 
+        // 前回保存した UI 設定（文字サイズ・チャット幅）を引き継ぐ。
+        let settings = crate::settings::load();
+
         Ok(NativeRunning {
             window,
             parent_wid: wid,
@@ -183,8 +190,8 @@ impl NativeApp {
             list_sel: 0,
             list_source: ListSource::Subs,
             chat_open: false,
-            chat_font_px: 16.0,
-            chat_width_ratio: 0.28,
+            chat_font_px: settings.chat_font_px,
+            chat_width_ratio: settings.chat_width_ratio,
             focused: true,
             #[cfg(windows)]
             overlay,
@@ -197,6 +204,8 @@ impl NativeApp {
             devtools_rx,
             pending_shot: None,
             shot_delay: 0,
+            saved_settings: settings,
+            last_settings_save: Instant::now(),
         })
     }
 }
@@ -535,6 +544,25 @@ impl NativeRunning {
         known
     }
 
+    /// 文字サイズ・チャット幅に変更があれば保存する。`force` 時はデバウンスを無視（終了時用）。
+    fn maybe_save_settings(&mut self, force: bool) {
+        let cur = crate::settings::Settings {
+            chat_font_px: self.chat_font_px,
+            chat_width_ratio: self.chat_width_ratio,
+        };
+        let changed = cur.chat_font_px != self.saved_settings.chat_font_px
+            || cur.chat_width_ratio != self.saved_settings.chat_width_ratio;
+        if !changed {
+            return;
+        }
+        if !force && self.last_settings_save.elapsed() < Duration::from_millis(800) {
+            return; // デバウンス（ドラッグ中の連続変更で書きすぎない）。
+        }
+        crate::settings::save(cur);
+        self.saved_settings = cur;
+        self.last_settings_save = Instant::now();
+    }
+
     /// 現在の UI 状態を JSON 文字列で返す（dev-tools の /state 用）。
     fn state_json(&self) -> String {
         let p = &self.core.player;
@@ -835,6 +863,8 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             _state.poll_all();
             // dev-tools 要求（スクショ/操作注入）を処理（クリック注入はこの後の drain で適用）。
             _state.poll_devtools();
+            // 文字サイズ・チャット幅の変更をデバウンス保存（次回起動で引き継ぐ）。
+            _state.maybe_save_settings(false);
             // オーバーレイの操作適用・自動非表示・定期再描画。
             #[cfg(windows)]
             {
@@ -906,6 +936,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
         };
         match event {
             WindowEvent::CloseRequested => {
+                state.maybe_save_settings(true); // 終了前に確実に保存。
                 state.core.stop_chat();
                 self.state = None;
                 event_loop.exit();

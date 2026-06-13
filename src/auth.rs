@@ -218,7 +218,7 @@ pub fn extract_video_id(url: &str) -> Option<String> {
 
 // --- リフレッシュトークンの保存/読み込み（パッケージ外の設定ディレクトリ）---
 
-fn config_dir() -> PathBuf {
+pub(crate) fn config_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());

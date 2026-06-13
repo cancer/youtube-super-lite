@@ -81,10 +81,19 @@ impl Player {
             .command("seek", &[&secs.to_string(), "relative"]);
     }
 
-    /// ライブ配信の先端（最新）へ追いつく。seekable な範囲の 100%（＝ライブ先端）へシークする。
-    /// DVR 窓のあるライブで有効。非 DVR（seekable=false）では mpv が無視する。
+    /// ライブ配信の先端（最新）へ追いつく。前方への大きな相対シークで mpv に
+    /// シーク可能範囲の末尾（＝ライブ先端）までクランプさせる。DVR 窓のあるライブで有効。
     pub fn seek_to_live(&self) {
+        // 大きく前へ飛ばす（ライブ先端を超えられないのでクランプされる）。keyframe ではなく
+        // exact で末尾に寄せる。
+        let _ = self.mpv.command("seek", &["100000", "relative+exact"]);
+        // 念のため割合 100% でも寄せる（実装差吸収）。
         let _ = self.mpv.command("seek", &["100", "absolute-percent"]);
+    }
+
+    /// 再生中メディアのタイトルを上書きする（解決後に後追いで設定する用）。
+    pub fn set_force_media_title(&self, title: &str) {
+        let _ = self.mpv.set_property("force-media-title", title);
     }
 
     /// HW デコードの設定を動的に変更する。`"auto"` で HW 利用、`"no"` で SW 強制。
