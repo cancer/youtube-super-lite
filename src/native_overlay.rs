@@ -72,6 +72,13 @@ pub enum ChatSeg {
     Emoji { url: String, alt: String },
 }
 
+/// チャット 1 行（著者の種別・名前と本文セグメント）。著者種別で名前を強調表示する。
+pub struct ChatLine {
+    pub kind: crate::chat::AuthorKind,
+    pub author: String,
+    pub segs: Vec<ChatSeg>,
+}
+
 /// オーバーレイのクリックで発生する操作（NativeApp が Player/Controller に適用する）。
 #[derive(Clone, Copy)]
 pub enum OverlayAction {
@@ -267,49 +274,65 @@ fn dispatch_hit(s: &OvShared, x: i32, y: i32) -> Option<OverlayAction> {
     Some(TogglePause)
 }
 
-/// チャット 1 行のワードラップ用トークン。
+/// チャット 1 行のワードラップ用トークン（色付き）。
 enum ChatTok {
-    Text(String),
+    Text(String, D2D1_COLOR_F),
     Emoji { url: String, alt: String },
 }
 
-/// チャットのセグメント列をワードラップ用トークンに分解する。
-/// ASCII 非空白の連続は 1 語、空白は独立、非 ASCII（CJK 等）は 1 文字ずつ（＝文字単位で折返し可能）。
-fn tokenize_chat(segs: &[ChatSeg]) -> Vec<ChatTok> {
-    let mut out: Vec<ChatTok> = Vec::new();
+/// 著者種別ごとの強調色とバッジ記号（Normal は通常色・バッジ無し）。
+fn author_accent(kind: crate::chat::AuthorKind) -> Option<(D2D1_COLOR_F, &'static str)> {
+    use crate::chat::AuthorKind::*;
+    match kind {
+        Owner => Some((color(1.0, 0.80, 0.25, 1.0), "👑 ")),
+        Moderator => Some((color(0.42, 0.70, 1.0, 1.0), "🔧 ")),
+        Member => Some((color(0.45, 0.85, 0.5, 1.0), "★ ")),
+        Verified => Some((color(0.75, 0.75, 0.8, 1.0), "✔ ")),
+        Normal => None,
+    }
+}
+
+/// テキストを色付きトークンへ分解して push する。
+/// ASCII 非空白の連続は 1 語、空白は独立、非 ASCII（CJK 等）は 1 文字ずつ（文字単位で折返し可能）。
+fn push_text_tokens(out: &mut Vec<ChatTok>, t: &str, c: D2D1_COLOR_F) {
     let mut cur = String::new();
-    for seg in segs {
-        match seg {
-            ChatSeg::Text(t) => {
-                for ch in t.chars() {
-                    if ch == ' ' {
-                        if !cur.is_empty() {
-                            out.push(ChatTok::Text(std::mem::take(&mut cur)));
-                        }
-                        out.push(ChatTok::Text(" ".to_string()));
-                    } else if ch.is_ascii() && !ch.is_control() {
-                        cur.push(ch);
-                    } else if !ch.is_control() {
-                        if !cur.is_empty() {
-                            out.push(ChatTok::Text(std::mem::take(&mut cur)));
-                        }
-                        out.push(ChatTok::Text(ch.to_string()));
-                    }
-                }
+    for ch in t.chars() {
+        if ch == ' ' {
+            if !cur.is_empty() {
+                out.push(ChatTok::Text(std::mem::take(&mut cur), c));
             }
-            ChatSeg::Emoji { url, alt } => {
-                if !cur.is_empty() {
-                    out.push(ChatTok::Text(std::mem::take(&mut cur)));
-                }
-                out.push(ChatTok::Emoji {
-                    url: url.clone(),
-                    alt: alt.clone(),
-                });
+            out.push(ChatTok::Text(" ".to_string(), c));
+        } else if ch.is_ascii() && !ch.is_control() {
+            cur.push(ch);
+        } else if !ch.is_control() {
+            if !cur.is_empty() {
+                out.push(ChatTok::Text(std::mem::take(&mut cur), c));
             }
+            out.push(ChatTok::Text(ch.to_string(), c));
         }
     }
     if !cur.is_empty() {
-        out.push(ChatTok::Text(cur));
+        out.push(ChatTok::Text(cur, c));
+    }
+}
+
+/// チャット 1 行（著者＋本文）をトークン列にする。著者種別に応じてバッジ＋名前を強調色で出す。
+fn tokenize_line(line: &ChatLine, normal: D2D1_COLOR_F) -> Vec<ChatTok> {
+    let mut out: Vec<ChatTok> = Vec::new();
+    let accent = author_accent(line.kind);
+    let author_col = accent.map(|(c, _)| c).unwrap_or(normal);
+    if let Some((_, badge)) = accent {
+        push_text_tokens(&mut out, badge, author_col);
+    }
+    push_text_tokens(&mut out, &format!("{}: ", line.author), author_col);
+    for seg in &line.segs {
+        match seg {
+            ChatSeg::Text(t) => push_text_tokens(&mut out, t, normal),
+            ChatSeg::Emoji { url, alt } => out.push(ChatTok::Emoji {
+                url: url.clone(),
+                alt: alt.clone(),
+            }),
+        }
     }
     out
 }
@@ -317,7 +340,7 @@ fn tokenize_chat(segs: &[ChatSeg]) -> Vec<ChatTok> {
 /// トークンの描画幅（px）。
 unsafe fn chat_tok_width(p: &Painter, cf: &IDWriteTextFormat, t: &ChatTok, em: f32) -> f32 {
     match t {
-        ChatTok::Text(s) => p.measure(cf, s, em * 0.5),
+        ChatTok::Text(s, _) => p.measure(cf, s, em * 0.5),
         ChatTok::Emoji { .. } => em + 2.0,
     }
 }
@@ -799,7 +822,7 @@ impl Overlay {
         chat_font_px: f32,
         chat_width_ratio: f32,
         chat_scroll: usize,
-        chat_lines: &[Vec<ChatSeg>],
+        chat_lines: &[ChatLine],
     ) {
         unsafe {
             let mut rc = RECT::default();
@@ -1235,7 +1258,7 @@ impl Overlay {
         h: i32,
         width_ratio: f32,
         chat_scroll: usize,
-        chat_lines: &[Vec<ChatSeg>],
+        chat_lines: &[ChatLine],
         hits: &mut OvShared,
     ) {
         let pw = w as f32 * width_ratio.clamp(0.15, 0.6);
@@ -1326,7 +1349,7 @@ impl Overlay {
         let mut acc_lines = 0usize;
         let mut start = end;
         for i in (0..end).rev() {
-            let toks = tokenize_chat(&chat_lines[i]);
+            let toks = tokenize_line(&chat_lines[i], col);
             let lc = chat_line_count(p, &cf, &toks, em, left, right_lim);
             if start != end && (acc_lines + lc) as f32 * line_h > avail_h {
                 break;
@@ -1340,8 +1363,8 @@ impl Overlay {
 
         // パス2: start から手動ワードラップで描画（テキストは語/文字単位で折返し、絵文字は画像）。
         let mut y = body_top;
-        'outer: for segs in &chat_lines[start..end] {
-            let toks = tokenize_chat(segs);
+        'outer: for line in &chat_lines[start..end] {
+            let toks = tokenize_line(line, col);
             let mut cx = left;
             let mut line = 0usize;
             for t in &toks {
@@ -1355,7 +1378,7 @@ impl Overlay {
                     break 'outer;
                 }
                 match t {
-                    ChatTok::Text(s) => {
+                    ChatTok::Text(s, tc) => {
                         p.draw_clip(
                             &cf,
                             s,
@@ -1365,7 +1388,7 @@ impl Overlay {
                                 right: right_lim,
                                 bottom: ty + line_h,
                             },
-                            col,
+                            *tc,
                         );
                     }
                     ChatTok::Emoji { url, alt } => {

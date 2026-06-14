@@ -26,10 +26,21 @@ pub enum ChatRun {
     Image { alt: String, url: String },
 }
 
+/// 著者の種別（バッジ）。表示の強調に使う。優先度: Owner > Moderator > Verified > Member > Normal。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthorKind {
+    Normal,
+    Member,
+    Verified,
+    Moderator,
+    Owner,
+}
+
 /// ライブチャットの 1 メッセージ。
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
     pub author: String,
+    pub kind: AuthorKind,
     pub runs: Vec<ChatRun>,
 }
 
@@ -424,7 +435,39 @@ fn parse_text_message(renderer: &Value) -> Option<ChatMessage> {
     if runs.is_empty() {
         return None;
     }
-    Some(ChatMessage { author, runs })
+    let kind = parse_author_kind(&renderer["authorBadges"]);
+    Some(ChatMessage { author, kind, runs })
+}
+
+/// authorBadges[] から著者種別を判定する。
+/// 各 badge は `liveChatAuthorBadgeRenderer.icon.iconType`（OWNER/MODERATOR/VERIFIED）か、
+/// メンバーバッジは `customThumbnail` を持つ。最も強い種別を返す。
+fn parse_author_kind(badges: &Value) -> AuthorKind {
+    let mut kind = AuthorKind::Normal;
+    let Some(arr) = badges.as_array() else {
+        return kind;
+    };
+    let rank = |k: AuthorKind| match k {
+        AuthorKind::Normal => 0,
+        AuthorKind::Member => 1,
+        AuthorKind::Verified => 2,
+        AuthorKind::Moderator => 3,
+        AuthorKind::Owner => 4,
+    };
+    for b in arr {
+        let r = &b["liveChatAuthorBadgeRenderer"];
+        let cur = match r["icon"]["iconType"].as_str() {
+            Some("OWNER") => AuthorKind::Owner,
+            Some("MODERATOR") => AuthorKind::Moderator,
+            Some("VERIFIED") => AuthorKind::Verified,
+            _ if r.get("customThumbnail").is_some() => AuthorKind::Member,
+            _ => AuthorKind::Normal,
+        };
+        if rank(cur) > rank(kind) {
+            kind = cur;
+        }
+    }
+    kind
 }
 
 /// message.runs[] を ChatRun の列に変換する。
