@@ -24,6 +24,11 @@ impl Player {
             init.set_property("gpu-api", "d3d11")?;
             // YouTube URL の解決はアプリ側で行うので ytdl は無効化（egui 版と同じ）。
             init.set_property("ytdl", false)?;
+            // ライブ HLS の起動を速く＆低遅延に: ffmpeg の HLS demuxer がライブ先頭から
+            // 何セグメント遡って再生開始するかを末尾寄り(-1)にして初期バッファを減らす。
+            // 併せて初回のキャッシュ充填待ちで一時停止しない（即再生開始）。
+            let _ = init.set_property("demuxer-lavf-o", "live_start_index=-1");
+            let _ = init.set_property("cache-pause-initial", false);
             // hwdec は mpv 既定のまま（明示設定しない）。
             if verbose {
                 init.set_property("terminal", true)?;

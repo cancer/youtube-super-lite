@@ -64,6 +64,10 @@ struct NativeRunning {
     chat_font_px: f32,
     /// チャット欄の幅（ウィンドウ幅比 0.15..=0.6）。左端ドラッグで変更する。
     chat_width_ratio: f32,
+    /// チャットのスクロール量（最新から遡ったメッセージ数。0=最新に追従）。
+    chat_scroll: usize,
+    /// 直近のチャットメッセージ数（スクロール中に新着が来たとき位置を保つため）。
+    last_chat_len: usize,
     /// アプリ窓がフォーカスを持っているか。失っている間はオーバーレイを隠す
     /// （他アプリの上にオーバーレイが残らないようにする）。
     focused: bool,
@@ -192,6 +196,8 @@ impl NativeApp {
             chat_open: false,
             chat_font_px: settings.chat_font_px,
             chat_width_ratio: settings.chat_width_ratio,
+            chat_scroll: 0,
+            last_chat_len: 0,
             focused: true,
             #[cfg(windows)]
             overlay,
@@ -450,6 +456,12 @@ impl NativeRunning {
                 self.chat_font_px = (self.chat_font_px - 2.0).clamp(10.0, 28.0);
                 true
             }
+            "chat_scroll_up" | "chat_scroll_down" => {
+                let d: i32 = if name == "chat_scroll_up" { 3 } else { -3 };
+                let max = self.core.chat_messages.len().saturating_sub(1);
+                self.chat_scroll = ((self.chat_scroll as i32 + d).max(0) as usize).min(max);
+                true
+            }
             "chat_wider" | "chat_narrower" => {
                 let d = if name == "chat_wider" { 0.04 } else { -0.04 };
                 self.chat_width_ratio = (self.chat_width_ratio + d).clamp(0.15, 0.6);
@@ -599,6 +611,7 @@ impl NativeRunning {
             "chat_open": self.chat_open,
             "chat_font_px": self.chat_font_px,
             "chat_width_ratio": self.chat_width_ratio,
+            "chat_scroll": self.chat_scroll,
             "chat_available": !self.core.chat_status.is_empty(),
             "chat_messages": self.core.chat_messages.len(),
             "list_open": self.list_open,
@@ -659,6 +672,14 @@ impl NativeRunning {
         let is_live = self.core.is_live;
         let chat_font_px = self.chat_font_px;
         let chat_width_ratio = self.chat_width_ratio;
+        // チャットのスクロール位置: 新着が来たら（スクロール中のみ）位置を保ち、範囲内にクランプ。
+        let n_msgs = self.core.chat_messages.len();
+        if n_msgs > self.last_chat_len && self.chat_scroll > 0 {
+            self.chat_scroll += n_msgs - self.last_chat_len;
+        }
+        self.last_chat_len = n_msgs;
+        self.chat_scroll = self.chat_scroll.min(n_msgs.saturating_sub(1));
+        let chat_scroll = self.chat_scroll;
         // egui 版と同じく、チャット接続中 or メッセージがある時のみ 💬 を出す。
         let chat_available = !self.core.chat_status.is_empty();
         let chat_open = self.chat_open;
@@ -712,6 +733,7 @@ impl NativeRunning {
                 chat_open,
                 chat_font_px,
                 chat_width_ratio,
+                chat_scroll,
                 &chat_lines,
             );
         }
@@ -745,8 +767,16 @@ impl NativeRunning {
             }
             OverlayAction::ToggleChat => {
                 self.chat_open = !self.chat_open;
+                if self.chat_open {
+                    self.chat_scroll = 0; // 開いたら最新へ。
+                }
                 let m = if self.chat_open { self.chat_width_ratio } else { 0.0 };
                 self.core.player.set_video_margin_right(m as f64);
+            }
+            OverlayAction::ChatScroll(d) => {
+                let n = self.core.chat_messages.len();
+                let max = n.saturating_sub(1);
+                self.chat_scroll = ((self.chat_scroll as i32 + d).max(0) as usize).min(max);
             }
             OverlayAction::ChatFontDec => {
                 self.chat_font_px = (self.chat_font_px - 2.0).clamp(10.0, 28.0);

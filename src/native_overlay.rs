@@ -85,6 +85,8 @@ pub enum OverlayAction {
     SetVolume(f64),
     /// 音量を相対変更（マウスホイール。± の量）。
     VolumeStep(f64),
+    /// チャットのスクロール（ホイール。+ で過去へ、- で最新へ。メッセージ数）。
+    ChatScroll(i32),
     /// ミュートのトグル。
     ToggleMute,
     /// 現在の動画に高評価。
@@ -796,6 +798,7 @@ impl Overlay {
         chat_open: bool,
         chat_font_px: f32,
         chat_width_ratio: f32,
+        chat_scroll: usize,
         chat_lines: &[Vec<ChatSeg>],
     ) {
         unsafe {
@@ -840,7 +843,7 @@ impl Overlay {
             // 一覧が全面を覆うため描かない（クリックは行選択に使う）。
             if chat_open && !list_open {
                 self.ensure_chat_format(chat_font_px);
-                self.draw_chat(&p, w, h, chat_width_ratio, chat_lines, &mut hits);
+                self.draw_chat(&p, w, h, chat_width_ratio, chat_scroll, chat_lines, &mut hits);
             }
 
             // コントロール（上部バー＋下部コントローラ）は active 時のみ描画＆ヒット登録。
@@ -1231,6 +1234,7 @@ impl Overlay {
         w: i32,
         h: i32,
         width_ratio: f32,
+        chat_scroll: usize,
         chat_lines: &[Vec<ChatSeg>],
         hits: &mut OvShared,
     ) {
@@ -1314,15 +1318,17 @@ impl Overlay {
         let body_top = ptop + 28.0;
         let avail_h = pbot - body_top - 4.0;
         let n = chat_lines.len();
+        // スクロール量ぶん末尾（最新）から遡った位置を表示の下端にする。
+        let end = n.saturating_sub(chat_scroll).max(if n > 0 { 1 } else { 0 });
         let dc_rt_clone = self.dc_rt.clone();
 
-        // パス1: 末尾（最新）から各メッセージの折返し行数を数え、画面に収まる開始 index を決める。
+        // パス1: end（表示下端）から各メッセージの折返し行数を数え、画面に収まる開始 index を決める。
         let mut acc_lines = 0usize;
-        let mut start = n;
-        for i in (0..n).rev() {
+        let mut start = end;
+        for i in (0..end).rev() {
             let toks = tokenize_chat(&chat_lines[i]);
             let lc = chat_line_count(p, &cf, &toks, em, left, right_lim);
-            if start != n && (acc_lines + lc) as f32 * line_h > avail_h {
+            if start != end && (acc_lines + lc) as f32 * line_h > avail_h {
                 break;
             }
             acc_lines += lc;
@@ -1334,7 +1340,7 @@ impl Overlay {
 
         // パス2: start から手動ワードラップで描画（テキストは語/文字単位で折返し、絵文字は画像）。
         let mut y = body_top;
-        'outer: for segs in &chat_lines[start..] {
+        'outer: for segs in &chat_lines[start..end] {
             let toks = tokenize_chat(segs);
             let mut cx = left;
             let mut line = 0usize;
@@ -1739,12 +1745,27 @@ unsafe extern "system" fn overlay_wndproc(
             let _ = ReleaseCapture();
             LRESULT(0)
         }
-        // ホイール: 音量 ±5。カーソルがオーバーレイ（コントロール帯）上にある時は
-        // ホイールがこの窓に届くため、ここで処理する（動画上では winit 側が受ける）。
+        // ホイール: チャットパネル上ならチャットをスクロール、それ以外は音量 ±5。
+        // WM_MOUSEWHEEL の座標はスクリーン座標なのでクライアントへ変換して判定する。
         WM_MOUSEWHEEL => {
             let delta = ((wparam.0 >> 16) & 0xFFFF) as i16;
-            let step = if delta > 0 { 5.0 } else { -5.0 };
-            OV_STATE.with(|s| s.borrow_mut().actions.push(OverlayAction::VolumeStep(step)));
+            let sx = (lparam.0 & 0xFFFF) as i16 as i32;
+            let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let mut pt = POINT { x: sx, y: sy };
+            let _ = ScreenToClient(hwnd, &mut pt);
+            OV_STATE.with(|s| {
+                let mut s = s.borrow_mut();
+                let over_chat = s.chat_panel.right > s.chat_panel.left
+                    && in_rect(&s.chat_panel, pt.x, pt.y);
+                if over_chat {
+                    // 上スクロール(delta>0)=過去へ、下=最新へ。1 ノッチ 3 メッセージ。
+                    let d = if delta > 0 { 3 } else { -3 };
+                    s.actions.push(OverlayAction::ChatScroll(d));
+                } else {
+                    let step = if delta > 0 { 5.0 } else { -5.0 };
+                    s.actions.push(OverlayAction::VolumeStep(step));
+                }
+            });
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
