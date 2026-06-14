@@ -21,9 +21,9 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, D2D1_DRAW_TEXT_OPTIONS_NONE,
-    D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
+    D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, D2D1_DRAW_TEXT_OPTIONS_CLIP,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1_ROUNDED_RECT,
     D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
 };
@@ -31,6 +31,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
     DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_MEASURING_MODE_NATURAL, DWRITE_TEXT_METRICS,
+    DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -264,6 +265,83 @@ fn dispatch_hit(s: &OvShared, x: i32, y: i32) -> Option<OverlayAction> {
     Some(TogglePause)
 }
 
+/// チャット 1 行のワードラップ用トークン。
+enum ChatTok {
+    Text(String),
+    Emoji { url: String, alt: String },
+}
+
+/// チャットのセグメント列をワードラップ用トークンに分解する。
+/// ASCII 非空白の連続は 1 語、空白は独立、非 ASCII（CJK 等）は 1 文字ずつ（＝文字単位で折返し可能）。
+fn tokenize_chat(segs: &[ChatSeg]) -> Vec<ChatTok> {
+    let mut out: Vec<ChatTok> = Vec::new();
+    let mut cur = String::new();
+    for seg in segs {
+        match seg {
+            ChatSeg::Text(t) => {
+                for ch in t.chars() {
+                    if ch == ' ' {
+                        if !cur.is_empty() {
+                            out.push(ChatTok::Text(std::mem::take(&mut cur)));
+                        }
+                        out.push(ChatTok::Text(" ".to_string()));
+                    } else if ch.is_ascii() && !ch.is_control() {
+                        cur.push(ch);
+                    } else if !ch.is_control() {
+                        if !cur.is_empty() {
+                            out.push(ChatTok::Text(std::mem::take(&mut cur)));
+                        }
+                        out.push(ChatTok::Text(ch.to_string()));
+                    }
+                }
+            }
+            ChatSeg::Emoji { url, alt } => {
+                if !cur.is_empty() {
+                    out.push(ChatTok::Text(std::mem::take(&mut cur)));
+                }
+                out.push(ChatTok::Emoji {
+                    url: url.clone(),
+                    alt: alt.clone(),
+                });
+            }
+        }
+    }
+    if !cur.is_empty() {
+        out.push(ChatTok::Text(cur));
+    }
+    out
+}
+
+/// トークンの描画幅（px）。
+unsafe fn chat_tok_width(p: &Painter, cf: &IDWriteTextFormat, t: &ChatTok, em: f32) -> f32 {
+    match t {
+        ChatTok::Text(s) => p.measure(cf, s, em * 0.5),
+        ChatTok::Emoji { .. } => em + 2.0,
+    }
+}
+
+/// 与えた幅でワードラップしたときの行数を返す（描画はしない。tail 算出用）。
+unsafe fn chat_line_count(
+    p: &Painter,
+    cf: &IDWriteTextFormat,
+    toks: &[ChatTok],
+    em: f32,
+    left: f32,
+    right: f32,
+) -> usize {
+    let mut cx = left;
+    let mut lines = 1usize;
+    for t in toks {
+        let w = chat_tok_width(p, cf, t, em);
+        if cx > left && cx + w > right {
+            lines += 1;
+            cx = left;
+        }
+        cx += w;
+    }
+    lines
+}
+
 /// 画像ファイル（ディスクキャッシュ済み）を WIC でデコードして Direct2D Bitmap を作る。
 unsafe fn load_wic_bitmap(dc_rt: &ID2D1DCRenderTarget, path: &str) -> Result<ID2D1Bitmap> {
     use windows::core::HSTRING;
@@ -383,13 +461,29 @@ impl Painter {
         }
     }
 
+    /// 矩形でクリップするテキスト描画（チャットの横はみ出し防止）。
+    unsafe fn draw_clip(&self, tf: &IDWriteTextFormat, s: &str, r: D2D_RECT_F, c: D2D1_COLOR_F) {
+        if let Ok(b) = self.rt.CreateSolidColorBrush(&c, None) {
+            let wt: Vec<u16> = s.encode_utf16().collect();
+            self.rt.DrawText(
+                &wt,
+                tf,
+                &r,
+                &b,
+                D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                DWRITE_MEASURING_MODE_NATURAL,
+            );
+        }
+    }
+
     /// 指定フォントでのテキスト幅（px）を計測する。
     unsafe fn measure(&self, tf: &IDWriteTextFormat, s: &str, fallback_w: f32) -> f32 {
         let wt: Vec<u16> = s.encode_utf16().collect();
         if let Ok(layout) = self.dw.CreateTextLayout(&wt, tf, 8192.0, 64.0) {
             let mut m = DWRITE_TEXT_METRICS::default();
             if layout.GetMetrics(&mut m).is_ok() {
-                return m.width;
+                // 末尾空白も含めた幅を使う（チャットの単語間スペースが詰まらないように）。
+                return m.widthIncludingTrailingWhitespace;
             }
         }
         s.chars().count() as f32 * fallback_w
@@ -527,6 +621,7 @@ impl Overlay {
                 w!("ja-jp"),
             )?;
             // チャット（コメント）用フォント。既定 16px。ユーザーが UI で増減すると再生成する。
+            // 折り返しは draw_chat で手動制御するため NO_WRAP（自動折り返し無効）にする。
             let chat_format_px = 16.0f32;
             let chat_format: IDWriteTextFormat = dwrite.CreateTextFormat(
                 w!("Yu Gothic UI"),
@@ -537,6 +632,7 @@ impl Overlay {
                 chat_format_px,
                 w!("ja-jp"),
             )?;
+            let _ = chat_format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
             let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
                 r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
                 pixelFormat: D2D1_PIXEL_FORMAT {
@@ -659,6 +755,7 @@ impl Overlay {
                 px,
                 w!("ja-jp"),
             ) {
+                let _ = f.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
                 self.chat_format = f;
                 self.chat_format_px = px;
             }
@@ -1215,38 +1312,60 @@ impl Overlay {
         );
 
         let body_top = ptop + 28.0;
-        let avail = (((pbot - body_top - 6.0) / line_h).floor() as usize).max(1);
+        let avail_h = pbot - body_top - 4.0;
         let n = chat_lines.len();
-        let start = n.saturating_sub(avail);
         let dc_rt_clone = self.dc_rt.clone();
-        for (rowi, segs) in chat_lines[start..].iter().enumerate() {
-            let y = body_top + rowi as f32 * line_h;
+
+        // パス1: 末尾（最新）から各メッセージの折返し行数を数え、画面に収まる開始 index を決める。
+        let mut acc_lines = 0usize;
+        let mut start = n;
+        for i in (0..n).rev() {
+            let toks = tokenize_chat(&chat_lines[i]);
+            let lc = chat_line_count(p, &cf, &toks, em, left, right_lim);
+            if start != n && (acc_lines + lc) as f32 * line_h > avail_h {
+                break;
+            }
+            acc_lines += lc;
+            start = i;
+            if acc_lines as f32 * line_h >= avail_h {
+                break;
+            }
+        }
+
+        // パス2: start から手動ワードラップで描画（テキストは語/文字単位で折返し、絵文字は画像）。
+        let mut y = body_top;
+        'outer: for segs in &chat_lines[start..] {
+            let toks = tokenize_chat(segs);
             let mut cx = left;
-            for seg in segs {
-                if cx >= right_lim {
-                    break;
+            let mut line = 0usize;
+            for t in &toks {
+                let tw = chat_tok_width(p, &cf, t, em);
+                if cx > left && cx + tw > right_lim {
+                    line += 1;
+                    cx = left;
                 }
-                match seg {
-                    ChatSeg::Text(t) => {
-                        let tw = p.measure(&cf, t, fs * 0.5);
-                        p.draw(
+                let ty = y + line as f32 * line_h;
+                if ty >= pbot {
+                    break 'outer;
+                }
+                match t {
+                    ChatTok::Text(s) => {
+                        p.draw_clip(
                             &cf,
-                            t,
+                            s,
                             D2D_RECT_F {
                                 left: cx,
-                                top: y,
-                                right: (cx + tw + 2.0).min(right_lim),
-                                bottom: y + line_h,
+                                top: ty,
+                                right: right_lim,
+                                bottom: ty + line_h,
                             },
                             col,
                         );
-                        cx += tw;
                     }
-                    ChatSeg::Emoji { url, alt } => {
-                        // ディスクキャッシュ済みの絵文字だけ WIC デコードしてキャッシュ。
+                    ChatTok::Emoji { url, alt } => {
                         if !url.is_empty() && !self.thumb_cache.contains_key(url) {
                             match crate::image_cache::cached_path(url)
-                                .and_then(|p| p.to_str().map(String::from))
+                                .and_then(|q| q.to_str().map(String::from))
                             {
                                 Some(ps) => {
                                     if let Ok(bmp) = load_wic_bitmap(&dc_rt_clone, &ps) {
@@ -1257,7 +1376,7 @@ impl Overlay {
                             }
                         }
                         if let Some(bmp) = self.thumb_cache.get(url) {
-                            let top = y + (line_h - em) / 2.0;
+                            let top = ty + (line_h - em) / 2.0;
                             p.rt.DrawBitmap(
                                 bmp,
                                 Some(&D2D_RECT_F {
@@ -1270,25 +1389,26 @@ impl Overlay {
                                 windows::Win32::Graphics::Direct2D::D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
                                 None,
                             );
-                            cx += em + 2.0;
                         } else {
-                            // 未デコードは alt テキストで仮表示（次フレーム以降で画像に置き換わる）。
-                            let tw = p.measure(&cf, alt, fs * 0.5);
-                            p.draw(
+                            p.draw_clip(
                                 &cf,
                                 alt,
                                 D2D_RECT_F {
                                     left: cx,
-                                    top: y,
-                                    right: (cx + tw + 2.0).min(right_lim),
-                                    bottom: y + line_h,
+                                    top: ty,
+                                    right: right_lim,
+                                    bottom: ty + line_h,
                                 },
                                 col,
                             );
-                            cx += tw + 2.0;
                         }
                     }
                 }
+                cx += tw;
+            }
+            y += (line + 1) as f32 * line_h;
+            if y >= pbot {
+                break;
             }
         }
     }
