@@ -28,8 +28,17 @@
 - M12. フォーマット選択（`build_ytdlp_format` 相当）: Quality は height ≤ 指定、Codec は avc1/vp09/av01 で絞り、Auto は最善。adaptiveFormats から video＋audio を選び mpv へ（audio-file=）。muxed しか無ければそれ。
 - M13. ライブは hlsManifestUrl をそのまま mpv に渡す。
 
+### 認証（後から追加された MUST）
+- M17. **ログイン状態（OAuth ログイン済み）では members 限定／年齢制限も視聴できること。** 未ログイン時は現行同様に取得不可で可（退行なし）。
+  - PoC(U7)で実証済み: **TVHTML5 client に `Authorization: Bearer <access_token>`（既存 scope=youtube.force-ssl）を付けると members/年齢制限が解錠**（streamingData が返る）。cookie/PoToken は不要。
+  - ただし TVHTML5 は JS player 必須 → 解錠された URL は `sig`/`n` を持ち、M9(署名)+M10(nsig)処理が無いと 403。**= 認証経路では U5(boa/base.js)が必須**。
+
 ### 非機能
 - M14. JS 実行は **純 Rust の `boa_engine`** を使う（C 依存を増やさない＝本プロジェクトの方針）。
+  - 補足(PoC後): 匿名経路(android_vr/android)は JS 不要。**認証経路(TVHTML5)では nsig変換(M10)が必要**だが、診断(U5)の結果 sig は適用済みのため **M9(署名復号)は実質不要・M10(nsig)のみ**。
+  - 実装方針(PoC で確定): 現行 base.js(445213fb)は **VM型(制御フロー平坦化)難読化**で nsig は単独関数として抽出不可。yt-dlp/rustypipe 同様 **base.js 全体をエンジンにロードして実行**し、`.get("n")` の URL 書換関数(`$o6`)を駆動して n を変換する。stubs(window/document/navigator/timers) + raw base.js + descramble ラッパで boa は top-level 実行可(Buffer/atob 不要)。
+  - **boa スパイクで実証**: boa_engine 0.20(純Rust)で base.js 全体ロード→nsig が node と全ベクタ一致。コスト=ロード ~6.5s(初回1回・release)/ nsig ~17ms。匿名経路は JS 不要で即時、認証経路の初回だけ遅延ロード・常駐(M15)で吸収。
+  - **エンジン交換可能性(設計ルール)**: JS エンジンは狭いトレイト `NsigEngine { load(script); transform_n(n)->String }` の背後に隔離する(boa 型に触れるのは engine_boa.rs だけ)。JS ペイロードはエンジン中立。既定は boa(純Rust,M14)。6.5s ロードが問題化したら rquickjs(QuickJS, パース<1s 想定・C依存)を engine_quickjs.rs として足し feature 切替で差し替え可能(他は無改修)。rustypipe は GPL-3.0 のため不採用。
 - M15. 解決器は long-lived（HTTP クライアント・JS エンジン・player キャッシュを保持）にし、アプリ起動時に 1 回だけ初期化。
 - M16. 失敗時は現行同様 `ResolveUpdate::Error` を返し、アプリは落とさない。
 

@@ -20,7 +20,6 @@ mod settings;
 mod subscriptions;
 
 use anyhow::{anyhow, bail, Result};
-use std::path::PathBuf;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 /// イベントループを起こす要求（背景スレッド完了時に送る）。
@@ -128,15 +127,6 @@ enum Codec {
 
 impl Codec {
     const ALL: [Codec; 4] = [Codec::Auto, Codec::H264, Codec::Vp9, Codec::Av1];
-    /// yt-dlp フォーマットフィルタの vcodec 条件。
-    fn vfilter(self) -> &'static str {
-        match self {
-            Codec::Auto => "",
-            Codec::H264 => "[vcodec^=avc1]",
-            Codec::Vp9 => "[vcodec^=vp09]",
-            Codec::Av1 => "[vcodec^=av01]",
-        }
-    }
     fn label(self) -> &'static str {
         match self {
             Codec::Auto => "自動",
@@ -147,61 +137,7 @@ impl Codec {
     }
 }
 
-/// 画質・コーデック指定から yt-dlp の `-f` フォーマット文字列を組み立てる。
-/// 厳しい条件 → 緩い条件 → 既定 の順でフォールバックし、必ず再生できるようにする。
-fn build_ytdlp_format(quality: Quality, codec: Codec) -> String {
-    let hf = quality
-        .height()
-        .map(|h| format!("[height<={h}]"))
-        .unwrap_or_default();
-    let cf = codec.vfilter();
-    if hf.is_empty() && cf.is_empty() {
-        return "bestvideo+bestaudio/best".to_string();
-    }
-    format!("bestvideo{hf}{cf}+bestaudio/bestvideo{hf}+bestaudio/best{hf}/bestvideo+bestaudio/best")
-}
 
-/// yt-dlp が PATH 上にあるか確認し、なければ同梱ディレクトリを PATH 先頭に追加する。
-fn ensure_ytdlp_on_path() {
-    let ytdlp_name = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
-    let path_sep = if cfg!(windows) { ";" } else { ":" };
-
-    // システム PATH 上にあればそのまま使う。
-    let mut which = std::process::Command::new("which");
-    which.arg("yt-dlp");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        which.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    if let Ok(output) = which.output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout);
-            println!("yt-dlp found: {}", path.trim());
-            return;
-        }
-    }
-
-    // 同梱ディレクトリを探す。
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.to_path_buf());
-            candidates.push(dir.join("tools"));
-        }
-    }
-    candidates.push(PathBuf::from("tools"));
-
-    for dir in &candidates {
-        if dir.join(ytdlp_name).exists() {
-            let current = std::env::var("PATH").unwrap_or_default();
-            std::env::set_var("PATH", format!("{}{path_sep}{current}", dir.display()));
-            println!("yt-dlp found: {}", dir.join(ytdlp_name).display());
-            return;
-        }
-    }
-    eprintln!("warning: yt-dlp not found; YouTube URLs may fail");
-}
 /// CLI 引数のパース結果。
 struct CliArgs {
     url: Option<String>,
@@ -297,8 +233,6 @@ fn main() -> Result<()> {
     } else {
         println!("YouTube Super Lite - URL 欄に貼り付けて Enter で再生");
     }
-
-    ensure_ytdlp_on_path();
 
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Wait);

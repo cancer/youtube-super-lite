@@ -22,11 +22,9 @@ cmd /c "`"$vcvars`" >nul 2>&1 && set MPV_SOURCE=$mpvSrc && cd /d `"$root`" && `"
 $code = $LASTEXITCODE
 if ($code -ne 0) { Write-Error "cargo build failed (exit $code)"; exit $code }
 
-# 実行時に必要なファイルを exe の隣へコピー
+# 実行時に必要なファイルを exe の隣へコピー（解決は native InnerTube に移行済み = yt-dlp 不要）
 $dest = Join-Path $root "target\$outDir"
 Copy-Item (Join-Path $mpvSrc "libmpv-2.dll") $dest -Force
-$ytdlp = Join-Path $root "tools\yt-dlp.exe"
-if (Test-Path $ytdlp) { Copy-Item $ytdlp $dest -Force }
 
-Write-Host "Build OK ($outDir). libmpv-2.dll / yt-dlp.exe copied to target\$outDir" -ForegroundColor Green
+Write-Host "Build OK ($outDir). libmpv-2.dll copied to target\$outDir" -ForegroundColor Green
 exit 0

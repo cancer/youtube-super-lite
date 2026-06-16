@@ -21,6 +21,11 @@ serde_json = "1"
 anyhow = "1"
 dash-mpd = { version = "0.20.3", default-features = false }
 
+# ネイティブ YouTube 解決器の nsig(n パラメータ)変換用 純Rust JS エンジン。
+# 認証経路(TVHTML5)でのみ base.js 全体をロードして実行する。NsigEngine トレイト越しに
+# 隔離してあり、必要なら rquickjs 等へ差し替え可能（src/resolve/nsig.rs 参照）。
+boa_engine = "0.20"
+
 # 再生履歴記録 (mark_watched) で使用。url はクエリパラメータの追加・上書き、
 # rand は yt-dlp 互換の CPN（16 文字ランダム）生成のため。
 url = "2"

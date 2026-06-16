@@ -1,6 +1,6 @@
 //! UI 非依存のアプリケーションコア（Controller）。
 //!
-//! mpv 制御・認証/API 呼び出し・yt-dlp 解決・各種ポーリングなど、描画系（egui/OpenGL）に
+//! mpv 制御・認証/API 呼び出し・ストリーム解決（native InnerTube）・各種ポーリングなど、描画系（egui/OpenGL）に
 //! 依存しない状態とロジックをここに集約する。将来 OpenGL 合成をやめてネイティブ 2D UI に
 //! 移行する際も、この Controller をそのまま別フロントエンドから駆動できるようにするのが狙い。
 
@@ -14,7 +14,7 @@ use crate::{
     auth, chat, gpu_usage, history, mark_watched, player, playlist, recommend, resolve,
     subscriptions,
 };
-use crate::{build_ytdlp_format, AuthMsg, Codec, Quality, UserEvent, CHAT_MAX_MESSAGES};
+use crate::{AuthMsg, Codec, Quality, UserEvent, CHAT_MAX_MESSAGES};
 
 /// UI 非依存のアプリ状態 + ロジック。
 pub struct Controller {
@@ -23,7 +23,7 @@ pub struct Controller {
     pub proxy: EventLoopProxy<UserEvent>,
     /// 現在再生中の URL（ブラウザで YouTube を開くナビゲーション等に使う）。
     pub current_url: String,
-    /// 画質・コーデック指定（yt-dlp のフォーマット選択に使う）。
+    /// 画質・コーデック指定（解決器のフォーマット選択に使う）。
     pub quality: Quality,
     pub codec: Codec,
     /// リプレイチャット用: メインスレッドが mpv の time-pos (ms) を継続的に store し、
@@ -31,7 +31,7 @@ pub struct Controller {
     pub player_offset_ms: Arc<AtomicI64>,
     pub backend: String,
     pub load_error: Option<String>,
-    /// 現在の再生がライブ配信か（yt-dlp の is_live）。時間表示↔ライブボタンの切替に使う。
+    /// 現在の再生がライブ配信か（videoDetails.isLive）。時間表示↔ライブボタンの切替に使う。
     pub is_live: bool,
     // --- 認証 / API ---
     pub tokens: Option<auth::Tokens>,
@@ -75,8 +75,8 @@ pub struct Controller {
     pub playlist_visible: bool,
     pub playlist_status: String,
     pub playlist_busy: bool,
-    // --- ストリーム解決（yt-dlp）---
-    pub resolve_tx: Sender<resolve::ResolveUpdate>,
+    // --- ストリーム解決（native InnerTube 常駐ワーカー）---
+    pub resolve_handle: resolve::ResolverHandle,
     pub resolve_rx: Receiver<resolve::ResolveUpdate>,
     pub resolve_busy: bool,
     /// 常時 Some（Windows のみ。他 OS は None）。GPU 使用率を見て mpv の hwdec を切り替える。
@@ -95,6 +95,8 @@ impl Controller {
         let (history_tx, history_rx) = std::sync::mpsc::channel();
         let (playlist_tx, playlist_rx) = std::sync::mpsc::channel();
         let (resolve_tx, resolve_rx) = std::sync::mpsc::channel();
+        // 解決器ワーカーを起動時に 1 回だけ起動（long-lived = boa/HTTP/base.js を常駐保持）。
+        let resolve_handle = resolve::ResolverHandle::spawn(resolve_tx, proxy.clone());
         Self {
             player,
             proxy,
@@ -141,14 +143,14 @@ impl Controller {
             playlist_visible: false,
             playlist_status: String::new(),
             playlist_busy: false,
-            resolve_tx,
+            resolve_handle,
             resolve_rx,
             resolve_busy: false,
             gpu_monitor: None,
         }
     }
 
-    /// 動画を読み込む。YouTube URL は背景で yt-dlp 解決してから mpv に渡す。
+    /// 動画を読み込む。YouTube URL は背景（常駐ワーカー）で解決してから mpv に渡す。
     pub fn load(&mut self, url: &str) {
         let url = url.trim().to_string();
         if url.is_empty() {
@@ -192,15 +194,15 @@ impl Controller {
         });
     }
 
-    /// yt-dlp による解決を背景スレッドで開始する。
+    /// 解決を常駐ワーカーに依頼する。ログイン中なら access_token を渡し、
+    /// members 限定/年齢制限も解錠できるようにする（M17）。
     pub fn start_resolve(&mut self, url: String) {
         self.resolve_busy = true;
-        let tx = self.resolve_tx.clone();
-        let proxy = self.proxy.clone();
-        let format = build_ytdlp_format(self.quality, self.codec);
-        std::thread::spawn(move || {
-            resolve::resolve(&url, &format, &tx);
-            let _ = proxy.send_event(UserEvent::Background);
+        self.resolve_handle.request(resolve::ResolveRequest {
+            url,
+            quality: self.quality,
+            codec: self.codec,
+            access_token: self.tokens.as_ref().map(|t| t.access_token.clone()),
         });
     }
 
