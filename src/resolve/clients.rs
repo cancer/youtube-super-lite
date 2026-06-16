@@ -88,12 +88,33 @@ pub fn extract_video_id(input: &str) -> Option<String> {
     None
 }
 
+/// youtube.com から visitorData を1回取得する（訪問者セッション確立）。
+/// これが無いと InnerTube が bot 判定で LOGIN_REQUIRED を返す（多くの動画が再生不可になる）。
+/// cookie は `http` の cookie_store が自動保持するので、以後の player 要求に乗る。
+pub fn fetch_visitor_data(http: &reqwest::blocking::Client) -> Result<String> {
+    let html = http
+        .get("https://www.youtube.com/")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .send()?
+        .error_for_status()?
+        .text()?;
+    let marker = "\"visitorData\":\"";
+    let pos = html
+        .find(marker)
+        .ok_or_else(|| anyhow!("visitorData が見つかりません"))?;
+    let rest = &html[pos + marker.len()..];
+    let end = rest.find('"').ok_or_else(|| anyhow!("visitorData の終端が見つかりません"))?;
+    Ok(rest[..end].to_string())
+}
+
 /// 指定 client で player を叩き、必要情報を取り出す。
+/// `visitor` は訪問者セッション（visitorData）。bot 判定回避に必須。
 pub fn fetch_player(
     http: &reqwest::blocking::Client,
     def: &ClientDef,
     video_id: &str,
     access_token: Option<&str>,
+    visitor: Option<&str>,
 ) -> Result<PlayerInfo> {
     let mut client = json!({
         "clientName": def.client_name,
@@ -107,6 +128,9 @@ pub fn fetch_player(
                 obj.insert(k, v);
             }
         }
+    }
+    if let (Some(vd), Some(obj)) = (visitor, client.as_object_mut()) {
+        obj.insert("visitorData".to_string(), Value::String(vd.to_string()));
     }
     let body = json!({
         "context": { "client": client },
@@ -122,6 +146,9 @@ pub fn fetch_player(
         .header("X-Youtube-Client-Name", def.client_name_id.to_string())
         .header("X-Youtube-Client-Version", def.client_version)
         .header("Origin", "https://www.youtube.com");
+    if let Some(vd) = visitor {
+        req = req.header("X-Goog-Visitor-Id", vd);
+    }
     if def.use_bearer {
         if let Some(tok) = access_token {
             req = req.bearer_auth(tok);

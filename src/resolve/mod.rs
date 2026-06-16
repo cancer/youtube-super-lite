@@ -75,8 +75,10 @@ fn worker_loop(
     update_tx: Sender<ResolveUpdate>,
     proxy: EventLoopProxy<UserEvent>,
 ) {
+    // cookie_store: youtube.com 訪問で得る VISITOR_INFO1_LIVE 等を保持し、以後の player 要求に乗せる。
     let http = match reqwest::blocking::Client::builder()
         .timeout(StdDuration::from_secs(20))
+        .cookie_store(true)
         .build()
     {
         Ok(c) => c,
@@ -86,9 +88,14 @@ fn worker_loop(
         }
     };
     let mut nsig = nsig::NsigSolver::new();
+    // 訪問者セッション（visitorData）。起動後 1 回だけ確立してキャッシュ（常駐の肝・M15）。
+    let mut visitor: Option<String> = None;
 
     while let Ok(req) = req_rx.recv() {
-        match resolve_one(&http, &mut nsig, &req) {
+        if visitor.is_none() {
+            visitor = clients::fetch_visitor_data(&http).ok();
+        }
+        match resolve_one(&http, &mut nsig, &req, visitor.as_deref()) {
             Ok((resolved, title, is_live)) => {
                 let _ = update_tx.send(ResolveUpdate::Ready(resolved));
                 let _ = update_tx.send(ResolveUpdate::Meta { title, is_live });
@@ -107,6 +114,7 @@ fn resolve_one(
     http: &reqwest::blocking::Client,
     nsig: &mut nsig::NsigSolver,
     req: &ResolveRequest,
+    visitor: Option<&str>,
 ) -> Result<(Resolved, Option<String>, bool)> {
     // YouTube 以外は素通し（M3）。
     if !is_youtube_url(&req.url) {
@@ -124,7 +132,7 @@ fn resolve_one(
         .ok_or_else(|| anyhow!("videoId を抽出できません: {}", req.url))?;
 
     // 1) 匿名 VOD: ANDROID_VR（署名/nsig 不要・最高画質）。
-    let vr = clients::fetch_player(http, &clients::ANDROID_VR, &video_id, None)?;
+    let vr = clients::fetch_player(http, &clients::ANDROID_VR, &video_id, None, visitor)?;
     if vr.status == "OK" && !vr.is_live {
         if let Some(streaming) = &vr.streaming {
             if let Ok((v, a)) = clients::select_streams(streaming, req.quality, req.codec) {
@@ -134,7 +142,7 @@ fn resolve_one(
     }
 
     // 2) ANDROID: ライブ(HLS) / 公開 VOD フォールバック。
-    let and = clients::fetch_player(http, &clients::ANDROID, &video_id, None)?;
+    let and = clients::fetch_player(http, &clients::ANDROID, &video_id, None, visitor)?;
     if and.status == "OK" {
         if let Some(streaming) = &and.streaming {
             if and.is_live {
@@ -157,7 +165,7 @@ fn resolve_one(
 
     // 3) 認証経路: TVHTML5 + OAuth Bearer（members/年齢制限）→ URL の n を nsig 変換（M17/M10）。
     if let Some(token) = req.access_token.as_deref() {
-        let tv = clients::fetch_player(http, &clients::TVHTML5, &video_id, Some(token))?;
+        let tv = clients::fetch_player(http, &clients::TVHTML5, &video_id, Some(token), visitor)?;
         if tv.status == "OK" {
             if let Some(streaming) = &tv.streaming {
                 if tv.is_live {
