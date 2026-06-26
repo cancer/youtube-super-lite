@@ -80,7 +80,10 @@ mpv テストパターン(`av://lavfi:testsrc`)を親窓に埋め込み、`WS_CH
 - 🔄 **手順2 描画移植（進行中）**:
   - ✅ 2a コントローラ帯コア: 半透明帯・シークライン(track/progress/knob)・再生/一時停止グリフ・時間表示・音量バーを DirectWrite/D2D で新規描画。ヒットテスト（pause/seek/volume）＋ドラッグ（seek/vol キャプチャ）＋ホイール音量＋3秒自動非表示。`--dcomp` 実アプリで devtools スクショ視覚確認済み（レイアウトは旧 draw_controller=egui 踏襲と一致）。dcomp 経路でも /screenshot が効くよう capture を if/else 外へ移動。
   - ✅ 2a' コンポーネント化: クリッカブル UI を `Control` 列挙（PlayPause/Seek/Volume/Time）で構成。各部品が**自分の描画とクリック挙動を内包**し、描画とヒットが drift しない。クリック解決は「部品 → 帯余白(吸収) → 動画域(pause)」の順で、座標 catch-all を持たない（＝帯余白で pause が飛ぶ事故が構造的に起きない）。2b 以降のコントロール追加は `Control` を1個足すだけ。検証(devtools): 動画域=pause反転 / 帯余白=不変 / 音量バー click で vol が割合どおり変化。
-  - ⬜ 2b 以降: ミュート/画質/コーデック/Like、上部バー(URL/認証/タイトル)、一覧(4ソース＋サムネ＋クリック)、チャット(左右分割＋スクロール＋幅ドラッグ)、ライブ最新ボタン。
+  - ✅ 2b コントローラ帯の残りボタン: 汎用 `Control::Button`（フラットテキスト）を追加し、👍Like・🔊/🔇ミュート・コーデック巡回・画質巡回・ライブ最新（is_live 時は時間の代わり）を実装。`PlaybackView` に muted/is_live/quality/codec を追加、native_app で各アクションを適用。検証(devtools): 全ボタン描画（egui 踏襲レイアウト一致）、画質click=巡回(自動→2160p)、🔊click=mute反転。
+  - ⬜ 2c 上部バー（URL 入力・認証ラベル・タイトル）、💬チャットトグルボタン。
+  - ⬜ 2d 一覧（4ソース＋サムネ＋クリック選択）。
+  - ⬜ 2e チャット（左右分割＋スクロール＋幅ドラッグ）。
 - ⬜ 手順3 以降（下記）。
 
 ## 移行手順（各段階でアプリは動く状態を保つ）

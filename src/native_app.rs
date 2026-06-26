@@ -931,18 +931,56 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     .map(|o| o.take_actions())
                     .unwrap_or_default();
                 for a in actions {
-                    let p = &_state.core.player;
                     match a {
-                        OverlayAction::TogglePause => p.set_paused(!p.paused()),
+                        OverlayAction::TogglePause => {
+                            let p = &_state.core.player;
+                            p.set_paused(!p.paused());
+                        }
                         OverlayAction::Seek(frac) => {
+                            let p = &_state.core.player;
                             let dur = p.duration();
                             if p.seekable() && dur > 0.0 {
                                 p.set_time_pos(frac * dur);
                             }
                         }
-                        OverlayAction::SetVolume(v) => p.set_volume(v.clamp(0.0, 130.0)),
+                        OverlayAction::SetVolume(v) => {
+                            _state.core.player.set_volume(v.clamp(0.0, 130.0))
+                        }
                         OverlayAction::VolumeStep(d) => {
-                            p.set_volume((p.volume() + d).clamp(0.0, 130.0))
+                            let p = &_state.core.player;
+                            p.set_volume((p.volume() + d).clamp(0.0, 130.0));
+                        }
+                        OverlayAction::ToggleMute => {
+                            let p = &_state.core.player;
+                            p.set_muted(!p.muted());
+                        }
+                        OverlayAction::LiveEdge => _state.core.player.seek_to_live(),
+                        OverlayAction::Like => {
+                            if let Some(vid) = auth::extract_video_id(&_state.core.current_url) {
+                                _state.core.start_like(vid);
+                            }
+                        }
+                        OverlayAction::CycleQuality => {
+                            let all = Quality::ALL;
+                            let i = all
+                                .iter()
+                                .position(|q| *q == _state.core.quality)
+                                .unwrap_or(0);
+                            _state.core.quality = all[(i + 1) % all.len()];
+                            if resolve::is_youtube_url(&_state.core.current_url) {
+                                let u = _state.core.current_url.clone();
+                                _state.core.start_resolve(u);
+                            }
+                        }
+                        OverlayAction::CycleCodec => {
+                            let all = Codec::ALL;
+                            let i =
+                                all.iter().position(|c| *c == _state.core.codec).unwrap_or(0);
+                            _state.core.codec = all[(i + 1) % all.len()];
+                            if resolve::is_youtube_url(&_state.core.current_url) {
+                                let u = _state.core.current_url.clone();
+                                _state.core.start_resolve(u);
+                            }
                         }
                     }
                     _state.last_activity = Instant::now();
@@ -964,6 +1002,10 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     dur: p.duration(),
                     seekable: p.seekable(),
                     volume: p.volume(),
+                    muted: p.muted(),
+                    is_live: _state.core.is_live,
+                    quality: _state.core.quality.label().to_string(),
+                    codec: _state.core.codec.label().to_string(),
                 };
                 if let Some(o) = _state.dcomp_overlay.as_mut() {
                     o.render(active, &view);

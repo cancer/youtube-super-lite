@@ -37,16 +37,29 @@ pub enum OverlayAction {
     SetVolume(f64),
     /// 音量を相対変更（ホイール。± の量）。
     VolumeStep(f64),
+    /// ミュートのトグル。
+    ToggleMute,
+    /// ライブ配信の先端へ追いつく。
+    LiveEdge,
+    /// 現在の動画に高評価。
+    Like,
+    /// 画質を巡回（→ 再生中なら取り直し）。
+    CycleQuality,
+    /// コーデックを巡回（→ 同上）。
+    CycleCodec,
 }
 
-/// 描画に必要な再生状態（コアから毎フレーム渡す。借用を持ち込まない値のコピー）。
-#[derive(Clone, Copy)]
+/// 描画に必要な再生/UI 状態（コアから毎フレーム渡す）。
 pub struct PlaybackView {
     pub paused: bool,
     pub pos: f64,
     pub dur: f64,
     pub seekable: bool,
     pub volume: f64,
+    pub muted: bool,
+    pub is_live: bool,
+    pub quality: String,
+    pub codec: String,
 }
 
 /// 下部コントローラ帯の高さ・行高（旧 native_overlay と同値）。
@@ -82,6 +95,8 @@ enum Control {
     Volume { rect: RECT, frac: f32 },
     /// 時間表示（描画のみ・クリックは吸収）。
     Time { rect: RECT, text: String },
+    /// フラットなテキストボタン（ミュート/Like/画質/コーデック/ライブ最新など）。
+    Button { rect: RECT, label: String, col: D2D1_COLOR_F, action: OverlayAction },
 }
 
 impl Control {
@@ -90,7 +105,8 @@ impl Control {
             Control::PlayPause { rect, .. }
             | Control::Seek { rect, .. }
             | Control::Volume { rect, .. }
-            | Control::Time { rect, .. } => *rect,
+            | Control::Time { rect, .. }
+            | Control::Button { rect, .. } => *rect,
         }
     }
 
@@ -112,6 +128,7 @@ impl Control {
                 Hit::Drag(Drag::Vol, OverlayAction::SetVolume(frac_x(rect, x) * 130.0))
             }
             Control::Time { .. } => Hit::Absorb,
+            Control::Button { action, .. } => Hit::Act(*action),
         })
     }
 
@@ -150,6 +167,10 @@ impl Control {
                 let vx = x0 + (x1 - x0) * *frac;
                 p.fill_round(rf(x0, cy - 2.0, vx.max(x0), cy + 2.0), 2.0, color(0.92, 0.92, 0.96, 1.0));
                 p.fill_ellipse(vx, cy, 5.0, color(1.0, 1.0, 1.0, 1.0));
+            }
+            Control::Button { rect, label, col, .. } => {
+                let cy = (rect.top + rect.bottom) / 2;
+                p.text(label, rf((rect.left + 4) as f32, (cy - 9) as f32, (rect.right - 4) as f32, (cy + 9) as f32), *col);
             }
         }
     }
@@ -370,43 +391,18 @@ impl DcompOverlay {
     }
 
     /// コントローラ帯の部品リストを現在サイズ・再生状態から組み立てる（描画とヒットの単一の素）。
+    /// レイアウトは旧 draw_controller を踏襲: 左フロー（▶/⏸→時間/ライブ→👍）、
+    /// 右フロー右→左（音量→🔊/🔇→コーデック→画質）。
     fn build_controls(&self, w: i32, h: i32, v: &PlaybackView) -> Vec<Control> {
         let cy = h - 16;
-        // 再生/一時停止ボタン。
-        let glyph = if v.paused { "▶" } else { "⏸" };
-        let gw = unsafe { self.measure(glyph) }.ceil() as i32;
-        let btn = RECT {
-            left: 14,
-            top: cy - ROW_H / 2,
-            right: 14 + gw + 8,
-            bottom: cy + ROW_H / 2,
-        };
-        // 時間表示。
-        let time_str = format!("{} / {}", fmt_time(v.pos), fmt_time(v.dur));
-        let tw = unsafe { self.measure(&time_str) }.ceil() as i32;
-        let tx = btn.right + 12;
-        let time_rect = RECT {
-            left: tx,
-            top: cy - ROW_H / 2,
-            right: tx + tw + 4,
-            bottom: cy + ROW_H / 2,
-        };
-        // 音量バー（右端）。
-        let xr = w - 14;
-        let vol = RECT {
-            left: xr - VOL_W,
-            top: cy - ROW_H / 2,
-            right: xr,
-            bottom: cy + ROW_H / 2,
-        };
-        // シークライン（フル幅・上段）。
+        let top = cy - ROW_H / 2;
+        let bot = cy + ROW_H / 2;
+        let fg = color(0.96, 0.96, 0.98, 1.0);
+        let row = |l: i32, r: i32| RECT { left: l, top, right: r, bottom: bot };
+        let mut controls: Vec<Control> = Vec::new();
+
+        // --- シークライン（フル幅・上段）---
         let sy = h - BOTTOM_H + 13;
-        let seek = RECT {
-            left: 14,
-            top: sy - 9,
-            right: w - 14,
-            bottom: sy + 9,
-        };
         let seek_frac = if !v.seekable {
             1.0
         } else if v.dur > 0.0 {
@@ -414,12 +410,66 @@ impl DcompOverlay {
         } else {
             0.0
         };
-        vec![
-            Control::Seek { rect: seek, frac: seek_frac, enabled: v.seekable },
-            Control::PlayPause { rect: btn, paused: v.paused },
-            Control::Time { rect: time_rect, text: time_str },
-            Control::Volume { rect: vol, frac: (v.volume / 130.0).clamp(0.0, 1.0) as f32 },
-        ]
+        controls.push(Control::Seek {
+            rect: RECT { left: 14, top: sy - 9, right: w - 14, bottom: sy + 9 },
+            frac: seek_frac,
+            enabled: v.seekable,
+        });
+
+        // --- 左フロー ---
+        // 再生/一時停止。
+        let glyph = if v.paused { "▶" } else { "⏸" };
+        let gw = unsafe { self.measure(glyph) }.ceil() as i32;
+        let btn = row(14, 14 + gw + 8);
+        let mut x = btn.right + 12;
+        controls.push(Control::PlayPause { rect: btn, paused: v.paused });
+
+        if v.is_live {
+            // ライブ: 時間の代わりに「● ライブ」（先端なら赤、遅れていれば白＝追いつける合図）。
+            let at_live = !v.seekable || v.dur <= 0.0 || (v.pos / v.dur) >= 0.99;
+            let col = if at_live { color(1.0, 0.30, 0.30, 1.0) } else { fg };
+            let label = "● ライブ".to_string();
+            let lw = unsafe { self.measure(&label) }.ceil() as i32;
+            let r = row(x, x + lw + 8);
+            x = r.right + 16;
+            controls.push(Control::Button { rect: r, label, col, action: OverlayAction::LiveEdge });
+        } else {
+            let time_str = format!("{} / {}", fmt_time(v.pos), fmt_time(v.dur));
+            let tw = unsafe { self.measure(&time_str) }.ceil() as i32;
+            let r = row(x, x + tw + 4);
+            x = r.right + 16;
+            controls.push(Control::Time { rect: r, text: time_str });
+        }
+
+        // 👍 高評価。
+        let like = "👍".to_string();
+        let lw = unsafe { self.measure(&like) }.ceil() as i32;
+        controls.push(Control::Button { rect: row(x, x + lw + 8), label: like, col: fg, action: OverlayAction::Like });
+
+        // --- 右フロー（右→左）---
+        let mut xr = w - 14;
+        // 音量バー。
+        controls.push(Control::Volume {
+            rect: row(xr - VOL_W, xr),
+            frac: (v.volume / 130.0).clamp(0.0, 1.0) as f32,
+        });
+        xr -= VOL_W + 10;
+        // 🔊/🔇 ミュート。
+        let mute = if v.muted { "🔇" } else { "🔊" }.to_string();
+        let mw = unsafe { self.measure(&mute) }.ceil() as i32;
+        controls.push(Control::Button { rect: row(xr - mw - 8, xr), label: mute, col: fg, action: OverlayAction::ToggleMute });
+        xr -= mw + 8 + 14;
+        // コーデック。
+        let codec = format!("コーデック: {}", v.codec);
+        let cw = unsafe { self.measure(&codec) }.ceil() as i32;
+        controls.push(Control::Button { rect: row(xr - cw - 8, xr), label: codec, col: fg, action: OverlayAction::CycleCodec });
+        xr -= cw + 8 + 12;
+        // 画質。
+        let quality = format!("画質: {}", v.quality);
+        let qw = unsafe { self.measure(&quality) }.ceil() as i32;
+        controls.push(Control::Button { rect: row(xr - qw - 8, xr), label: quality, col: fg, action: OverlayAction::CycleQuality });
+
+        controls
     }
 
     /// DComp サーフェスへ Direct2D で描画して Commit する。
