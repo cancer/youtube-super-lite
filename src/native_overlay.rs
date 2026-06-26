@@ -174,6 +174,10 @@ struct OvShared {
     drag: Drag,
     /// クリックで積まれた操作キュー（NativeApp が drain して適用）。
     actions: Vec<OverlayAction>,
+    /// オーバーレイ窓上でマウスが動いたか（自動非表示タイマのリセット用）。
+    /// コントロール帯はオーバーレイ窓が手前にいるため親 winit の CursorMoved が来ない。
+    /// その領域のホバーを活動として拾うために WM_MOUSEMOVE で立て、NativeApp が drain する。
+    moved: bool,
 }
 
 thread_local! {
@@ -743,6 +747,12 @@ impl Overlay {
     /// クリックで溜まった操作をすべて取り出す（NativeApp が Player/Controller に適用する）。
     pub fn take_actions(&self) -> Vec<OverlayAction> {
         OV_STATE.with(|s| std::mem::take(&mut s.borrow_mut().actions))
+    }
+
+    /// オーバーレイ窓上でのマウス移動があったかを取り出してフラグをクリアする。
+    /// 親 winit の CursorMoved が来ないコントロール帯ホバーを活動として扱うために使う。
+    pub fn take_moved(&self) -> bool {
+        OV_STATE.with(|s| std::mem::replace(&mut s.borrow_mut().moved, false))
     }
 
     /// dev-tools 用: クライアント座標 (x,y) への左クリックを注入する（wndproc の
@@ -1740,6 +1750,9 @@ unsafe extern "system" fn overlay_wndproc(
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             OV_STATE.with(|s| {
                 let mut s = s.borrow_mut();
+                // この窓がメッセージを受けている＝カーソルはオーバーレイ（コントロール帯/一覧/
+                // チャット）の上にある。自動非表示タイマのリセット用に活動として記録する。
+                s.moved = true;
                 match s.drag {
                     Drag::Seek => {
                         let f = seek_from_x(&s, x);

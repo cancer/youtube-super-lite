@@ -38,6 +38,8 @@ pub struct NativeApp {
     backend: String,
     initial_volume: Option<f64>,
     enable_dev_tools: bool,
+    /// 新オーバーレイ（子窓 + DirectComposition）を使う暫定トグル（移行中）。
+    dcomp: bool,
     state: Option<NativeRunning>,
 }
 
@@ -74,11 +76,12 @@ struct NativeRunning {
     /// 動画に重ねる透過 2D オーバーレイ（コントローラ表示）。Windows のみ。
     #[cfg(windows)]
     overlay: Option<crate::native_overlay::Overlay>,
-    /// 自動非表示用: 最後に操作（マウス移動/キー/クリック）があった時刻と前回カーソル位置。
+    /// 新オーバーレイ（子窓 + DirectComposition）。`--dcomp` 時のみ Some。移行中の暫定並存。
+    #[cfg(windows)]
+    dcomp_overlay: Option<crate::dcomp_overlay::DcompOverlay>,
+    /// 自動非表示用: 最後に操作（マウス移動/キー/クリック）があった時刻。
     #[cfg(windows)]
     last_activity: Instant,
-    #[cfg(windows)]
-    last_cursor: (i32, i32),
     #[cfg(windows)]
     overlay_visible: bool,
     /// dev-tools（--enable-dev-tools）からの要求受信口。None なら無効。
@@ -101,6 +104,7 @@ impl NativeApp {
         backend: String,
         initial_volume: Option<f64>,
         enable_dev_tools: bool,
+        dcomp: bool,
     ) -> Self {
         Self {
             proxy,
@@ -109,6 +113,7 @@ impl NativeApp {
             backend,
             initial_volume,
             enable_dev_tools,
+            dcomp,
             state: None,
         }
     }
@@ -168,15 +173,27 @@ impl NativeApp {
             None
         };
 
-        // 動画に重ねる透過 2D オーバーレイ（Direct2D コントローラ）。
+        // 動画に重ねる透過 2D オーバーレイ。既定は旧 ULV 版、`--dcomp` なら新 子窓+DComp 版。
+        // 移行中は排他で片方だけ生成する（旧版はパリティ達成まで温存）。
         #[cfg(windows)]
-        let overlay = {
+        let (overlay, dcomp_overlay) = if self.dcomp {
+            match crate::dcomp_overlay::DcompOverlay::new(wid) {
+                Ok(o) => {
+                    eprintln!("[native] dcomp overlay (子窓+DirectComposition) を使用");
+                    (None, Some(o))
+                }
+                Err(e) => {
+                    eprintln!("[native] dcomp overlay init failed: {e:#}");
+                    (None, None)
+                }
+            }
+        } else {
             let parent = windows::Win32::Foundation::HWND(wid as *mut core::ffi::c_void);
             match crate::native_overlay::Overlay::new(parent) {
-                Ok(o) => Some(o),
+                Ok(o) => (Some(o), None),
                 Err(e) => {
                     eprintln!("[native] overlay init failed: {e:#}");
-                    None
+                    (None, None)
                 }
             }
         };
@@ -202,9 +219,9 @@ impl NativeApp {
             #[cfg(windows)]
             overlay,
             #[cfg(windows)]
-            last_activity: Instant::now(),
+            dcomp_overlay,
             #[cfg(windows)]
-            last_cursor: (0, 0),
+            last_activity: Instant::now(),
             #[cfg(windows)]
             overlay_visible: true,
             devtools_rx,
@@ -321,6 +338,8 @@ impl NativeRunning {
         self.core.poll_playlist();
         self.core.poll_gpu_usage();
         self.core.poll_resolve();
+        // native 直 URL が mpv で再生失敗していれば、並列に用意した中継(サイドカー)へ切替える。
+        self.core.check_playback_fallback();
     }
 
     /// dev-tools（--enable-dev-tools）からの要求を処理する。毎フレーム呼ぶ。
@@ -901,10 +920,35 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             _state.maybe_save_settings(false);
             // オーバーレイの操作適用・自動非表示・定期再描画。
             #[cfg(windows)]
-            {
-                use windows::Win32::Foundation::POINT;
-                use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-
+            if _state.dcomp_overlay.is_some() {
+                // 新ホスト（子窓+DComp、骨組み）: クリック適用＋活動記録＋毎フレーム描画。
+                // 自動非表示・一覧/チャット等は UI 移植時に足す。
+                let actions = _state
+                    .dcomp_overlay
+                    .as_mut()
+                    .map(|o| o.take_actions())
+                    .unwrap_or_default();
+                for a in actions {
+                    match a {
+                        crate::dcomp_overlay::OverlayAction::TogglePause => {
+                            let p = &_state.core.player;
+                            p.set_paused(!p.paused());
+                        }
+                    }
+                    _state.last_activity = Instant::now();
+                }
+                if _state
+                    .dcomp_overlay
+                    .as_mut()
+                    .map(|o| o.take_moved())
+                    .unwrap_or(false)
+                {
+                    _state.last_activity = Instant::now();
+                }
+                if let Some(o) = _state.dcomp_overlay.as_mut() {
+                    o.render();
+                }
+            } else {
                 // クリックで溜まった操作をすべて適用（コントロール・動画クリック・一覧行）。
                 let actions = _state
                     .overlay
@@ -916,11 +960,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     _state.last_activity = Instant::now();
                 }
 
-                // カーソル移動を検出して自動非表示（active 解除）を制御。
-                let mut p = POINT::default();
-                let _ = unsafe { GetCursorPos(&mut p) };
-                if (p.x, p.y) != _state.last_cursor {
-                    _state.last_cursor = (p.x, p.y);
+                // コントロール帯（一覧/チャット含む）上のホバーを活動として拾う。そこはオーバーレイ
+                // 窓が手前にいるため親 winit の CursorMoved が来ず、overlay の WM_MOUSEMOVE で
+                // 立てたフラグを使う。動画領域の移動は winit の CursorMoved 側で拾う。
+                // どちらもウィンドウスコープのイベントなので、他窓・画面外の移動では発火しない。
+                if _state.overlay.as_ref().map(|ov| ov.take_moved()).unwrap_or(false) {
                     _state.last_activity = Instant::now();
                 }
                 // コントロール描画（active）: 一覧/チャット表示中は常時、それ以外は 3 秒無操作で隠す。
@@ -1008,6 +1052,17 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     }
                 }
             }
+            // 動画領域上のカーソル移動を活動として記録し、コントロールを表示する。
+            // winit の CursorMoved はこの窓のクライアント領域にカーソルがある時だけ届く
+            // （他窓に遮蔽されていれば届かない）ので、グローバル座標で自窓上かを推測する必要はない。
+            // コントロール帯はオーバーレイ窓が手前にいて CursorMoved が来ないため、そちらは
+            // about_to_wait で overlay.take_moved() を見て拾う。
+            WindowEvent::CursorMoved { .. } => {
+                #[cfg(windows)]
+                {
+                    state.last_activity = Instant::now();
+                }
+            }
             // フォーカスを失ったらオーバーレイを隠す（他アプリの上に残らないように）。
             WindowEvent::Focused(focused) => {
                 state.focused = focused;
@@ -1020,16 +1075,30 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             }
             // ウィンドウのリサイズ/移動にオーバーレイを即追従させる
             // （モーダルなドラッグループ中は about_to_wait が止まるため、ここで直接再描画）。
-            WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
+            // 位置追従は follow_wndproc が WM_MOVE で行うので、ここはサイズ追従の再描画のみ。
+            // ここで last_activity をリセットしたり強制表示してはいけない——hwdec 切替に伴う
+            // VO 再初期化はプログラム的に Resized を連発し、それを操作扱いすると自動非表示が
+            // 効かなくなる（デグレ）。可視判定は about_to_wait に一任する。
+            WindowEvent::Resized(size) => {
+                // 新ホストは子窓なので位置は OS 追従。サイズだけ合わせて再描画する。
                 #[cfg(windows)]
-                if state.focused {
-                    state.last_activity = Instant::now();
-                    state.overlay_visible = true;
-                    if let Some(ov) = state.overlay.as_ref() {
-                        ov.set_visible(true);
-                    }
-                    // リサイズ/移動直後は操作直後なので active で再描画。
-                    state.render_overlay(true);
+                if let Some(o) = state.dcomp_overlay.as_mut() {
+                    o.resize(size.width as i32, size.height as i32);
+                } else if state.focused && state.overlay_visible {
+                    let active = state.list_open
+                        || state.chat_open
+                        || state.last_activity.elapsed() < Duration::from_secs(3);
+                    state.render_overlay(active);
+                }
+                let _ = size;
+            }
+            WindowEvent::Moved(_) => {
+                #[cfg(windows)]
+                if state.dcomp_overlay.is_none() && state.focused && state.overlay_visible {
+                    let active = state.list_open
+                        || state.chat_open
+                        || state.last_activity.elapsed() < Duration::from_secs(3);
+                    state.render_overlay(active);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
