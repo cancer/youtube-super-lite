@@ -79,6 +79,7 @@ mpv テストパターン(`av://lavfi:testsrc`)を親窓に埋め込み、`WS_CH
 - ✅ **手順1 ホスト骨組み**: [src/dcomp_overlay.rs](../src/dcomp_overlay.rs) 新規（ゼロベース）。子窓(`WS_CHILD`)＋D3D11→DXGI→DComp/D2D＋サーフェス＋プレースホルダ描画＋全入力受領（`GWLP_USERDATA`、thread_local 不使用）。`native_app` に `--dcomp` トグルで排他統合（旧 ULW は既定で温存）。実アプリ `--dcomp` 起動で初期化完走・クラッシュなし・新コード警告ゼロを確認。動画域クリック→`TogglePause` 配線済み。
 - 🔄 **手順2 描画移植（進行中）**:
   - ✅ 2a コントローラ帯コア: 半透明帯・シークライン(track/progress/knob)・再生/一時停止グリフ・時間表示・音量バーを DirectWrite/D2D で新規描画。ヒットテスト（pause/seek/volume）＋ドラッグ（seek/vol キャプチャ）＋ホイール音量＋3秒自動非表示。`--dcomp` 実アプリで devtools スクショ視覚確認済み（レイアウトは旧 draw_controller=egui 踏襲と一致）。dcomp 経路でも /screenshot が効くよう capture を if/else 外へ移動。
+  - ✅ 2a' コンポーネント化: クリッカブル UI を `Control` 列挙（PlayPause/Seek/Volume/Time）で構成。各部品が**自分の描画とクリック挙動を内包**し、描画とヒットが drift しない。クリック解決は「部品 → 帯余白(吸収) → 動画域(pause)」の順で、座標 catch-all を持たない（＝帯余白で pause が飛ぶ事故が構造的に起きない）。2b 以降のコントロール追加は `Control` を1個足すだけ。検証(devtools): 動画域=pause反転 / 帯余白=不変 / 音量バー click で vol が割合どおり変化。
   - ⬜ 2b 以降: ミュート/画質/コーデック/Like、上部バー(URL/認証/タイトル)、一覧(4ソース＋サムネ＋クリック)、チャット(左右分割＋スクロール＋幅ドラッグ)、ライブ最新ボタン。
 - ⬜ 手順3 以降（下記）。
 

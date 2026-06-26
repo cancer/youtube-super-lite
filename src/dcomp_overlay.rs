@@ -4,11 +4,14 @@
 //! 手動追従）の負債を断つための置き換え。設計の核:
 //! - オーバーレイは winit 親窓の **WS_CHILD**。位置・クリップ・移動は OS が面倒を見る（follow 不要）。
 //! - 合成は **DirectComposition**（D3D11→DXGI→DComp/D2D）。per-pixel alpha を DComp サーフェスで持つ。
-//! - 子窓が**全入力を所有**（HTTRANSPARENT 貫通はしない）。動画域クリックは自前で行動に変換する。
+//! - 子窓が**全入力を所有**（HTTRANSPARENT 貫通はしない）。
+//! - クリッカブル UI は**コンポーネント**（[`Control`]）で構成する。各部品が自分の描画とクリック
+//!   挙動を内包し、描画とヒットが drift しない。どの部品にも当たらないクリック＝動画域＝pause、
+//!   コントローラ帯の余白は帯パネルが吸収（無反応）。座標の catch-all フォールバックは持たない。
 //! - wndproc 連携はグローバル(thread_local)を使わず、窓ごとに `GWLP_USERDATA` へ状態ポインタを置く。
 //!
 //! 移植状況: コントローラ帯コア（再生/一時停止・シーク・時間・音量）＋自動非表示まで。
-//! 上部バー(URL/認証)・一覧・チャット・画質/コーデック/ミュート/Like は後続で本ファイルへ足す。
+//! 画質/コーデック/ミュート/Like・上部バー・一覧・チャットは後続で部品を足す。
 //! レイアウト/色は旧 `native_overlay::draw_controller`（egui 踏襲）を参照して合わせる。
 
 #![cfg(windows)]
@@ -26,7 +29,7 @@ use windows::Win32::Graphics::DirectWrite::{IDWriteFactory, IDWriteTextFormat};
 /// 子窓への入力で積まれる行動（コアへ渡す）。UI 移植に合わせて拡張する。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OverlayAction {
-    /// 再生/一時停止トグル（コントロール非ヒット＝動画クリックも含む）。
+    /// 再生/一時停止トグル（再生ボタン or 動画域クリック）。
     TogglePause,
     /// シーク（0.0..=1.0 の割合。seekable 時のみ）。
     Seek(f64),
@@ -49,7 +52,6 @@ pub struct PlaybackView {
 /// 下部コントローラ帯の高さ・行高（旧 native_overlay と同値）。
 const BOTTOM_H: i32 = 52;
 const ROW_H: i32 = 26;
-/// 音量バーの幅（px）。
 const VOL_W: i32 = 110;
 
 #[derive(Default, Clone, Copy, PartialEq)]
@@ -60,23 +62,116 @@ enum Drag {
     Vol,
 }
 
+/// クリックを当てた部品が返す挙動。
+enum Hit {
+    /// 操作を生む。
+    Act(OverlayAction),
+    /// ドラッグ開始（連続更新。初期アクションも伴う）。
+    Drag(Drag, OverlayAction),
+    /// 領域内だが操作なし（pause を出さずに吸収。例: 時間ラベル）。
+    Absorb,
+}
+
+/// コントローラを構成するクリッカブル/表示部品。各々が自分の描画とクリック挙動を内包する。
+enum Control {
+    /// 再生/一時停止ボタン（グリフ）。
+    PlayPause { rect: RECT, paused: bool },
+    /// シークライン（フル幅）。`enabled=false`（非シーカブル）はグレー固定・操作不可。
+    Seek { rect: RECT, frac: f32, enabled: bool },
+    /// 音量バー。
+    Volume { rect: RECT, frac: f32 },
+    /// 時間表示（描画のみ・クリックは吸収）。
+    Time { rect: RECT, text: String },
+}
+
+impl Control {
+    fn rect(&self) -> RECT {
+        match self {
+            Control::PlayPause { rect, .. }
+            | Control::Seek { rect, .. }
+            | Control::Volume { rect, .. }
+            | Control::Time { rect, .. } => *rect,
+        }
+    }
+
+    /// (x,y) がこの部品に当たればその挙動を返す。外れなら None。
+    fn press(&self, x: i32, y: i32) -> Option<Hit> {
+        if !in_rect(&self.rect(), x, y) {
+            return None;
+        }
+        Some(match self {
+            Control::PlayPause { .. } => Hit::Act(OverlayAction::TogglePause),
+            Control::Seek { rect, enabled, .. } => {
+                if *enabled {
+                    Hit::Drag(Drag::Seek, OverlayAction::Seek(frac_x(rect, x)))
+                } else {
+                    Hit::Absorb
+                }
+            }
+            Control::Volume { rect, .. } => {
+                Hit::Drag(Drag::Vol, OverlayAction::SetVolume(frac_x(rect, x) * 130.0))
+            }
+            Control::Time { .. } => Hit::Absorb,
+        })
+    }
+
+    unsafe fn draw(&self, p: &Painter) {
+        let fg = color(0.96, 0.96, 0.98, 1.0);
+        match self {
+            Control::PlayPause { rect, paused } => {
+                let glyph = if *paused { "▶" } else { "⏸" };
+                let cy = (rect.top + rect.bottom) / 2;
+                p.text(glyph, rf((rect.left + 4) as f32, (cy - 9) as f32, rect.right as f32, (cy + 9) as f32), fg);
+            }
+            Control::Time { rect, text } => {
+                let cy = (rect.top + rect.bottom) / 2;
+                p.text(text, rf(rect.left as f32, (cy - 9) as f32, rect.right as f32, (cy + 9) as f32), fg);
+            }
+            Control::Seek { rect, frac, enabled } => {
+                let cy = ((rect.top + rect.bottom) / 2) as f32;
+                let (x0, x1) = (rect.left as f32, rect.right as f32);
+                let th = 3.0;
+                p.fill_round(rf(x0, cy - th / 2.0, x1, cy + th / 2.0), 1.5, color(1.0, 1.0, 1.0, 0.25));
+                let prog_col = if *enabled {
+                    color(0.92, 0.20, 0.20, 1.0)
+                } else {
+                    color(0.55, 0.55, 0.60, 0.9)
+                };
+                let px = (x0 + (x1 - x0) * *frac).max(x0);
+                p.fill_round(rf(x0, cy - th / 2.0, px, cy + th / 2.0), 1.5, prog_col);
+                if *enabled {
+                    p.fill_ellipse(px, cy, 6.0, color(0.92, 0.20, 0.20, 1.0));
+                }
+            }
+            Control::Volume { rect, frac } => {
+                let cy = ((rect.top + rect.bottom) / 2) as f32;
+                let (x0, x1) = (rect.left as f32, rect.right as f32);
+                p.fill_round(rf(x0, cy - 2.0, x1, cy + 2.0), 2.0, color(1.0, 1.0, 1.0, 0.25));
+                let vx = x0 + (x1 - x0) * *frac;
+                p.fill_round(rf(x0, cy - 2.0, vx.max(x0), cy + 2.0), 2.0, color(0.92, 0.92, 0.96, 1.0));
+                p.fill_ellipse(vx, cy, 5.0, color(1.0, 1.0, 1.0, 1.0));
+            }
+        }
+    }
+}
+
 /// wndproc から触る窓ごとの状態。`GWLP_USERDATA` に *mut で置く（グローバル不使用）。
 #[derive(Default)]
 struct WndState {
     actions: Vec<OverlayAction>,
     /// オーバーレイ上でマウスが動いたか（自動非表示タイマのリセット用）。
     moved: bool,
-    /// 現在のクライアントサイズ。
     cw: i32,
     ch: i32,
-    /// コントロール描画中か（false の間は全クリックを TogglePause として扱う）。
+    /// コントロール表示中か（false の間は全クリックを TogglePause として扱う）。
     active: bool,
-    seekable: bool,
-    /// ヒット矩形（active 時のみ有効。クライアント座標）。
-    btn: RECT,
-    seek: RECT,
-    vol: RECT,
+    /// コントローラ帯（この矩形内の非部品クリックは吸収＝pause を出さない）。
+    panel: RECT,
+    /// 帯のクリッカブル/表示部品。クリックはここを探索する。
+    controls: Vec<Control>,
     drag: Drag,
+    /// ドラッグ中の対象矩形（連続更新の割合算出に使う）。
+    drag_rect: RECT,
 }
 
 /// 子窓 + DComp の合成オーバーレイ。`render` で描画＆Commit、`take_actions` で入力を取り出す。
@@ -131,7 +226,6 @@ impl DcompOverlay {
                 hCursor: LoadCursorW(None, IDC_ARROW)?,
                 ..Default::default()
             };
-            // 既に登録済みでも 0 を返すだけ（複数窓/再起動向け）。問題視しない。
             let _ = RegisterClassW(&wc);
 
             let mut rc = RECT::default();
@@ -161,7 +255,6 @@ impl DcompOverlay {
             });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, state.as_mut() as *mut WndState as isize);
 
-            // D3D11 → DXGI → DComp / D2D / DirectWrite。
             let mut d3d: Option<ID3D11Device> = None;
             D3D11CreateDevice(
                 None,
@@ -247,7 +340,7 @@ impl DcompOverlay {
     }
 
     /// dev-tools 用: クライアント座標へ左クリックを注入する。子窓へ WM_LBUTTONDOWN/UP を
-    /// PostMessage し、実 wndproc の振り分け（帯余白=無反応 / 動画域・ボタン=pause 等）をそのまま通す。
+    /// PostMessage し、実 wndproc の振り分けをそのまま通す。
     pub fn inject_click(&self, x: i32, y: i32) {
         use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP};
         let lparam = LPARAM((((y & 0xFFFF) << 16) | (x & 0xFFFF)) as isize);
@@ -276,6 +369,59 @@ impl DcompOverlay {
         Ok(())
     }
 
+    /// コントローラ帯の部品リストを現在サイズ・再生状態から組み立てる（描画とヒットの単一の素）。
+    fn build_controls(&self, w: i32, h: i32, v: &PlaybackView) -> Vec<Control> {
+        let cy = h - 16;
+        // 再生/一時停止ボタン。
+        let glyph = if v.paused { "▶" } else { "⏸" };
+        let gw = unsafe { self.measure(glyph) }.ceil() as i32;
+        let btn = RECT {
+            left: 14,
+            top: cy - ROW_H / 2,
+            right: 14 + gw + 8,
+            bottom: cy + ROW_H / 2,
+        };
+        // 時間表示。
+        let time_str = format!("{} / {}", fmt_time(v.pos), fmt_time(v.dur));
+        let tw = unsafe { self.measure(&time_str) }.ceil() as i32;
+        let tx = btn.right + 12;
+        let time_rect = RECT {
+            left: tx,
+            top: cy - ROW_H / 2,
+            right: tx + tw + 4,
+            bottom: cy + ROW_H / 2,
+        };
+        // 音量バー（右端）。
+        let xr = w - 14;
+        let vol = RECT {
+            left: xr - VOL_W,
+            top: cy - ROW_H / 2,
+            right: xr,
+            bottom: cy + ROW_H / 2,
+        };
+        // シークライン（フル幅・上段）。
+        let sy = h - BOTTOM_H + 13;
+        let seek = RECT {
+            left: 14,
+            top: sy - 9,
+            right: w - 14,
+            bottom: sy + 9,
+        };
+        let seek_frac = if !v.seekable {
+            1.0
+        } else if v.dur > 0.0 {
+            (v.pos / v.dur).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        vec![
+            Control::Seek { rect: seek, frac: seek_frac, enabled: v.seekable },
+            Control::PlayPause { rect: btn, paused: v.paused },
+            Control::Time { rect: time_rect, text: time_str },
+            Control::Volume { rect: vol, frac: (v.volume / 130.0).clamp(0.0, 1.0) as f32 },
+        ]
+    }
+
     /// DComp サーフェスへ Direct2D で描画して Commit する。
     /// `active` が false の間はコントロールを描かず透明（動画素通し）。クリックは TogglePause。
     pub fn render(&mut self, active: bool, view: &PlaybackView) {
@@ -293,6 +439,19 @@ impl DcompOverlay {
             return;
         };
         let (cw, ch) = (self.cw, self.ch);
+
+        // 部品を組み立てる（描画とヒットで同じ素を使う）。
+        let controls = if active {
+            self.build_controls(cw, ch, view)
+        } else {
+            Vec::new()
+        };
+        let panel = if active {
+            RECT { left: 0, top: ch - BOTTOM_H, right: cw, bottom: ch }
+        } else {
+            RECT::default()
+        };
+
         unsafe {
             let mut offset = POINT::default();
             let dxgi_surface: IDXGISurface = match surface.BeginDraw(None, &mut offset) {
@@ -325,21 +484,17 @@ impl DcompOverlay {
             ctx.SetTarget(&bitmap);
             ctx.BeginDraw();
             // BeginDraw の offset 分だけ平行移動（サーフェスはアトラスの一部のことがある）。
-            // 以降の描画・幾何はすべてクライアント座標で行い、ヒット矩形もクライアント座標で保存する。
+            // 描画・幾何はすべてクライアント座標。ヒット矩形もクライアント座標で保存する。
             ctx.SetTransform(&Matrix3x2::translation(offset.x as f32, offset.y as f32));
             ctx.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
 
-            // 既定はヒット無効化（active=false や非コントロール領域のクリックは TogglePause）。
-            self.state.active = active;
-            self.state.seekable = view.seekable;
-            self.state.cw = cw;
-            self.state.ch = ch;
-            self.state.btn = RECT::default();
-            self.state.seek = RECT::default();
-            self.state.vol = RECT::default();
-
             if active {
-                self.draw_controller(&ctx, cw, ch, view);
+                // 帯背景（半透明）→ 各部品。
+                let p = Painter { ctx: &ctx, dwrite: &self.dwrite, tf: &self.tf_small };
+                p.fill_rect(rf(panel.left as f32, panel.top as f32, panel.right as f32, panel.bottom as f32), color(0.03, 0.03, 0.05, 0.72));
+                for c in &controls {
+                    c.draw(&p);
+                }
             }
 
             let _ = ctx.EndDraw(None, None);
@@ -347,100 +502,13 @@ impl DcompOverlay {
             let _ = surface.EndDraw();
             let _ = self.dcomp.Commit();
         }
-    }
 
-    /// 下部コントローラ帯（半透明帯・シークライン・再生/一時停止・時間・音量）を描く。
-    /// 幾何・色は旧 `native_overlay::draw_controller` を踏襲。ヒット矩形を WndState に保存する。
-    unsafe fn draw_controller(&mut self, ctx: &ID2D1DeviceContext, w: i32, h: i32, v: &PlaybackView) {
-        // 半透明帯（下端いっぱい）。
-        fill_rect(
-            ctx,
-            rf(0.0, (h - BOTTOM_H) as f32, w as f32, h as f32),
-            color(0.03, 0.03, 0.05, 0.72),
-        );
-
-        // --- シークライン（フル幅・細い、上段）---
-        let sx0 = 14.0f32;
-        let sx1 = w as f32 - 14.0;
-        let sy = (h - BOTTOM_H + 13) as f32;
-        let track_h = 3.0f32;
-        let frac = if !v.seekable {
-            1.0
-        } else if v.dur > 0.0 {
-            (v.pos / v.dur).clamp(0.0, 1.0) as f32
-        } else {
-            0.0
-        };
-        fill_round(ctx, rf(sx0, sy - track_h / 2.0, sx1, sy + track_h / 2.0), 1.5, color(1.0, 1.0, 1.0, 0.25));
-        let prog_col = if v.seekable {
-            color(0.92, 0.20, 0.20, 1.0)
-        } else {
-            color(0.55, 0.55, 0.60, 0.9)
-        };
-        fill_round(
-            ctx,
-            rf(sx0, sy - track_h / 2.0, (sx0 + (sx1 - sx0) * frac).max(sx0), sy + track_h / 2.0),
-            1.5,
-            prog_col,
-        );
-        if v.seekable {
-            let knob_x = sx0 + (sx1 - sx0) * frac;
-            fill_ellipse(ctx, knob_x, sy, 6.0, color(0.92, 0.20, 0.20, 1.0));
-        }
-        self.state.seek = RECT {
-            left: sx0 as i32,
-            top: (sy - 9.0) as i32,
-            right: sx1 as i32,
-            bottom: (sy + 9.0) as i32,
-        };
-
-        // --- コントロール行（下段）---
-        let cy = h - 16;
-        let fg = color(0.96, 0.96, 0.98, 1.0);
-
-        // 再生/一時停止グリフ。
-        let glyph = if v.paused { "▶" } else { "⏸" };
-        let gw = self.measure(glyph).ceil() as i32;
-        let btn = RECT {
-            left: 14,
-            top: cy - ROW_H / 2,
-            right: 14 + gw + 8,
-            bottom: cy + ROW_H / 2,
-        };
-        self.text(ctx, glyph, rf(18.0, (cy - 9) as f32, (18 + gw) as f32, (cy + 9) as f32), fg);
-        self.state.btn = btn;
-        let x = btn.right + 12;
-
-        // 時間表示（mm:ss / mm:ss）。
-        let time_str = format!("{} / {}", fmt_time(v.pos), fmt_time(v.dur));
-        let tw = self.measure(&time_str).ceil() as i32;
-        self.text(ctx, &time_str, rf(x as f32, (cy - 9) as f32, (x + tw + 4) as f32, (cy + 9) as f32), fg);
-
-        // 音量バー（右端）。
-        let xr = w - 14;
-        let vol = RECT {
-            left: xr - VOL_W,
-            top: cy - ROW_H / 2,
-            right: xr,
-            bottom: cy + ROW_H / 2,
-        };
-        let vol_frac = (v.volume / 130.0).clamp(0.0, 1.0) as f32;
-        let vcy = cy as f32;
-        fill_round(ctx, rf(vol.left as f32, vcy - 2.0, vol.right as f32, vcy + 2.0), 2.0, color(1.0, 1.0, 1.0, 0.25));
-        let vx = vol.left as f32 + VOL_W as f32 * vol_frac;
-        fill_round(ctx, rf(vol.left as f32, vcy - 2.0, vx.max(vol.left as f32), vcy + 2.0), 2.0, color(0.92, 0.92, 0.96, 1.0));
-        fill_ellipse(ctx, vx, vcy, 5.0, color(1.0, 1.0, 1.0, 1.0));
-        self.state.vol = vol;
-    }
-
-    /// 小フォントの左寄せテキストを描く。
-    unsafe fn text(&self, ctx: &ID2D1DeviceContext, s: &str, r: D2D_RECT_F, c: D2D1_COLOR_F) {
-        use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE;
-        use windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL;
-        if let Ok(b) = ctx.CreateSolidColorBrush(&c, None) {
-            let wt: Vec<u16> = s.encode_utf16().collect();
-            ctx.DrawText(&wt, &self.tf_small, &r, &b, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
-        }
+        // wndproc 用に状態を反映。
+        self.state.active = active;
+        self.state.cw = cw;
+        self.state.ch = ch;
+        self.state.panel = panel;
+        self.state.controls = controls;
     }
 
     /// 小フォントでのテキスト幅（px）を計測する。
@@ -457,6 +525,46 @@ impl DcompOverlay {
     }
 }
 
+/// Direct2D 描画の薄いヘルパ（部品の draw が使う）。
+struct Painter<'a> {
+    ctx: &'a ID2D1DeviceContext,
+    dwrite: &'a IDWriteFactory,
+    tf: &'a IDWriteTextFormat,
+}
+
+impl<'a> Painter<'a> {
+    unsafe fn fill_rect(&self, r: D2D_RECT_F, c: D2D1_COLOR_F) {
+        if let Ok(b) = self.ctx.CreateSolidColorBrush(&c, None) {
+            self.ctx.FillRectangle(&r, &b);
+        }
+    }
+    unsafe fn fill_round(&self, r: D2D_RECT_F, rad: f32, c: D2D1_COLOR_F) {
+        use windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT;
+        if let Ok(b) = self.ctx.CreateSolidColorBrush(&c, None) {
+            self.ctx.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r, radiusX: rad, radiusY: rad }, &b);
+        }
+    }
+    unsafe fn fill_ellipse(&self, x: f32, y: f32, rad: f32, c: D2D1_COLOR_F) {
+        use windows::Win32::Graphics::Direct2D::Common::D2D_POINT_2F;
+        use windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE;
+        if let Ok(b) = self.ctx.CreateSolidColorBrush(&c, None) {
+            self.ctx.FillEllipse(
+                &D2D1_ELLIPSE { point: D2D_POINT_2F { x, y }, radiusX: rad, radiusY: rad },
+                &b,
+            );
+        }
+    }
+    unsafe fn text(&self, s: &str, r: D2D_RECT_F, c: D2D1_COLOR_F) {
+        use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE;
+        use windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL;
+        let _ = self.dwrite; // 計測は DcompOverlay::measure 側。ここでは描画のみ。
+        if let Ok(b) = self.ctx.CreateSolidColorBrush(&c, None) {
+            let wt: Vec<u16> = s.encode_utf16().collect();
+            self.ctx.DrawText(&wt, self.tf, &r, &b, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+        }
+    }
+}
+
 #[inline]
 fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
@@ -465,34 +573,6 @@ fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
 #[inline]
 fn rf(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
     D2D_RECT_F { left, top, right, bottom }
-}
-
-unsafe fn fill_rect(ctx: &ID2D1DeviceContext, r: D2D_RECT_F, c: D2D1_COLOR_F) {
-    if let Ok(b) = ctx.CreateSolidColorBrush(&c, None) {
-        ctx.FillRectangle(&r, &b);
-    }
-}
-
-unsafe fn fill_round(ctx: &ID2D1DeviceContext, r: D2D_RECT_F, rad: f32, c: D2D1_COLOR_F) {
-    use windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT;
-    if let Ok(b) = ctx.CreateSolidColorBrush(&c, None) {
-        ctx.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r, radiusX: rad, radiusY: rad }, &b);
-    }
-}
-
-unsafe fn fill_ellipse(ctx: &ID2D1DeviceContext, x: f32, y: f32, rad: f32, c: D2D1_COLOR_F) {
-    use windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE;
-    use windows::Win32::Graphics::Direct2D::Common::D2D_POINT_2F;
-    if let Ok(b) = ctx.CreateSolidColorBrush(&c, None) {
-        ctx.FillEllipse(
-            &D2D1_ELLIPSE {
-                point: D2D_POINT_2F { x, y },
-                radiusX: rad,
-                radiusY: rad,
-            },
-            &b,
-        );
-    }
 }
 
 /// 秒数を mm:ss / h:mm:ss にする。
@@ -514,6 +594,13 @@ fn in_rect(r: &RECT, x: i32, y: i32) -> bool {
     x >= r.left && x < r.right && y >= r.top && y < r.bottom
 }
 
+/// クライアント x を矩形内の割合 0.0..=1.0 に直す。
+#[inline]
+fn frac_x(r: &RECT, x: i32) -> f64 {
+    let w = (r.right - r.left).max(1) as f64;
+    ((x - r.left) as f64 / w).clamp(0.0, 1.0)
+}
+
 /// 窓ごとの状態（GWLP_USERDATA）。null の間は触らない。
 unsafe fn state_of<'a>(hwnd: HWND) -> Option<&'a mut WndState> {
     use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_USERDATA};
@@ -526,6 +613,7 @@ unsafe fn state_of<'a>(hwnd: HWND) -> Option<&'a mut WndState> {
 }
 
 /// オーバーレイ子窓の WndProc。全クライアントを HTCLIENT で受ける（既定動作）。
+/// クリックは「部品 → 帯余白(吸収) → 動画域(pause)」の順で解決し、catch-all を持たない。
 unsafe extern "system" fn wndproc(
     hwnd: HWND,
     msg: u32,
@@ -546,13 +634,11 @@ unsafe extern "system" fn wndproc(
             if let Some(s) = state_of(hwnd) {
                 s.moved = true;
                 match s.drag {
-                    Drag::Seek if s.seek.right > s.seek.left => {
-                        s.actions.push(OverlayAction::Seek(frac_x(&s.seek, lo)));
-                    }
-                    Drag::Vol if s.vol.right > s.vol.left => {
-                        s.actions.push(OverlayAction::SetVolume(frac_x(&s.vol, lo) * 130.0));
-                    }
-                    _ => {}
+                    Drag::Seek => s.actions.push(OverlayAction::Seek(frac_x(&s.drag_rect, lo))),
+                    Drag::Vol => s
+                        .actions
+                        .push(OverlayAction::SetVolume(frac_x(&s.drag_rect, lo) * 130.0)),
+                    Drag::None => {}
                 }
             }
             LRESULT(0)
@@ -560,28 +646,35 @@ unsafe extern "system" fn wndproc(
         WM_LBUTTONDOWN => {
             let mut capture = false;
             if let Some(s) = state_of(hwnd) {
-                // pause を飛ばすのは「動画領域クリック」と「再生ボタン」だけ。
-                // コントローラ帯の余白（時間表示の隣など）は無反応にする。
-                let in_strip = hi >= s.ch - BOTTOM_H;
                 if !s.active {
                     // 帯非表示中は全面が動画。クリックで pause（同時に活動として帯が出る）。
                     s.actions.push(OverlayAction::TogglePause);
-                } else if s.seekable && in_rect(&s.seek, lo, hi) {
-                    s.drag = Drag::Seek;
-                    s.actions.push(OverlayAction::Seek(frac_x(&s.seek, lo)));
-                    capture = true;
-                } else if in_rect(&s.vol, lo, hi) {
-                    s.drag = Drag::Vol;
-                    s.actions.push(OverlayAction::SetVolume(frac_x(&s.vol, lo) * 130.0));
-                    capture = true;
-                } else if in_rect(&s.btn, lo, hi) {
-                    // 再生/一時停止ボタン。
-                    s.actions.push(OverlayAction::TogglePause);
-                } else if !in_strip {
-                    // 帯より上＝動画領域のクリック。
-                    s.actions.push(OverlayAction::TogglePause);
+                } else {
+                    // 部品を探索（上に積んだ順＝後勝ちにしたいなら rev。今は重なりなし）。
+                    let mut handled = false;
+                    for c in &s.controls {
+                        if let Some(hit) = c.press(lo, hi) {
+                            match hit {
+                                Hit::Act(a) => s.actions.push(a),
+                                Hit::Drag(kind, a) => {
+                                    s.drag = kind;
+                                    s.drag_rect = c.rect();
+                                    s.actions.push(a);
+                                    capture = true;
+                                }
+                                Hit::Absorb => {}
+                            }
+                            handled = true;
+                            break;
+                        }
+                    }
+                    if !handled {
+                        // どの部品にも当たらなかった: 帯の中なら吸収、外（動画域）なら pause。
+                        if !in_rect(&s.panel, lo, hi) {
+                            s.actions.push(OverlayAction::TogglePause);
+                        }
+                    }
                 }
-                // それ以外（コントローラ帯の余白）は何もしない。
             }
             if capture {
                 let _ = SetCapture(hwnd);
@@ -605,11 +698,4 @@ unsafe extern "system" fn wndproc(
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
-}
-
-/// クライアント x を矩形内の割合 0.0..=1.0 に直す。
-#[inline]
-fn frac_x(r: &RECT, x: i32) -> f64 {
-    let w = (r.right - r.left).max(1) as f64;
-    ((x - r.left) as f64 / w).clamp(0.0, 1.0)
 }
