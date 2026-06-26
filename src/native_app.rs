@@ -375,6 +375,8 @@ impl NativeRunning {
                     #[cfg(windows)]
                     if let Some(ov) = self.overlay.as_ref() {
                         ov.inject_click(x, y);
+                    } else if let Some(ov) = self.dcomp_overlay.as_ref() {
+                        ov.inject_click(x, y);
                     }
                     let _ = reply.send(true);
                 }

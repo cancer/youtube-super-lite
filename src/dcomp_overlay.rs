@@ -246,6 +246,17 @@ impl DcompOverlay {
         std::mem::replace(&mut self.state.moved, false)
     }
 
+    /// dev-tools 用: クライアント座標へ左クリックを注入する。子窓へ WM_LBUTTONDOWN/UP を
+    /// PostMessage し、実 wndproc の振り分け（帯余白=無反応 / 動画域・ボタン=pause 等）をそのまま通す。
+    pub fn inject_click(&self, x: i32, y: i32) {
+        use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP};
+        let lparam = LPARAM((((y & 0xFFFF) << 16) | (x & 0xFFFF)) as isize);
+        unsafe {
+            let _ = PostMessageW(self.hwnd, WM_LBUTTONDOWN, WPARAM(0), lparam);
+            let _ = PostMessageW(self.hwnd, WM_LBUTTONUP, WPARAM(0), lparam);
+        }
+    }
+
     /// DComp サーフェスを現在サイズで作り直し、visual に割り当てる。
     fn rebuild_surface(&mut self) -> Result<()> {
         use windows::Win32::Graphics::Dxgi::Common::{
@@ -549,7 +560,11 @@ unsafe extern "system" fn wndproc(
         WM_LBUTTONDOWN => {
             let mut capture = false;
             if let Some(s) = state_of(hwnd) {
+                // pause を飛ばすのは「動画領域クリック」と「再生ボタン」だけ。
+                // コントローラ帯の余白（時間表示の隣など）は無反応にする。
+                let in_strip = hi >= s.ch - BOTTOM_H;
                 if !s.active {
+                    // 帯非表示中は全面が動画。クリックで pause（同時に活動として帯が出る）。
                     s.actions.push(OverlayAction::TogglePause);
                 } else if s.seekable && in_rect(&s.seek, lo, hi) {
                     s.drag = Drag::Seek;
@@ -559,10 +574,14 @@ unsafe extern "system" fn wndproc(
                     s.drag = Drag::Vol;
                     s.actions.push(OverlayAction::SetVolume(frac_x(&s.vol, lo) * 130.0));
                     capture = true;
-                } else {
-                    // ボタン上も、バー余白も、動画域も：再生/一時停止トグル。
+                } else if in_rect(&s.btn, lo, hi) {
+                    // 再生/一時停止ボタン。
+                    s.actions.push(OverlayAction::TogglePause);
+                } else if !in_strip {
+                    // 帯より上＝動画領域のクリック。
                     s.actions.push(OverlayAction::TogglePause);
                 }
+                // それ以外（コントローラ帯の余白）は何もしない。
             }
             if capture {
                 let _ = SetCapture(hwnd);
