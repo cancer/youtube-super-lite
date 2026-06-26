@@ -7,36 +7,76 @@
 //! - 子窓が**全入力を所有**（HTTRANSPARENT 貫通はしない）。動画域クリックは自前で行動に変換する。
 //! - wndproc 連携はグローバル(thread_local)を使わず、窓ごとに `GWLP_USERDATA` へ状態ポインタを置く。
 //!
-//! 本ファイルは骨組み段階: 子窓＋合成＋追従＋入力受領までを通し、描画はプレースホルダ。
-//! 実 UI（コントローラ/一覧/チャット等）の移植は後続で本ファイルへ足す。
+//! 移植状況: コントローラ帯コア（再生/一時停止・シーク・時間・音量）＋自動非表示まで。
+//! 上部バー(URL/認証)・一覧・チャット・画質/コーデック/ミュート/Like は後続で本ファイルへ足す。
+//! レイアウト/色は旧 `native_overlay::draw_controller`（egui 踏襲）を参照して合わせる。
 
 #![cfg(windows)]
 
 use anyhow::{anyhow, Result};
 use windows::core::Interface;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
 use windows::Win32::Graphics::Direct2D::ID2D1DeviceContext;
 use windows::Win32::Graphics::DirectComposition::{
     IDCompositionDevice, IDCompositionSurface, IDCompositionTarget, IDCompositionVisual,
 };
+use windows::Win32::Graphics::DirectWrite::{IDWriteFactory, IDWriteTextFormat};
 
-/// 子窓への入力で積まれる行動（コアへ渡す）。最小から始め、UI 移植に合わせて拡張する。
+/// 子窓への入力で積まれる行動（コアへ渡す）。UI 移植に合わせて拡張する。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OverlayAction {
-    /// 動画域クリック＝再生/一時停止トグル。
+    /// 再生/一時停止トグル（コントロール非ヒット＝動画クリックも含む）。
     TogglePause,
+    /// シーク（0.0..=1.0 の割合。seekable 時のみ）。
+    Seek(f64),
+    /// 音量設定（0.0..=130.0）。
+    SetVolume(f64),
+    /// 音量を相対変更（ホイール。± の量）。
+    VolumeStep(f64),
 }
 
-/// 高さ（下部コントロール帯のプレースホルダ）。
-const BAR_H: i32 = 72;
+/// 描画に必要な再生状態（コアから毎フレーム渡す。借用を持ち込まない値のコピー）。
+#[derive(Clone, Copy)]
+pub struct PlaybackView {
+    pub paused: bool,
+    pub pos: f64,
+    pub dur: f64,
+    pub seekable: bool,
+    pub volume: f64,
+}
+
+/// 下部コントローラ帯の高さ・行高（旧 native_overlay と同値）。
+const BOTTOM_H: i32 = 52;
+const ROW_H: i32 = 26;
+/// 音量バーの幅（px）。
+const VOL_W: i32 = 110;
+
+#[derive(Default, Clone, Copy, PartialEq)]
+enum Drag {
+    #[default]
+    None,
+    Seek,
+    Vol,
+}
 
 /// wndproc から触る窓ごとの状態。`GWLP_USERDATA` に *mut で置く（グローバル不使用）。
+#[derive(Default)]
 struct WndState {
     actions: Vec<OverlayAction>,
     /// オーバーレイ上でマウスが動いたか（自動非表示タイマのリセット用）。
     moved: bool,
-    /// 現在のクライアント高さ（領域判定用）。
+    /// 現在のクライアントサイズ。
+    cw: i32,
     ch: i32,
+    /// コントロール描画中か（false の間は全クリックを TogglePause として扱う）。
+    active: bool,
+    seekable: bool,
+    /// ヒット矩形（active 時のみ有効。クライアント座標）。
+    btn: RECT,
+    seek: RECT,
+    vol: RECT,
+    drag: Drag,
 }
 
 /// 子窓 + DComp の合成オーバーレイ。`render` で描画＆Commit、`take_actions` で入力を取り出す。
@@ -44,13 +84,15 @@ pub struct DcompOverlay {
     hwnd: HWND,
     /// `GWLP_USERDATA` が指す状態。Box でヒープ固定し、struct が move してもアドレス不変。
     state: Box<WndState>,
-    // 合成スタック（drop 順は問わない。デバイスは Box/COM 参照カウント管理）。
     _d3d: windows::Win32::Graphics::Direct3D11::ID3D11Device,
     dcomp: IDCompositionDevice,
     _target: IDCompositionTarget,
     visual: IDCompositionVisual,
     surface: Option<IDCompositionSurface>,
     d2d_ctx: ID2D1DeviceContext,
+    dwrite: IDWriteFactory,
+    /// 小フォント（コントロール・時間、15px）。
+    tf_small: IDWriteTextFormat,
     cw: i32,
     ch: i32,
 }
@@ -67,6 +109,10 @@ impl DcompOverlay {
             D3D11CreateDevice, ID3D11Device, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
         };
         use windows::Win32::Graphics::DirectComposition::DCompositionCreateDevice;
+        use windows::Win32::Graphics::DirectWrite::{
+            DWriteCreateFactory, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
+        };
         use windows::Win32::Graphics::Dxgi::IDXGIDevice;
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows::Win32::UI::WindowsAndMessaging::{
@@ -85,7 +131,7 @@ impl DcompOverlay {
                 hCursor: LoadCursorW(None, IDC_ARROW)?,
                 ..Default::default()
             };
-            // 既に登録済みでも RegisterClassW は 0 を返すだけ（複数窓/再起動向け）。問題視しない。
+            // 既に登録済みでも 0 を返すだけ（複数窓/再起動向け）。問題視しない。
             let _ = RegisterClassW(&wc);
 
             let mut rc = RECT::default();
@@ -108,15 +154,14 @@ impl DcompOverlay {
                 None,
             )?;
 
-            // 窓ごとの状態を Box で確保し、ポインタを GWLP_USERDATA へ。
             let mut state = Box::new(WndState {
-                actions: Vec::new(),
-                moved: false,
+                cw,
                 ch,
+                ..Default::default()
             });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, state.as_mut() as *mut WndState as isize);
 
-            // D3D11 → DXGI → DComp / D2D。
+            // D3D11 → DXGI → DComp / D2D / DirectWrite。
             let mut d3d: Option<ID3D11Device> = None;
             D3D11CreateDevice(
                 None,
@@ -141,6 +186,17 @@ impl DcompOverlay {
             let d2d_ctx: ID2D1DeviceContext =
                 d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
 
+            let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+            let tf_small: IDWriteTextFormat = dwrite.CreateTextFormat(
+                w!("Yu Gothic UI"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                15.0,
+                w!("ja-jp"),
+            )?;
+
             let mut me = DcompOverlay {
                 hwnd,
                 state,
@@ -150,17 +206,17 @@ impl DcompOverlay {
                 visual,
                 surface: None,
                 d2d_ctx,
+                dwrite,
+                tf_small,
                 cw,
                 ch,
             };
             me.rebuild_surface()?;
-            me.render();
             Ok(me)
         }
     }
 
-    /// 親クライアントサイズの変化に合わせて子窓とサーフェスを更新する。
-    /// 位置追従は子窓なので不要（OS 任せ）。サイズだけ合わせる。
+    /// 親クライアントサイズの変化に合わせて子窓とサーフェスを更新する（位置は OS 追従＝不要）。
     pub fn resize(&mut self, w: i32, h: i32) {
         use windows::Win32::UI::WindowsAndMessaging::MoveWindow;
         let w = w.max(1);
@@ -170,6 +226,7 @@ impl DcompOverlay {
         }
         self.cw = w;
         self.ch = h;
+        self.state.cw = w;
         self.state.ch = h;
         unsafe {
             let _ = MoveWindow(self.hwnd, 0, 0, w, h, true);
@@ -177,7 +234,6 @@ impl DcompOverlay {
         if let Err(e) = self.rebuild_surface() {
             eprintln!("[dcomp] rebuild_surface 失敗: {e:#}");
         }
-        self.render();
     }
 
     /// 入力で積まれた行動を取り出す（コアが適用）。
@@ -209,15 +265,14 @@ impl DcompOverlay {
         Ok(())
     }
 
-    /// DComp サーフェスへ Direct2D で描画して Commit する。骨組みではプレースホルダ。
-    pub fn render(&mut self) {
+    /// DComp サーフェスへ Direct2D で描画して Commit する。
+    /// `active` が false の間はコントロールを描かず透明（動画素通し）。クリックは TogglePause。
+    pub fn render(&mut self, active: bool, view: &PlaybackView) {
         use windows::Win32::Foundation::POINT;
-        use windows::Win32::Graphics::Direct2D::Common::{
-            D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
-        };
+        use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT};
         use windows::Win32::Graphics::Direct2D::{
             ID2D1Bitmap1, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET,
-            D2D1_BITMAP_PROPERTIES1, D2D1_ROUNDED_RECT,
+            D2D1_BITMAP_PROPERTIES1,
         };
         use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
         use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -255,47 +310,197 @@ impl DcompOverlay {
                         return;
                     }
                 };
-            let ctx = &self.d2d_ctx;
+            let ctx = self.d2d_ctx.clone();
             ctx.SetTarget(&bitmap);
             ctx.BeginDraw();
+            // BeginDraw の offset 分だけ平行移動（サーフェスはアトラスの一部のことがある）。
+            // 以降の描画・幾何はすべてクライアント座標で行い、ヒット矩形もクライアント座標で保存する。
             ctx.SetTransform(&Matrix3x2::translation(offset.x as f32, offset.y as f32));
-            ctx.Clear(Some(&D2D1_COLOR_F {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 0.0,
-            }));
-            // プレースホルダ: 下部に半透明バー（合成と透過の在席確認用）。
-            if let Ok(brush) = ctx.CreateSolidColorBrush(
-                &D2D1_COLOR_F {
-                    r: 0.10,
-                    g: 0.10,
-                    b: 0.12,
-                    a: 0.78,
-                },
-                None,
-            ) {
-                let bar = D2D_RECT_F {
-                    left: 12.0,
-                    top: (ch - BAR_H) as f32 + 8.0,
-                    right: cw as f32 - 12.0,
-                    bottom: ch as f32 - 8.0,
-                };
-                ctx.FillRoundedRectangle(
-                    &D2D1_ROUNDED_RECT {
-                        rect: bar,
-                        radiusX: 14.0,
-                        radiusY: 14.0,
-                    },
-                    &brush,
-                );
+            ctx.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
+
+            // 既定はヒット無効化（active=false や非コントロール領域のクリックは TogglePause）。
+            self.state.active = active;
+            self.state.seekable = view.seekable;
+            self.state.cw = cw;
+            self.state.ch = ch;
+            self.state.btn = RECT::default();
+            self.state.seek = RECT::default();
+            self.state.vol = RECT::default();
+
+            if active {
+                self.draw_controller(&ctx, cw, ch, view);
             }
+
             let _ = ctx.EndDraw(None, None);
             ctx.SetTarget(None);
             let _ = surface.EndDraw();
             let _ = self.dcomp.Commit();
         }
     }
+
+    /// 下部コントローラ帯（半透明帯・シークライン・再生/一時停止・時間・音量）を描く。
+    /// 幾何・色は旧 `native_overlay::draw_controller` を踏襲。ヒット矩形を WndState に保存する。
+    unsafe fn draw_controller(&mut self, ctx: &ID2D1DeviceContext, w: i32, h: i32, v: &PlaybackView) {
+        // 半透明帯（下端いっぱい）。
+        fill_rect(
+            ctx,
+            rf(0.0, (h - BOTTOM_H) as f32, w as f32, h as f32),
+            color(0.03, 0.03, 0.05, 0.72),
+        );
+
+        // --- シークライン（フル幅・細い、上段）---
+        let sx0 = 14.0f32;
+        let sx1 = w as f32 - 14.0;
+        let sy = (h - BOTTOM_H + 13) as f32;
+        let track_h = 3.0f32;
+        let frac = if !v.seekable {
+            1.0
+        } else if v.dur > 0.0 {
+            (v.pos / v.dur).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        fill_round(ctx, rf(sx0, sy - track_h / 2.0, sx1, sy + track_h / 2.0), 1.5, color(1.0, 1.0, 1.0, 0.25));
+        let prog_col = if v.seekable {
+            color(0.92, 0.20, 0.20, 1.0)
+        } else {
+            color(0.55, 0.55, 0.60, 0.9)
+        };
+        fill_round(
+            ctx,
+            rf(sx0, sy - track_h / 2.0, (sx0 + (sx1 - sx0) * frac).max(sx0), sy + track_h / 2.0),
+            1.5,
+            prog_col,
+        );
+        if v.seekable {
+            let knob_x = sx0 + (sx1 - sx0) * frac;
+            fill_ellipse(ctx, knob_x, sy, 6.0, color(0.92, 0.20, 0.20, 1.0));
+        }
+        self.state.seek = RECT {
+            left: sx0 as i32,
+            top: (sy - 9.0) as i32,
+            right: sx1 as i32,
+            bottom: (sy + 9.0) as i32,
+        };
+
+        // --- コントロール行（下段）---
+        let cy = h - 16;
+        let fg = color(0.96, 0.96, 0.98, 1.0);
+
+        // 再生/一時停止グリフ。
+        let glyph = if v.paused { "▶" } else { "⏸" };
+        let gw = self.measure(glyph).ceil() as i32;
+        let btn = RECT {
+            left: 14,
+            top: cy - ROW_H / 2,
+            right: 14 + gw + 8,
+            bottom: cy + ROW_H / 2,
+        };
+        self.text(ctx, glyph, rf(18.0, (cy - 9) as f32, (18 + gw) as f32, (cy + 9) as f32), fg);
+        self.state.btn = btn;
+        let x = btn.right + 12;
+
+        // 時間表示（mm:ss / mm:ss）。
+        let time_str = format!("{} / {}", fmt_time(v.pos), fmt_time(v.dur));
+        let tw = self.measure(&time_str).ceil() as i32;
+        self.text(ctx, &time_str, rf(x as f32, (cy - 9) as f32, (x + tw + 4) as f32, (cy + 9) as f32), fg);
+
+        // 音量バー（右端）。
+        let xr = w - 14;
+        let vol = RECT {
+            left: xr - VOL_W,
+            top: cy - ROW_H / 2,
+            right: xr,
+            bottom: cy + ROW_H / 2,
+        };
+        let vol_frac = (v.volume / 130.0).clamp(0.0, 1.0) as f32;
+        let vcy = cy as f32;
+        fill_round(ctx, rf(vol.left as f32, vcy - 2.0, vol.right as f32, vcy + 2.0), 2.0, color(1.0, 1.0, 1.0, 0.25));
+        let vx = vol.left as f32 + VOL_W as f32 * vol_frac;
+        fill_round(ctx, rf(vol.left as f32, vcy - 2.0, vx.max(vol.left as f32), vcy + 2.0), 2.0, color(0.92, 0.92, 0.96, 1.0));
+        fill_ellipse(ctx, vx, vcy, 5.0, color(1.0, 1.0, 1.0, 1.0));
+        self.state.vol = vol;
+    }
+
+    /// 小フォントの左寄せテキストを描く。
+    unsafe fn text(&self, ctx: &ID2D1DeviceContext, s: &str, r: D2D_RECT_F, c: D2D1_COLOR_F) {
+        use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE;
+        use windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL;
+        if let Ok(b) = ctx.CreateSolidColorBrush(&c, None) {
+            let wt: Vec<u16> = s.encode_utf16().collect();
+            ctx.DrawText(&wt, &self.tf_small, &r, &b, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+        }
+    }
+
+    /// 小フォントでのテキスト幅（px）を計測する。
+    unsafe fn measure(&self, s: &str) -> f32 {
+        use windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_METRICS;
+        let wt: Vec<u16> = s.encode_utf16().collect();
+        if let Ok(layout) = self.dwrite.CreateTextLayout(&wt, &self.tf_small, 8192.0, 64.0) {
+            let mut m = DWRITE_TEXT_METRICS::default();
+            if layout.GetMetrics(&mut m).is_ok() {
+                return m.widthIncludingTrailingWhitespace;
+            }
+        }
+        s.chars().count() as f32 * 9.0
+    }
+}
+
+#[inline]
+fn color(r: f32, g: f32, b: f32, a: f32) -> D2D1_COLOR_F {
+    D2D1_COLOR_F { r, g, b, a }
+}
+
+#[inline]
+fn rf(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
+    D2D_RECT_F { left, top, right, bottom }
+}
+
+unsafe fn fill_rect(ctx: &ID2D1DeviceContext, r: D2D_RECT_F, c: D2D1_COLOR_F) {
+    if let Ok(b) = ctx.CreateSolidColorBrush(&c, None) {
+        ctx.FillRectangle(&r, &b);
+    }
+}
+
+unsafe fn fill_round(ctx: &ID2D1DeviceContext, r: D2D_RECT_F, rad: f32, c: D2D1_COLOR_F) {
+    use windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT;
+    if let Ok(b) = ctx.CreateSolidColorBrush(&c, None) {
+        ctx.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r, radiusX: rad, radiusY: rad }, &b);
+    }
+}
+
+unsafe fn fill_ellipse(ctx: &ID2D1DeviceContext, x: f32, y: f32, rad: f32, c: D2D1_COLOR_F) {
+    use windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE;
+    use windows::Win32::Graphics::Direct2D::Common::D2D_POINT_2F;
+    if let Ok(b) = ctx.CreateSolidColorBrush(&c, None) {
+        ctx.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: D2D_POINT_2F { x, y },
+                radiusX: rad,
+                radiusY: rad,
+            },
+            &b,
+        );
+    }
+}
+
+/// 秒数を mm:ss / h:mm:ss にする。
+fn fmt_time(secs: f64) -> String {
+    if !secs.is_finite() || secs < 0.0 {
+        return "--:--".to_string();
+    }
+    let t = secs as u64;
+    let (h, m, s) = (t / 3600, (t % 3600) / 60, t % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m:02}:{s:02}")
+    }
+}
+
+#[inline]
+fn in_rect(r: &RECT, x: i32, y: i32) -> bool {
+    x >= r.left && x < r.right && y >= r.top && y < r.bottom
 }
 
 /// 窓ごとの状態（GWLP_USERDATA）。null の間は触らない。
@@ -316,29 +521,76 @@ unsafe extern "system" fn wndproc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
     use windows::Win32::UI::WindowsAndMessaging::{
-        DefWindowProcW, MA_NOACTIVATE, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
+        DefWindowProcW, MA_NOACTIVATE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
+        WM_MOUSEMOVE, WM_MOUSEWHEEL,
     };
+    let lo = (lparam.0 & 0xFFFF) as i16 as i32;
+    let hi = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
     match msg {
         // この子窓はアクティブ化しない（winit 親のキーボードフォーカスを奪わない）。
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_MOUSEMOVE => {
             if let Some(s) = state_of(hwnd) {
                 s.moved = true;
+                match s.drag {
+                    Drag::Seek if s.seek.right > s.seek.left => {
+                        s.actions.push(OverlayAction::Seek(frac_x(&s.seek, lo)));
+                    }
+                    Drag::Vol if s.vol.right > s.vol.left => {
+                        s.actions.push(OverlayAction::SetVolume(frac_x(&s.vol, lo) * 130.0));
+                    }
+                    _ => {}
+                }
             }
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
-            let cy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let mut capture = false;
             if let Some(s) = state_of(hwnd) {
-                // 骨組み: バー帯以外（＝動画域）クリックは再生/一時停止トグルに変換。
-                // バー帯のコントロール割り当ては UI 移植時に追加する。
-                if cy < s.ch - BAR_H {
+                if !s.active {
+                    s.actions.push(OverlayAction::TogglePause);
+                } else if s.seekable && in_rect(&s.seek, lo, hi) {
+                    s.drag = Drag::Seek;
+                    s.actions.push(OverlayAction::Seek(frac_x(&s.seek, lo)));
+                    capture = true;
+                } else if in_rect(&s.vol, lo, hi) {
+                    s.drag = Drag::Vol;
+                    s.actions.push(OverlayAction::SetVolume(frac_x(&s.vol, lo) * 130.0));
+                    capture = true;
+                } else {
+                    // ボタン上も、バー余白も、動画域も：再生/一時停止トグル。
                     s.actions.push(OverlayAction::TogglePause);
                 }
+            }
+            if capture {
+                let _ = SetCapture(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            if let Some(s) = state_of(hwnd) {
+                s.drag = Drag::None;
+            }
+            let _ = ReleaseCapture();
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL => {
+            let delta = ((wparam.0 >> 16) & 0xFFFF) as i16;
+            if let Some(s) = state_of(hwnd) {
+                s.actions
+                    .push(OverlayAction::VolumeStep(if delta > 0 { 5.0 } else { -5.0 }));
             }
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+/// クライアント x を矩形内の割合 0.0..=1.0 に直す。
+#[inline]
+fn frac_x(r: &RECT, x: i32) -> f64 {
+    let w = (r.right - r.left).max(1) as f64;
+    ((x - r.left) as f64 / w).clamp(0.0, 1.0)
 }

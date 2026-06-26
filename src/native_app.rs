@@ -921,18 +921,26 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             // オーバーレイの操作適用・自動非表示・定期再描画。
             #[cfg(windows)]
             if _state.dcomp_overlay.is_some() {
-                // 新ホスト（子窓+DComp、骨組み）: クリック適用＋活動記録＋毎フレーム描画。
-                // 自動非表示・一覧/チャット等は UI 移植時に足す。
+                // 新ホスト（子窓+DComp）: クリック適用＋活動記録＋自動非表示＋描画。
+                use crate::dcomp_overlay::{OverlayAction, PlaybackView};
                 let actions = _state
                     .dcomp_overlay
                     .as_mut()
                     .map(|o| o.take_actions())
                     .unwrap_or_default();
                 for a in actions {
+                    let p = &_state.core.player;
                     match a {
-                        crate::dcomp_overlay::OverlayAction::TogglePause => {
-                            let p = &_state.core.player;
-                            p.set_paused(!p.paused());
+                        OverlayAction::TogglePause => p.set_paused(!p.paused()),
+                        OverlayAction::Seek(frac) => {
+                            let dur = p.duration();
+                            if p.seekable() && dur > 0.0 {
+                                p.set_time_pos(frac * dur);
+                            }
+                        }
+                        OverlayAction::SetVolume(v) => p.set_volume(v.clamp(0.0, 130.0)),
+                        OverlayAction::VolumeStep(d) => {
+                            p.set_volume((p.volume() + d).clamp(0.0, 130.0))
                         }
                     }
                     _state.last_activity = Instant::now();
@@ -945,8 +953,18 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 {
                     _state.last_activity = Instant::now();
                 }
+                // 3 秒無操作で帯を隠す（旧版と同じ。一覧/チャットは UI 移植時に条件追加）。
+                let active = _state.last_activity.elapsed() < Duration::from_secs(3);
+                let p = &_state.core.player;
+                let view = PlaybackView {
+                    paused: p.paused(),
+                    pos: p.time_pos(),
+                    dur: p.duration(),
+                    seekable: p.seekable(),
+                    volume: p.volume(),
+                };
                 if let Some(o) = _state.dcomp_overlay.as_mut() {
-                    o.render();
+                    o.render(active, &view);
                 }
             } else {
                 // クリックで溜まった操作をすべて適用（コントロール・動画クリック・一覧行）。
@@ -985,16 +1003,18 @@ impl ApplicationHandler<UserEvent> for NativeApp {
 
                 // 窓が可視の時のみ再描画。
                 _state.render_overlay(active);
+            }
 
-                // 保留中のスクリーンショット: 前面化＋再描画の反映を数フレーム待ってからキャプチャ。
-                if _state.pending_shot.is_some() {
-                    if _state.shot_delay == 0 {
-                        if let Some(reply) = _state.pending_shot.take() {
-                            let _ = reply.send(_state.capture_png());
-                        }
-                    } else {
-                        _state.shot_delay -= 1;
+            // 保留中のスクリーンショット（dcomp/旧 どちらの経路でも）: 前面化＋再描画の
+            // 反映を数フレーム待ってからキャプチャ。capture_png は画面 BitBlt なので合成方式に依らない。
+            #[cfg(windows)]
+            if _state.pending_shot.is_some() {
+                if _state.shot_delay == 0 {
+                    if let Some(reply) = _state.pending_shot.take() {
+                        let _ = reply.send(_state.capture_png());
                     }
+                } else {
+                    _state.shot_delay -= 1;
                 }
             }
             event_loop.set_control_flow(ControlFlow::WaitUntil(
