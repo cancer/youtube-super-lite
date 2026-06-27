@@ -982,6 +982,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                                 _state.core.start_resolve(u);
                             }
                         }
+                        OverlayAction::Login => {
+                            if !_state.core.auth_busy {
+                                _state.core.start_login();
+                            }
+                        }
                     }
                     _state.last_activity = Instant::now();
                 }
@@ -995,6 +1000,12 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 }
                 // 3 秒無操作で帯を隠す（旧版と同じ。一覧/チャットは UI 移植時に条件追加）。
                 let active = _state.last_activity.elapsed() < Duration::from_secs(3);
+                let logged_in = _state.core.channel.as_deref().is_some_and(|c| !c.is_empty());
+                let auth_label = if logged_in {
+                    format!("👤 {}", _state.core.channel.as_deref().unwrap_or(""))
+                } else {
+                    format!("🔑 {}", _state.core.auth_status)
+                };
                 let p = &_state.core.player;
                 let view = PlaybackView {
                     paused: p.paused(),
@@ -1006,6 +1017,10 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     is_live: _state.core.is_live,
                     quality: _state.core.quality.label().to_string(),
                     codec: _state.core.codec.label().to_string(),
+                    url_input: _state.url_input.clone(),
+                    auth_label,
+                    logged_in,
+                    title: p.media_title(),
                 };
                 if let Some(o) = _state.dcomp_overlay.as_mut() {
                     o.render(active, &view);

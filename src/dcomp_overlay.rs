@@ -47,6 +47,8 @@ pub enum OverlayAction {
     CycleQuality,
     /// コーデックを巡回（→ 同上）。
     CycleCodec,
+    /// ログイン開始（未ログイン時）。
+    Login,
 }
 
 /// 描画に必要な再生/UI 状態（コアから毎フレーム渡す）。
@@ -60,9 +62,15 @@ pub struct PlaybackView {
     pub is_live: bool,
     pub quality: String,
     pub codec: String,
+    // --- 上部バー ---
+    pub url_input: String,
+    pub auth_label: String,
+    pub logged_in: bool,
+    pub title: String,
 }
 
-/// 下部コントローラ帯の高さ・行高（旧 native_overlay と同値）。
+/// 上部バー・下部コントローラ帯の高さ・行高（旧 native_overlay と同値）。
+const TOP_H: i32 = 86;
 const BOTTOM_H: i32 = 52;
 const ROW_H: i32 = 26;
 const VOL_W: i32 = 110;
@@ -186,8 +194,9 @@ struct WndState {
     ch: i32,
     /// コントロール表示中か（false の間は全クリックを TogglePause として扱う）。
     active: bool,
-    /// コントローラ帯（この矩形内の非部品クリックは吸収＝pause を出さない）。
+    /// コントローラ帯・上部バー（この矩形内の非部品クリックは吸収＝pause を出さない）。
     panel: RECT,
+    top_panel: RECT,
     /// 帯のクリッカブル/表示部品。クリックはここを探索する。
     controls: Vec<Control>,
     drag: Drag,
@@ -491,7 +500,7 @@ impl DcompOverlay {
         let (cw, ch) = (self.cw, self.ch);
 
         // 部品を組み立てる（描画とヒットで同じ素を使う）。
-        let controls = if active {
+        let mut controls = if active {
             self.build_controls(cw, ch, view)
         } else {
             Vec::new()
@@ -501,6 +510,24 @@ impl DcompOverlay {
         } else {
             RECT::default()
         };
+        // 上部バー（タイトルが無ければ 1 行ぶん縮める）。
+        let strip_h = if view.title.is_empty() { TOP_H - ROW_H } else { TOP_H };
+        let top_panel = if active {
+            RECT { left: 0, top: 0, right: cw, bottom: strip_h }
+        } else {
+            RECT::default()
+        };
+        // 未ログイン時はログインボタン（右寄せ・ナビ行）をクリッカブル部品として追加。
+        let nav_cy = 6 + ROW_H + ROW_H / 2;
+        if active && !view.logged_in {
+            let lw = unsafe { self.measure(&view.auth_label) }.ceil() as i32;
+            controls.push(Control::Button {
+                rect: RECT { left: cw - 12 - lw - 8, top: nav_cy - ROW_H / 2, right: cw - 12, bottom: nav_cy + ROW_H / 2 },
+                label: view.auth_label.clone(),
+                col: color(1.0, 0.92, 0.55, 1.0),
+                action: OverlayAction::Login,
+            });
+        }
 
         unsafe {
             let mut offset = POINT::default();
@@ -539,9 +566,35 @@ impl DcompOverlay {
             ctx.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
 
             if active {
-                // 帯背景（半透明）→ 各部品。
                 let p = Painter { ctx: &ctx, dwrite: &self.dwrite, tf: &self.tf_small };
+                // 下部コントローラ帯の背景。
                 p.fill_rect(rf(panel.left as f32, panel.top as f32, panel.right as f32, panel.bottom as f32), color(0.03, 0.03, 0.05, 0.72));
+                // 上部バーの背景。
+                p.fill_rect(rf(0.0, 0.0, cw as f32, strip_h as f32), color(0.04, 0.04, 0.06, 0.55));
+                // URL 行（先頭）。空なら入力ガイドをグレーで。
+                let (url_txt, url_col) = if view.url_input.is_empty() {
+                    (
+                        "URL: YouTube の URL を入力して Enter（英数字キー / Ctrl+V 貼付 / Esc クリア）".to_string(),
+                        color(0.66, 0.66, 0.70, 1.0),
+                    )
+                } else {
+                    (format!("URL: {}", view.url_input), color(1.0, 1.0, 1.0, 1.0))
+                };
+                p.text(&url_txt, rf(12.0, 6.0, cw as f32 - 12.0, (6 + ROW_H) as f32), url_col);
+                // 認証ラベル（ログイン済みは右寄せテキスト。未ログインは上で Button 追加済み）。
+                if view.logged_in {
+                    let lw = self.measure(&view.auth_label);
+                    p.text(
+                        &view.auth_label,
+                        rf(cw as f32 - 12.0 - lw, (nav_cy - 9) as f32, cw as f32 - 12.0, (nav_cy + 9) as f32),
+                        color(0.70, 0.88, 1.0, 1.0),
+                    );
+                }
+                // タイトル行（あれば）。
+                if !view.title.is_empty() {
+                    p.text(&view.title, rf(12.0, (6 + ROW_H * 2) as f32, cw as f32 - 12.0, strip_h as f32), color(1.0, 1.0, 1.0, 1.0));
+                }
+                // 各部品（下部コントロール＋ログインボタン）。
                 for c in &controls {
                     c.draw(&p);
                 }
@@ -558,6 +611,7 @@ impl DcompOverlay {
         self.state.cw = cw;
         self.state.ch = ch;
         self.state.panel = panel;
+        self.state.top_panel = top_panel;
         self.state.controls = controls;
     }
 
@@ -718,8 +772,8 @@ unsafe extern "system" fn wndproc(
                             break;
                         }
                     }
-                    if !handled && !in_rect(&s.panel, lo, hi) {
-                        // どの部品にも当たらず帯の外＝動画域 → pause。帯余白は吸収（無反応）。
+                    if !handled && !in_rect(&s.panel, lo, hi) && !in_rect(&s.top_panel, lo, hi) {
+                        // どの部品にも当たらず上下バーの外＝動画域 → pause。バー余白は吸収（無反応）。
                         s.actions.push(OverlayAction::TogglePause);
                     }
                 }
