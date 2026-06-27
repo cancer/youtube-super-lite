@@ -16,6 +16,8 @@ mod clients;
 mod nsig;
 
 use anyhow::{anyhow, bail, Result};
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration as StdDuration;
 use winit::event_loop::EventLoopProxy;
@@ -35,6 +37,9 @@ pub struct Resolved {
 pub enum ResolveUpdate {
     /// 再生用のストリーム URL が解決できた（できるだけ早く送る＝即再生開始）。
     Ready(Resolved),
+    /// 予備の再生 URL（ローカル中継＝サイドカー）。`Ready`(native)と並列に用意され、
+    /// native の再生が mpv で失敗（403/開けない）したとき即座に切り替えるために控えておく。
+    Fallback(Resolved),
     /// タイトル・ライブ判定（再生開始後に後追いで届く。表示更新のみ）。
     Meta { title: Option<String>, is_live: bool },
     Error(String),
@@ -90,29 +95,161 @@ fn worker_loop(
     let mut nsig = nsig::NsigSolver::new();
     // 訪問者セッション（visitorData）。起動後 1 回だけ確立してキャッシュ（常駐の肝・M15）。
     let mut visitor: Option<String> = None;
+    // gated フォールバックで起動した rustypipe サイドカー（中継プロキシ）。次の解決時に停止する。
+    let mut current_sidecar: Option<Child> = None;
 
     while let Ok(req) = req_rx.recv() {
+        // 前回の中継プロキシ（サイドカー）を停止（同時に 1 本だけ生かす）。
+        if let Some(mut c) = current_sidecar.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
         if visitor.is_none() {
             visitor = clients::fetch_visitor_data(&http).ok();
         }
+
+        if !is_youtube_url(&req.url) {
+            // YouTube 以外は素通し（resolve_one が Ok を返す）。
+            match resolve_one(&http, &mut nsig, &req, visitor.as_deref()) {
+                Ok((resolved, title, is_live)) => {
+                    let _ = update_tx.send(ResolveUpdate::Ready(resolved));
+                    let _ = update_tx.send(ResolveUpdate::Meta { title, is_live });
+                }
+                Err(e) => {
+                    let _ = update_tx.send(ResolveUpdate::Error(e.to_string()));
+                }
+            }
+            let _ = proxy.send_event(UserEvent::Background);
+            continue;
+        }
+
+        // 並列: 先にサイドカー（別プロセス）を起動して解決を始めさせ、その間に native を解決する。
+        // native は速いが直 URL は googlevideo の制約で mpv 再生が失敗しうる。サイドカー（ローカル
+        // 中継）はそれらを吸収する確実な予備として控え、再生失敗時に即切替する。
+        // ユーザー設定（解像度/コーデック）は両経路で同一に従わせる。
+        let sc = spawn_sidecar(&req.url, &req).ok();
         match resolve_one(&http, &mut nsig, &req, visitor.as_deref()) {
             Ok((resolved, title, is_live)) => {
+                // native を即再生。サイドカー結果は Fallback として控える（再生失敗時の即切替用）。
                 let _ = update_tx.send(ResolveUpdate::Ready(resolved));
                 let _ = update_tx.send(ResolveUpdate::Meta { title, is_live });
+                if let Some((child, stdout)) = sc {
+                    if let Ok((child, fb, _t, _l)) = read_sidecar_ready(child, stdout) {
+                        current_sidecar = Some(child);
+                        let _ = update_tx.send(ResolveUpdate::Fallback(fb));
+                    }
+                }
             }
-            Err(e) => {
-                let _ = update_tx.send(ResolveUpdate::Error(e.to_string()));
-            }
+            // native 全滅（多くは匿名 bot ゲート＝gated）→ サイドカーを本命にする。
+            Err(native_err) => match sc.map(|(c, o)| read_sidecar_ready(c, o)) {
+                Some(Ok((child, resolved, title, is_live))) => {
+                    current_sidecar = Some(child);
+                    let _ = update_tx.send(ResolveUpdate::Ready(resolved));
+                    let _ = update_tx.send(ResolveUpdate::Meta { title, is_live });
+                }
+                Some(Err(side_err)) => {
+                    let _ = update_tx.send(ResolveUpdate::Error(format!(
+                        "解決失敗（native: {native_err} / sidecar: {side_err}）"
+                    )));
+                }
+                None => {
+                    let _ = update_tx.send(ResolveUpdate::Error(format!("解決失敗: {native_err}")));
+                }
+            },
         }
         // メインスレッドの poll_resolve を回すため起床させる。
         let _ = proxy.send_event(UserEvent::Background);
     }
 }
 
+/// 本体 exe と同じディレクトリに置かれた解決器サイドカーのパス。
+fn sidecar_path() -> Result<std::path::PathBuf> {
+    let exe = std::env::current_exe().map_err(|e| anyhow!("current_exe 取得失敗: {e}"))?;
+    let dir = exe.parent().ok_or_else(|| anyhow!("exe ディレクトリ不明"))?;
+    let name = if cfg!(windows) { "resolver-sidecar.exe" } else { "resolver-sidecar" };
+    Ok(dir.join(name))
+}
+
+/// rustypipe サイドカーを起動する（解決はサイドカー側が別プロセスで非同期に始める＝並列化の肝）。
+/// stdout を切り離して返し、結果は [`read_sidecar_ready`] でブロッキング受信する。
+/// ユーザー設定（解像度/コーデック）を引数で渡し、native 経路と同じ選択基準に従わせる。
+fn spawn_sidecar(url: &str, req: &ResolveRequest) -> Result<(Child, std::process::ChildStdout)> {
+    let video_id = clients::extract_video_id(url).ok_or_else(|| anyhow!("videoId 抽出失敗"))?;
+    let max_res = req.quality.height().unwrap_or(0); // 0 = 自動（無制限）
+    let codec = match req.codec {
+        Codec::H264 => "h264",
+        Codec::Vp9 => "vp9",
+        Codec::Av1 => "av1",
+        Codec::Auto => "auto",
+    };
+    let exe = sidecar_path()?;
+    let mut child = Command::new(&exe)
+        .arg(&video_id)
+        .arg(max_res.to_string())
+        .arg(codec)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| anyhow!("サイドカー起動失敗({}): {e}", exe.display()))?;
+    let stdout = child.stdout.take().ok_or_else(|| anyhow!("サイドカー stdout 取得失敗"))?;
+    Ok((child, stdout))
+}
+
+/// サイドカーの READY を待ち、ローカル中継 URL を得る。`Child`（プロキシ）は呼び出し側が
+/// 保持し、次の解決時に停止する。
+fn read_sidecar_ready(
+    mut child: Child,
+    stdout: std::process::ChildStdout,
+) -> Result<(Child, Resolved, Option<String>, bool)> {
+    let mut video = String::new();
+    let mut audio = String::new();
+    let mut title: Option<String> = None;
+    let mut is_live = false;
+    let mut err: Option<String> = None;
+    let mut ready = false;
+    // サイドカーは TITLE/IS_LIVE/PROXY_* を出して READY で配信に入る（以後 stdout には書かない）。
+    for line in BufReader::new(stdout).lines() {
+        let Ok(line) = line else { break };
+        if let Some(v) = line.strip_prefix("PROXY_VIDEO=") {
+            video = v.to_string();
+        } else if let Some(v) = line.strip_prefix("PROXY_AUDIO=") {
+            audio = v.to_string();
+        } else if let Some(v) = line.strip_prefix("TITLE=") {
+            if !v.is_empty() {
+                title = Some(v.to_string());
+            }
+        } else if let Some(v) = line.strip_prefix("IS_LIVE=") {
+            is_live = v.trim() == "true";
+        } else if let Some(v) = line.strip_prefix("ERROR=") {
+            err = Some(v.to_string());
+            break;
+        } else if line.trim() == "READY" {
+            ready = true;
+            break;
+        }
+    }
+
+    if let Some(e) = err {
+        let _ = child.kill();
+        let _ = child.wait();
+        bail!("{e}");
+    }
+    if !ready || video.is_empty() {
+        let _ = child.kill();
+        let _ = child.wait();
+        bail!("サイドカー応答不正（READY/PROXY_VIDEO なし）");
+    }
+    let resolved = Resolved {
+        video_url: video,
+        audio_url: if audio.is_empty() { None } else { Some(audio) },
+    };
+    Ok((child, resolved, title, is_live))
+}
+
 /// 1 件を解決する。`(Resolved, title, is_live)` を返す。
 fn resolve_one(
     http: &reqwest::blocking::Client,
-    nsig: &mut nsig::NsigSolver,
+    _nsig: &mut nsig::NsigSolver,
     req: &ResolveRequest,
     visitor: Option<&str>,
 ) -> Result<(Resolved, Option<String>, bool)> {
@@ -163,37 +300,14 @@ fn resolve_one(
         }
     }
 
-    // 3) 認証経路: TVHTML5 + OAuth Bearer（members/年齢制限）→ URL の n を nsig 変換（M17/M10）。
-    if let Some(token) = req.access_token.as_deref() {
-        let tv = clients::fetch_player(http, &clients::TVHTML5, &video_id, Some(token), visitor)?;
-        if tv.status == "OK" {
-            if let Some(streaming) = &tv.streaming {
-                if tv.is_live {
-                    if let Some(hls) = clients::hls_manifest(streaming) {
-                        return Ok((
-                            Resolved {
-                                video_url: hls,
-                                audio_url: None,
-                            },
-                            tv.title,
-                            true,
-                        ));
-                    }
-                }
-                let (v, a) = clients::select_streams(streaming, req.quality, req.codec)?;
-                let v = nsig.transform_url(http, &v)?;
-                let a = match a {
-                    Some(a) => Some(nsig.transform_url(http, &a)?),
-                    None => None,
-                };
-                return Ok((finalize(http, v, a)?, tv.title, tv.is_live));
-            }
-        }
-        bail!("解決失敗（認証経路）: {}", tv.status);
-    }
-
+    // 3) 認証経路(TVHTML5+Bearer)は、現行 base.js では署名(s)復号も nsig 変換も適用できず
+    //    （署名復号は未実装、nsig 抽出も VM 難読化の新 base.js で破綻）、解決できても stream が
+    //    403 になる。壊れた URL を Ok で返すと再生不可になるだけなので使わない。
+    //    gated/members 等は worker_loop が rustypipe サイドカー（解決＋ローカル中継）に
+    //    フォールバックして再生する。req.access_token は将来の認証経路用に温存。
+    let _ = &req.access_token;
     bail!(
-        "解決失敗: android_vr={} android={}（ログインで members/年齢制限に対応）",
+        "ネイティブ解決不可: android_vr={} android={}（gated はサイドカーへ）",
         vr.status,
         and.status
     )

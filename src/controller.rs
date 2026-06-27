@@ -8,6 +8,7 @@ use anyhow::Result;
 use std::sync::atomic::AtomicI64;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use winit::event_loop::EventLoopProxy;
 
 use crate::{
@@ -79,6 +80,18 @@ pub struct Controller {
     pub resolve_handle: resolve::ResolverHandle,
     pub resolve_rx: Receiver<resolve::ResolveUpdate>,
     pub resolve_busy: bool,
+    /// 自動ログイン完了待ちで解決を保留している URL（auth レース対策）。
+    /// 起動直後は silent-login が走っており tokens=None のため、ここで解決すると
+    /// 匿名扱いになり bot ゲート(LOGIN_REQUIRED)で多くの動画が再生不可になる。
+    /// ログイン確定(または失敗)時に poll_auth が取り出して解決する。
+    pub pending_resolve: Option<String>,
+    /// 並列解決の予備（ローカル中継＝サイドカー）の再生 URL。native の再生が mpv で失敗
+    /// （403/開けない）したとき即座に切り替えるために控える（[`resolve::ResolveUpdate::Fallback`]）。
+    pub pending_fallback: Option<resolve::Resolved>,
+    /// 直近の native ロード時刻。一定時間内に再生が始まらず idle なら失敗とみなす。
+    pub native_load_at: Option<Instant>,
+    /// native ロード後、再生開始 or 失敗を監視中か（フォールバック起動の対象）。
+    pub fallback_armed: bool,
     /// 常時 Some（Windows のみ。他 OS は None）。GPU 使用率を見て mpv の hwdec を切り替える。
     pub gpu_monitor: Option<gpu_usage::Monitor>,
 }
@@ -146,6 +159,10 @@ impl Controller {
             resolve_handle,
             resolve_rx,
             resolve_busy: false,
+            pending_resolve: None,
+            pending_fallback: None,
+            native_load_at: None,
+            fallback_armed: false,
             gpu_monitor: None,
         }
     }
@@ -159,17 +176,30 @@ impl Controller {
         self.current_url = url.clone();
         self.load_error = None;
         self.is_live = false; // 解決完了（poll_resolve）で確定する。
+        self.pending_resolve = None;
+        // 新しい動画。フォールバック監視状態をリセット。
+        self.pending_fallback = None;
+        self.fallback_armed = false;
+        self.native_load_at = None;
 
         // ログイン済みなら再生履歴に載せる。CLI 引数経由の起動直後は auto-login が
         // 完了する前にここに来るため tokens=None になりがちで、その場合は
-        // poll_auth で LoggedIn を受け取った時点で改めて起動する。
+        // poll_auth で LoggedIn を受け取った時点で履歴に載せ直す。
         self.start_mark_watched_if_logged_in();
 
-        if resolve::is_youtube_url(&url) {
-            self.start_resolve(url);
-        } else {
+        if !resolve::is_youtube_url(&url) {
             // YouTube 以外の URL（直リンク等）はそのまま mpv に渡す。
             self.mpv_loadfile(&url, None, None);
+            return;
+        }
+
+        // 自動ログイン中（tokens 未確定）は解決を保留する。ここで匿名解決すると
+        // bot ゲート(LOGIN_REQUIRED)で members/年齢制限はもちろん、多くの通常動画まで
+        // 再生不可になる。ログイン確定後に access_token 付きで解決すれば回避できる。
+        if self.tokens.is_none() && self.auth_busy {
+            self.pending_resolve = Some(url);
+        } else {
+            self.start_resolve(url);
         }
     }
 
@@ -213,6 +243,14 @@ impl Controller {
                 resolve::ResolveUpdate::Ready(r) => {
                     // URL が取れ次第すぐ再生（タイトルは後追いの Meta で反映）。
                     self.mpv_loadfile(&r.video_url, r.audio_url.as_deref(), None);
+                    // この再生が mpv で失敗したら予備（Fallback）へ切替えるため監視を始める。
+                    self.native_load_at = Some(Instant::now());
+                    self.fallback_armed = true;
+                    self.pending_fallback = None;
+                }
+                resolve::ResolveUpdate::Fallback(r) => {
+                    // 並列に用意された予備（ローカル中継）。再生失敗時まで控える。
+                    self.pending_fallback = Some(r);
                 }
                 resolve::ResolveUpdate::Meta { title, is_live } => {
                     self.resolve_busy = false;
@@ -226,6 +264,33 @@ impl Controller {
                     self.load_error = Some(e.clone());
                     eprintln!("resolve failed: {e}");
                 }
+            }
+        }
+    }
+
+    /// native 再生が mpv で失敗（403/開けない）していないか監視し、失敗していれば並列に用意した
+    /// 予備（ローカル中継＝サイドカー）へ即切替する。メインループから毎ティック呼ぶ。
+    pub fn check_playback_fallback(&mut self) {
+        if !self.fallback_armed {
+            return;
+        }
+        // 再生が始まっていれば（time-pos が進めば）監視終了＝native 成功。
+        if self.player.time_pos() > 0.5 {
+            self.fallback_armed = false;
+            return;
+        }
+        // ロード直後はバッファリング/起動の猶予を与える。
+        match self.native_load_at {
+            Some(at) if at.elapsed() >= Duration::from_secs(3) => {}
+            _ => return,
+        }
+        // ファイル未ロードのまま idle = native はそのストリームを開けなかった（403 等）。
+        // 予備が届いていれば中継へ切替える（届くまでは待つ）。
+        if self.player.idle_active() {
+            if let Some(fb) = self.pending_fallback.take() {
+                eprintln!("[fallback] native 再生失敗 → ローカル中継(サイドカー)へ切替");
+                self.fallback_armed = false;
+                self.mpv_loadfile(&fb.video_url, fb.audio_url.as_deref(), None);
             }
         }
     }
@@ -258,6 +323,10 @@ impl Controller {
                     };
                     // CLI 引数経由で既に load() を通った動画がここで履歴に載る。
                     self.start_mark_watched_if_logged_in();
+                    // ログイン待ちで保留していた動画を、access_token 付きで解決開始する。
+                    if let Some(url) = self.pending_resolve.take() {
+                        self.start_resolve(url);
+                    }
                 }
                 AuthMsg::Like { ok, msg, tokens } => {
                     if let Some(t) = tokens {
@@ -270,6 +339,10 @@ impl Controller {
                 AuthMsg::Failed(e) => {
                     self.auth_busy = false;
                     self.auth_status = format!("エラー: {e}");
+                    // ログインに失敗しても、保留中の動画は匿名で解決を試みる（最善努力）。
+                    if let Some(url) = self.pending_resolve.take() {
+                        self.start_resolve(url);
+                    }
                 }
             }
         }
