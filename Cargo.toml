@@ -61,6 +61,12 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Imaging",
     "Win32_Graphics_Dxgi_Common",
+    # オーバーレイ再設計（子窓 + DirectComposition）: mpv の D3D11 flip-model swapchain 上に
+    # DComp で per-pixel alpha の UI を子窓として重ねる。D3D11→DXGI→DComp/D2D デバイスを使う。
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
     # ネイティブ版 URL 欄の貼り付け（Ctrl+V でクリップボードのテキストを取得）。
     "Win32_System_DataExchange",
     "Win32_System_Ole",
