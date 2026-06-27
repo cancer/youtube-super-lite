@@ -157,7 +157,9 @@ fn parse_args() -> Result<CliArgs> {
     let mut url: Option<String> = None;
     let mut volume: Option<f64> = None;
     let mut enable_dev_tools = false;
-    let mut dcomp = false;
+    // 既定で新オーバーレイ（子窓 + DirectComposition）。GUI 起動（引数なし）でも新版が出る。
+    // 旧 ULW 版は --legacy で使う（パリティ確認用の暫定フォールバック）。
+    let mut dcomp = true;
 
     let parse_volume = |s: &str| -> Result<f64> {
         let v: f64 = s
@@ -177,8 +179,10 @@ fn parse_args() -> Result<CliArgs> {
             }
             // 検証用ローカル HTTP（スクショ/操作注入）を有効化。
             "--enable-dev-tools" => enable_dev_tools = true,
-            // 新オーバーレイ（子窓 + DirectComposition）を使う暫定トグル（移行中）。
+            // 新オーバーレイ（子窓 + DirectComposition）を明示有効化（既定で有効。互換のため受理）。
             "--dcomp" => dcomp = true,
+            // 旧 ULW オーバーレイを使う（移行中の暫定フォールバック）。
+            "--legacy" => dcomp = false,
             // 旧 egui 版のフラグ。互換のため受理するが無視する（現在は常にネイティブ版）。
             "--native" => {}
             // 初期音量（デバッグ用。例: --volume 0 で無音起動）。`--volume=0` 形式も可。

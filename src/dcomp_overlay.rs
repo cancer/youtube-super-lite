@@ -67,7 +67,7 @@ const BOTTOM_H: i32 = 52;
 const ROW_H: i32 = 26;
 const VOL_W: i32 = 110;
 
-#[derive(Default, Clone, Copy, PartialEq)]
+#[derive(Default, Clone, Copy, PartialEq, Debug)]
 enum Drag {
     #[default]
     None,
@@ -700,7 +700,7 @@ unsafe extern "system" fn wndproc(
                     // 帯非表示中は全面が動画。クリックで pause（同時に活動として帯が出る）。
                     s.actions.push(OverlayAction::TogglePause);
                 } else {
-                    // 部品を探索（上に積んだ順＝後勝ちにしたいなら rev。今は重なりなし）。
+                    // 部品を探索（重なりなし。最初に当たったものを採用）。
                     let mut handled = false;
                     for c in &s.controls {
                         if let Some(hit) = c.press(lo, hi) {
@@ -718,11 +718,9 @@ unsafe extern "system" fn wndproc(
                             break;
                         }
                     }
-                    if !handled {
-                        // どの部品にも当たらなかった: 帯の中なら吸収、外（動画域）なら pause。
-                        if !in_rect(&s.panel, lo, hi) {
-                            s.actions.push(OverlayAction::TogglePause);
-                        }
+                    if !handled && !in_rect(&s.panel, lo, hi) {
+                        // どの部品にも当たらず帯の外＝動画域 → pause。帯余白は吸収（無反応）。
+                        s.actions.push(OverlayAction::TogglePause);
                     }
                 }
             }
