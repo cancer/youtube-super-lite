@@ -1083,7 +1083,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                                     }
                                 }
                             }
-                            DLine { author: m.author.clone(), segs }
+                            DLine { kind: m.kind, author: m.author.clone(), segs }
                         })
                         .collect()
                 } else {

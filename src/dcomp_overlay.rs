@@ -67,18 +67,96 @@ pub enum OverlayAction {
 /// チャット行のセグメント（テキスト or インライン絵文字画像）。
 pub enum ChatSeg {
     Text(String),
-    /// `url` は 2e-2（インライン絵文字画像）で使用予定。
-    Emoji {
-        #[allow(dead_code)]
-        url: String,
-        alt: String,
-    },
+    Emoji { url: String, alt: String },
 }
 
-/// チャット 1 行（投稿者＋本文セグメント列）。
+/// チャット 1 行（投稿者種別＋投稿者＋本文セグメント列）。
 pub struct ChatLine {
+    pub kind: crate::chat::AuthorKind,
     pub author: String,
     pub segs: Vec<ChatSeg>,
+}
+
+/// 折返し描画用のトークン（色付きテキスト or 絵文字画像）。
+enum ChatTok {
+    Text(String, D2D1_COLOR_F),
+    Emoji { url: String, alt: String },
+}
+
+/// 著者種別ごとの強調色とバッジ記号（Normal は通常色・バッジ無し）。旧 native_overlay と同値。
+fn author_accent(kind: crate::chat::AuthorKind) -> Option<(D2D1_COLOR_F, &'static str)> {
+    use crate::chat::AuthorKind::*;
+    match kind {
+        Owner => Some((color(1.0, 0.80, 0.25, 1.0), "👑 ")),
+        Moderator => Some((color(0.42, 0.70, 1.0, 1.0), "🔧 ")),
+        Member => Some((color(0.45, 0.85, 0.5, 1.0), "★ ")),
+        Verified => Some((color(0.75, 0.75, 0.8, 1.0), "✔ ")),
+        Normal => None,
+    }
+}
+
+/// テキストを色付きトークンへ分解（ASCII 連続=1語、空白=独立、非ASCII=1文字＝文字単位折返し可）。
+fn push_text_tokens(out: &mut Vec<ChatTok>, t: &str, c: D2D1_COLOR_F) {
+    let mut cur = String::new();
+    for ch in t.chars() {
+        if ch == ' ' {
+            if !cur.is_empty() {
+                out.push(ChatTok::Text(std::mem::take(&mut cur), c));
+            }
+            out.push(ChatTok::Text(" ".to_string(), c));
+        } else if ch.is_ascii() && !ch.is_control() {
+            cur.push(ch);
+        } else if !ch.is_control() {
+            if !cur.is_empty() {
+                out.push(ChatTok::Text(std::mem::take(&mut cur), c));
+            }
+            out.push(ChatTok::Text(ch.to_string(), c));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(ChatTok::Text(cur, c));
+    }
+}
+
+/// チャット 1 行をトークン列にする（著者種別でバッジ＋名前を強調色に）。
+fn tokenize_line(line: &ChatLine, normal: D2D1_COLOR_F) -> Vec<ChatTok> {
+    let mut out: Vec<ChatTok> = Vec::new();
+    let accent = author_accent(line.kind);
+    let author_col = accent.map(|(c, _)| c).unwrap_or(normal);
+    if let Some((_, badge)) = accent {
+        push_text_tokens(&mut out, badge, author_col);
+    }
+    push_text_tokens(&mut out, &format!("{}: ", line.author), author_col);
+    for seg in &line.segs {
+        match seg {
+            ChatSeg::Text(t) => push_text_tokens(&mut out, t, normal),
+            ChatSeg::Emoji { url, alt } => out.push(ChatTok::Emoji { url: url.clone(), alt: alt.clone() }),
+        }
+    }
+    out
+}
+
+/// トークン幅（px）。Emoji は em+2。
+fn chat_tok_width(t: &ChatTok, em: f32, measure: &impl Fn(&str) -> f32) -> f32 {
+    match t {
+        ChatTok::Text(s, _) => measure(s),
+        ChatTok::Emoji { .. } => em + 2.0,
+    }
+}
+
+/// 与えた幅で折返したときの行数（描画しない。tail 算出用）。
+fn chat_line_count(toks: &[ChatTok], em: f32, left: f32, right: f32, measure: &impl Fn(&str) -> f32) -> usize {
+    let mut cx = left;
+    let mut lines = 1usize;
+    for t in toks {
+        let w = chat_tok_width(t, em, measure);
+        if cx > left && cx + w > right {
+            lines += 1;
+            cx = left;
+        }
+        cx += w;
+    }
+    lines
 }
 
 /// 一覧のソースタブ。
@@ -597,6 +675,20 @@ impl DcompOverlay {
         } else {
             RECT::default()
         };
+        // チャット表示中はインライン絵文字を（ディスクキャッシュ済みのみ）先にデコードしておく。
+        if chat_panel.right > chat_panel.left {
+            let urls: Vec<String> = view
+                .chat_lines
+                .iter()
+                .flat_map(|l| {
+                    l.segs.iter().filter_map(|s| match s {
+                        ChatSeg::Emoji { url, .. } if !url.is_empty() => Some(url.clone()),
+                        _ => None,
+                    })
+                })
+                .collect();
+            self.ensure_thumbs(&urls);
+        }
 
         if view.list_open {
             // 一覧モード: 全面パネル（余白クリックは吸収）。行クリックは wndproc が PlayIndex 化。
@@ -751,30 +843,73 @@ impl DcompOverlay {
             }
 
             // チャットパネル（一覧以外で chat_open のとき。active と無関係に出す）。
+            // テキストは語/文字単位で手動折返し、絵文字はインライン画像（未デコード時は alt）。
             if chat_panel.right > chat_panel.left {
+                use windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_LINEAR;
                 let (px, ptop, pbot) = (chat_panel.left as f32, chat_panel.top as f32, chat_panel.bottom as f32);
                 p.fill_rect(rf(px, ptop, cw as f32, pbot), color(0.05, 0.05, 0.07, 0.82));
                 p.text("コメント", rf(px + 10.0, ptop + 2.0, cw as f32 - 10.0, ptop + 24.0), color(0.70, 0.70, 0.75, 1.0));
+
+                let normal = color(0.90, 0.90, 0.95, 1.0);
+                let left = px + 10.0;
+                let right_lim = cw as f32 - 10.0;
+                let fs = 15.0f32; // tf_small のサイズ。
+                let line_h = (fs * 1.6).max(fs + 8.0);
+                let em = fs * 1.5;
                 let body_top = ptop + 28.0;
-                let line_h = 22.0f32;
+                let avail_h = pbot - body_top - 4.0;
                 let n = view.chat_lines.len();
                 let end = n.saturating_sub(view.chat_scroll).max(if n > 0 { 1 } else { 0 });
-                let visible = (((pbot - body_top - 4.0) / line_h).max(1.0)) as usize;
-                let start = end.saturating_sub(visible);
+                let measure = |s: &str| self.measure(s);
+
+                // パス1: end から折返し行数を数え、画面に収まる開始 index を決める。
+                let mut acc_lines = 0usize;
+                let mut start = end;
+                for i in (0..end).rev() {
+                    let toks = tokenize_line(&view.chat_lines[i], normal);
+                    let lc = chat_line_count(&toks, em, left, right_lim, &measure);
+                    if start != end && (acc_lines + lc) as f32 * line_h > avail_h {
+                        break;
+                    }
+                    acc_lines += lc;
+                    start = i;
+                    if acc_lines as f32 * line_h >= avail_h {
+                        break;
+                    }
+                }
+
+                // パス2: start から手動ワードラップで描画。
                 let mut y = body_top;
-                for line in &view.chat_lines[start..end] {
-                    // 2e-1: テキスト化（絵文字は alt）。インライン画像/折返しは後続。
-                    let body: String = line
-                        .segs
-                        .iter()
-                        .map(|s| match s {
-                            ChatSeg::Text(t) => t.as_str(),
-                            ChatSeg::Emoji { alt, .. } => alt.as_str(),
-                        })
-                        .collect();
-                    let full = format!("{}: {}", line.author, body);
-                    p.text_clip(&full, rf(px + 10.0, y, cw as f32 - 10.0, y + line_h), color(0.90, 0.90, 0.95, 1.0));
-                    y += line_h;
+                'outer: for line in &view.chat_lines[start..end] {
+                    let toks = tokenize_line(line, normal);
+                    let mut cx = left;
+                    let mut ln = 0usize;
+                    for t in &toks {
+                        let tw = chat_tok_width(t, em, &measure);
+                        if cx > left && cx + tw > right_lim {
+                            ln += 1;
+                            cx = left;
+                        }
+                        let ty = y + ln as f32 * line_h;
+                        if ty >= pbot {
+                            break 'outer;
+                        }
+                        match t {
+                            ChatTok::Text(s, tc) => {
+                                p.text_clip(s, rf(cx, ty, right_lim, ty + line_h), *tc);
+                            }
+                            ChatTok::Emoji { url, alt } => {
+                                if let Some(bmp) = self.thumb_cache.get(url) {
+                                    let top = ty + (line_h - em) / 2.0;
+                                    ctx.DrawBitmap(bmp, Some(&rf(cx, top, cx + em, top + em)), 1.0, D2D1_INTERPOLATION_MODE_LINEAR, None, None);
+                                } else {
+                                    p.text_clip(alt, rf(cx, ty, right_lim, ty + line_h), normal);
+                                }
+                            }
+                        }
+                        cx += tw;
+                    }
+                    y += (ln + 1) as f32 * line_h;
                     if y >= pbot {
                         break;
                     }

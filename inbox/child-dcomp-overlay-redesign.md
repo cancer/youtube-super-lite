@@ -83,7 +83,7 @@ mpv テストパターン(`av://lavfi:testsrc`)を親窓に埋め込み、`WS_CH
   - ✅ 2b コントローラ帯の残りボタン: 汎用 `Control::Button`（フラットテキスト）を追加し、👍Like・🔊/🔇ミュート・コーデック巡回・画質巡回・ライブ最新（is_live 時は時間の代わり）を実装。`PlaybackView` に muted/is_live/quality/codec を追加、native_app で各アクションを適用。検証(devtools): 全ボタン描画（egui 踏襲レイアウト一致）、画質click=巡回(自動→2160p)、🔊click=mute反転。
   - ✅ 2c 上部バー: URL 行（入力中テキスト/ガイド表示）・タイトル行・認証ラベル（ログイン済=右寄せテキスト / 未ログイン=🔑ログインボタン→Login アクション）。top_panel を追加しクリック吸収（pause を出さない）。PlaybackView に url_input/auth_label/logged_in/title 追加、native_app で Login 適用。実 YouTube スクショで URL/タイトル/認証/下部帯の同時表示を確認。
   - ✅ 2d 一覧: 全面パネル＋ヘッダ＋行＋選択ハイライト、上部ナビタブ（おすすめ/再生リスト/登録/履歴→OpenList）、行クリック→PlayIndex、ホイールスクロール（ListScroll）、✕閉じる（CloseList）、**サムネ画像**（WIC デコード→ID2D1Bitmap1 キャッシュ→DrawBitmap、16:9・行左。旧 draw_list 同等）。検証(devtools): おすすめタブで list_open=true、✕で list_open=false。サムネ/ホイールは GUI 確認（dcomp 経路の自動検証は裏窓キャプチャ等で murky）。
-  - 🔄 2e チャット: ✅2e-1（💬トグル→ToggleChat＋mpv 右マージンで左右分割、右パネル＋「コメント」ヘッダ＋行(author:本文、絵文字は alt テキスト)、最新が下、ホイールで ChatScroll）。ビルド警告ゼロ。自動検証は chat データ不可（dQw4 はチャット無し・ライブは解決失敗）のため GUI 確認。⬜2e-2 インライン絵文字画像（ChatSeg::Emoji.url／WIC）＋手動折返し。⬜2e-3 幅ドラッグ＋文字サイズ(A-/A+)。
+  - 🔄 2e チャット: ✅2e-1（💬トグル→ToggleChat＋mpv 右マージンで左右分割、右パネル＋「コメント」ヘッダ＋行(author:本文、絵文字は alt テキスト)、最新が下、ホイールで ChatScroll）。ビルド警告ゼロ。自動検証は chat データ不可（dQw4 はチャット無し・ライブは解決失敗）のため GUI 確認。✅2e-2 インライン絵文字画像（WIC→thumb_cache→DrawBitmap）＋手動折返し（語/文字単位・2パスで最新を下）＋著者バッジ/色（Owner/Mod/Member/Verified）。新コード警告ゼロ。GUI 確認（chat データ入手不可で自動検証不可）。⬜2e-3 幅ドラッグ＋文字サイズ(A-/A+)。
   - 別件保留: 前方シーク後の再生凍結（解決器の range 対応待ち。UI 層は正しい）。
 - ⬜ 手順3 以降（下記）。
 
