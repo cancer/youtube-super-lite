@@ -58,6 +58,27 @@ pub enum OverlayAction {
     CloseList,
     /// 一覧をスクロール（選択を ± 行動かす。ホイール）。
     ListScroll(i32),
+    /// チャットパネルの表示トグル。
+    ToggleChat,
+    /// チャットのスクロール（+ で過去へ、- で最新へ。メッセージ数）。
+    ChatScroll(i32),
+}
+
+/// チャット行のセグメント（テキスト or インライン絵文字画像）。
+pub enum ChatSeg {
+    Text(String),
+    /// `url` は 2e-2（インライン絵文字画像）で使用予定。
+    Emoji {
+        #[allow(dead_code)]
+        url: String,
+        alt: String,
+    },
+}
+
+/// チャット 1 行（投稿者＋本文セグメント列）。
+pub struct ChatLine {
+    pub author: String,
+    pub segs: Vec<ChatSeg>,
 }
 
 /// 一覧のソースタブ。
@@ -92,6 +113,12 @@ pub struct PlaybackView {
     pub list_thumbs: Vec<String>,
     pub list_sel: usize,
     pub list_header: String,
+    // --- チャット ---
+    pub chat_available: bool,
+    pub chat_open: bool,
+    pub chat_lines: Vec<ChatLine>,
+    pub chat_scroll: usize,
+    pub chat_width_ratio: f32,
 }
 
 /// 上部バー・下部コントローラ帯の高さ・行高（旧 native_overlay と同値）。
@@ -228,6 +255,8 @@ struct WndState {
     list_row_h: i32,
     list_first: usize,
     list_count: usize,
+    /// チャットパネル矩形（ホイールでのスクロール判定用）。
+    chat_panel: RECT,
     /// 帯のクリッカブル/表示部品。クリックはここを探索する。
     controls: Vec<Control>,
     drag: Drag,
@@ -488,6 +517,18 @@ impl DcompOverlay {
         let like = "👍".to_string();
         let lw = unsafe { self.measure(&like) }.ceil() as i32;
         controls.push(Control::Button { rect: row(x, x + lw + 8), label: like, col: fg, action: OverlayAction::Like });
+        x += lw + 8 + 10;
+
+        // 💬 チャット（接続中 or メッセージがある時のみ）。
+        if v.chat_available {
+            let (label, col) = if v.chat_open {
+                ("💬 非表示".to_string(), color(0.55, 0.80, 1.0, 1.0))
+            } else {
+                ("💬 チャット".to_string(), fg)
+            };
+            let cw_ = unsafe { self.measure(&label) }.ceil() as i32;
+            controls.push(Control::Button { rect: row(x, x + cw_ + 8), label, col, action: OverlayAction::ToggleChat });
+        }
 
         // --- 右フロー（右→左）---
         let mut xr = w - 14;
@@ -543,6 +584,19 @@ impl DcompOverlay {
         let mut panel = RECT::default();
         let mut top_panel = RECT::default();
         let (mut list_first, mut list_count) = (0usize, 0usize);
+
+        // チャットパネル（一覧表示中以外で、チャット表示中なら右に出す。active と無関係）。
+        let chat_panel = if view.chat_open && !view.list_open {
+            let pw = (cw as f32 * view.chat_width_ratio.clamp(0.15, 0.6)) as i32;
+            let (ptop, pbot) = (TOP_H + 4, ch - BOTTOM_H - 4);
+            if pbot > ptop + 40 {
+                RECT { left: cw - pw, top: ptop, right: cw, bottom: pbot }
+            } else {
+                RECT::default()
+            }
+        } else {
+            RECT::default()
+        };
 
         if view.list_open {
             // 一覧モード: 全面パネル（余白クリックは吸収）。行クリックは wndproc が PlayIndex 化。
@@ -696,6 +750,37 @@ impl DcompOverlay {
                 }
             }
 
+            // チャットパネル（一覧以外で chat_open のとき。active と無関係に出す）。
+            if chat_panel.right > chat_panel.left {
+                let (px, ptop, pbot) = (chat_panel.left as f32, chat_panel.top as f32, chat_panel.bottom as f32);
+                p.fill_rect(rf(px, ptop, cw as f32, pbot), color(0.05, 0.05, 0.07, 0.82));
+                p.text("コメント", rf(px + 10.0, ptop + 2.0, cw as f32 - 10.0, ptop + 24.0), color(0.70, 0.70, 0.75, 1.0));
+                let body_top = ptop + 28.0;
+                let line_h = 22.0f32;
+                let n = view.chat_lines.len();
+                let end = n.saturating_sub(view.chat_scroll).max(if n > 0 { 1 } else { 0 });
+                let visible = (((pbot - body_top - 4.0) / line_h).max(1.0)) as usize;
+                let start = end.saturating_sub(visible);
+                let mut y = body_top;
+                for line in &view.chat_lines[start..end] {
+                    // 2e-1: テキスト化（絵文字は alt）。インライン画像/折返しは後続。
+                    let body: String = line
+                        .segs
+                        .iter()
+                        .map(|s| match s {
+                            ChatSeg::Text(t) => t.as_str(),
+                            ChatSeg::Emoji { alt, .. } => alt.as_str(),
+                        })
+                        .collect();
+                    let full = format!("{}: {}", line.author, body);
+                    p.text_clip(&full, rf(px + 10.0, y, cw as f32 - 10.0, y + line_h), color(0.90, 0.90, 0.95, 1.0));
+                    y += line_h;
+                    if y >= pbot {
+                        break;
+                    }
+                }
+            }
+
             let _ = ctx.EndDraw(None, None);
             ctx.SetTarget(None);
             let _ = surface.EndDraw();
@@ -714,6 +799,7 @@ impl DcompOverlay {
         self.state.list_row_h = row_h;
         self.state.list_first = list_first;
         self.state.list_count = list_count;
+        self.state.chat_panel = chat_panel;
     }
 
     /// 表示中サムネ URL のうち未キャッシュのものを、ディスクキャッシュ済みなら WIC デコードして
@@ -807,6 +893,16 @@ impl<'a> Painter<'a> {
         if let Ok(b) = self.ctx.CreateSolidColorBrush(&c, None) {
             let wt: Vec<u16> = s.encode_utf16().collect();
             self.ctx.DrawText(&wt, self.tf, &r, &b, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+        }
+    }
+
+    /// 矩形でクリップするテキスト（チャット行の縦/横はみ出し防止）。
+    unsafe fn text_clip(&self, s: &str, r: D2D_RECT_F, c: D2D1_COLOR_F) {
+        use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_CLIP;
+        use windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL;
+        if let Ok(b) = self.ctx.CreateSolidColorBrush(&c, None) {
+            let wt: Vec<u16> = s.encode_utf16().collect();
+            self.ctx.DrawText(&wt, self.tf, &r, &b, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
         }
     }
 }
@@ -950,9 +1046,20 @@ unsafe extern "system" fn wndproc(
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {
+            // ホイール座標はスクリーン。チャットパネル上か判定するためクライアントへ変換。
+            use windows::Win32::Foundation::POINT;
+            use windows::Win32::Graphics::Gdi::ScreenToClient;
+            let sx = (lparam.0 & 0xFFFF) as i16 as i32;
+            let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let mut pt = POINT { x: sx, y: sy };
+            let _ = ScreenToClient(hwnd, &mut pt);
             let delta = ((wparam.0 >> 16) & 0xFFFF) as i16;
             if let Some(s) = state_of(hwnd) {
-                if s.list_open {
+                let over_chat = s.chat_panel.right > s.chat_panel.left && in_rect(&s.chat_panel, pt.x, pt.y);
+                if over_chat {
+                    // 上スクロール(delta>0)=過去へ(+)、下=最新へ(-)。1 ノッチ 3 メッセージ。
+                    s.actions.push(OverlayAction::ChatScroll(if delta > 0 { 3 } else { -3 }));
+                } else if s.list_open {
                     // 一覧表示中はホイールで選択を上下（3 行/ノッチ）。上=過去方向(-)。
                     s.actions.push(OverlayAction::ListScroll(if delta > 0 { -3 } else { 3 }));
                 } else {

@@ -1008,6 +1008,19 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                                 _state.list_sel = sel as usize;
                             }
                         }
+                        OverlayAction::ToggleChat => {
+                            _state.chat_open = !_state.chat_open;
+                            if _state.chat_open {
+                                _state.chat_scroll = 0;
+                            }
+                            let m = if _state.chat_open { _state.chat_width_ratio } else { 0.0 };
+                            _state.core.player.set_video_margin_right(m as f64);
+                        }
+                        OverlayAction::ChatScroll(d) => {
+                            let max = _state.core.chat_messages.len().saturating_sub(1);
+                            _state.chat_scroll =
+                                ((_state.chat_scroll as i32 + d).max(0) as usize).min(max);
+                        }
                     }
                     _state.last_activity = Instant::now();
                 }
@@ -1021,7 +1034,9 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 }
                 // 3 秒無操作で帯を隠す（旧版と同じ。一覧/チャットは UI 移植時に条件追加）。
                 let list_open = _state.list_open;
-                let active = list_open || _state.last_activity.elapsed() < Duration::from_secs(3);
+                let active = list_open
+                    || _state.chat_open
+                    || _state.last_activity.elapsed() < Duration::from_secs(3);
                 let logged_in = _state.core.channel.as_deref().is_some_and(|c| !c.is_empty());
                 let auth_label = if logged_in {
                     format!("👤 {}", _state.core.channel.as_deref().unwrap_or(""))
@@ -1041,6 +1056,39 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     } else {
                         (String::new(), Vec::new(), Vec::new())
                     };
+                // チャット行（dcomp 用に整形。連続テキストは 1 セグメントに統合）。
+                let chat_open = _state.chat_open;
+                let chat_available = !_state.core.chat_status.is_empty();
+                let chat_scroll = _state.chat_scroll;
+                let chat_width_ratio = _state.chat_width_ratio;
+                let chat_lines: Vec<crate::dcomp_overlay::ChatLine> = if chat_open {
+                    use crate::dcomp_overlay::{ChatLine as DLine, ChatSeg as DSeg};
+                    _state
+                        .core
+                        .chat_messages
+                        .iter()
+                        .map(|m| {
+                            let mut segs: Vec<DSeg> = Vec::new();
+                            for r in &m.runs {
+                                match r {
+                                    ChatRun::Text(t) => {
+                                        if let Some(DSeg::Text(last)) = segs.last_mut() {
+                                            last.push_str(t);
+                                        } else {
+                                            segs.push(DSeg::Text(t.clone()));
+                                        }
+                                    }
+                                    ChatRun::Image { alt, url } => {
+                                        segs.push(DSeg::Emoji { url: url.clone(), alt: alt.clone() })
+                                    }
+                                }
+                            }
+                            DLine { author: m.author.clone(), segs }
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 let p = &_state.core.player;
                 let view = PlaybackView {
                     paused: p.paused(),
@@ -1062,6 +1110,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     list_thumbs,
                     list_sel,
                     list_header,
+                    chat_available,
+                    chat_open,
+                    chat_lines,
+                    chat_scroll,
+                    chat_width_ratio,
                 };
                 if let Some(o) = _state.dcomp_overlay.as_mut() {
                     o.render(active, &view);
