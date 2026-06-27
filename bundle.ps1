@@ -1,4 +1,4 @@
-# 配布用バンドル作成（Windows / native 版）。
+﻿# 配布用バンドル作成（Windows / native 版）。
 # release ビルド → 実行に必要なファイルを dist\youtube-super-lite\ にまとめ、zip 化する。
 #
 # 使い方:
@@ -25,8 +25,9 @@ $stage = Join-Path $dist $name
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-# 実行に必要なファイル（exe・libmpv・yt-dlp）。
-$files = @("$name.exe", 'libmpv-2.dll', 'yt-dlp.exe')
+# 実行に必要なファイル（本体 exe・再生エンジン libmpv・解決サイドカー）。
+# URL 解決は native InnerTube ＋ resolver-sidecar.exe（本体が spawn）に移行済みで yt-dlp は不要。
+$files = @("$name.exe", 'resolver-sidecar.exe', 'libmpv-2.dll')
 foreach ($f in $files) {
     $src = Join-Path $rel $f
     if (Test-Path $src) { Copy-Item $src $stage -Force }
@@ -42,8 +43,8 @@ YouTube Super Lite (Windows / native)
 
 同梱物:
   youtube-super-lite.exe … 本体
+  resolver-sidecar.exe   … YouTube ストリーム解決のサイドカー（本体が必要時に起動）
   libmpv-2.dll           … 再生エンジン (mpv)
-  yt-dlp.exe             … YouTube ストリーム解決
 
 操作・ログイン設定は README を参照:
   https://github.com/cancer/youtube-super-lite
