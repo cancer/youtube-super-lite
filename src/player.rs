@@ -29,6 +29,13 @@ impl Player {
             // 併せて初回のキャッシュ充填待ちで一時停止しない（即再生開始）。
             let _ = init.set_property("demuxer-lavf-o", "live_start_index=-1");
             let _ = init.set_property("cache-pause-initial", false);
+            // シーク再開を速く: 映像+別音声(audio-file)の2ストリーム構成では、シーク先が
+            // demuxer キャッシュ内なら再取得せず即シークできる。キャッシュをシーク可能に強制し、
+            // 前方・後方とも広く保持して「先読み済み範囲のシーク」を即時化する（range 再取得=数秒待ちを回避）。
+            let _ = init.set_property("cache", "yes");
+            let _ = init.set_property("demuxer-seekable-cache", "yes");
+            let _ = init.set_property("demuxer-max-bytes", "256MiB");
+            let _ = init.set_property("demuxer-max-back-bytes", "128MiB");
             // hwdec は mpv 既定のまま（明示設定しない）。
             if verbose {
                 init.set_property("terminal", true)?;
