@@ -53,7 +53,10 @@ impl Player {
         self.mpv.get_property("time-pos").unwrap_or(0.0)
     }
     pub fn set_time_pos(&self, t: f64) {
-        let _ = self.mpv.set_property("time-pos", t);
+        // time-pos プロパティ設定だと、YouTube の映像+別音声(audio-file)構成では実シークが
+        // 効かない（プロパティ値だけ変わって映像が動かない）ことがある。mpv の seek コマンド
+        // (absolute, 秒) で確実にシークする（mpv OSC や旧 probe と同じ方式）。
+        let _ = self.mpv.command("seek", &[&format!("{t:.3}"), "absolute"]);
     }
     pub fn duration(&self) -> f64 {
         self.mpv.get_property("duration").unwrap_or(0.0)
