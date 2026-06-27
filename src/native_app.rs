@@ -1030,12 +1030,17 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 };
                 let has_recommend = !_state.core.recommend_items.is_empty();
                 let list_sel = _state.list_sel;
-                let (list_header, list_items): (String, Vec<String>) = if list_open {
-                    let (h, rows) = _state.list_rows();
-                    (h, rows.iter().map(|r| r.0.clone()).collect())
-                } else {
-                    (String::new(), Vec::new())
-                };
+                let (list_header, list_items, list_thumbs): (String, Vec<String>, Vec<String>) =
+                    if list_open {
+                        let (h, rows) = _state.list_rows();
+                        (
+                            h,
+                            rows.iter().map(|r| r.0.clone()).collect(),
+                            rows.iter().map(|r| r.1.clone()).collect(),
+                        )
+                    } else {
+                        (String::new(), Vec::new(), Vec::new())
+                    };
                 let p = &_state.core.player;
                 let view = PlaybackView {
                     paused: p.paused(),
@@ -1054,6 +1059,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     has_recommend,
                     list_open,
                     list_items,
+                    list_thumbs,
                     list_sel,
                     list_header,
                 };

@@ -17,10 +17,11 @@
 #![cfg(windows)]
 
 use anyhow::{anyhow, Result};
+use std::collections::HashMap;
 use windows::core::Interface;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{D2D1_COLOR_F, D2D_RECT_F};
-use windows::Win32::Graphics::Direct2D::ID2D1DeviceContext;
+use windows::Win32::Graphics::Direct2D::{ID2D1Bitmap1, ID2D1DeviceContext};
 use windows::Win32::Graphics::DirectComposition::{
     IDCompositionDevice, IDCompositionSurface, IDCompositionTarget, IDCompositionVisual,
 };
@@ -88,6 +89,7 @@ pub struct PlaybackView {
     // --- 一覧（list_open 時のみ有効）---
     pub list_open: bool,
     pub list_items: Vec<String>,
+    pub list_thumbs: Vec<String>,
     pub list_sel: usize,
     pub list_header: String,
 }
@@ -247,6 +249,8 @@ pub struct DcompOverlay {
     dwrite: IDWriteFactory,
     /// 小フォント（コントロール・時間、15px）。
     tf_small: IDWriteTextFormat,
+    /// 一覧サムネの URL→ビットマップキャッシュ（ディスクキャッシュ済みを WIC デコード）。
+    thumb_cache: HashMap<String, ID2D1Bitmap1>,
     cw: i32,
     ch: i32,
 }
@@ -360,6 +364,7 @@ impl DcompOverlay {
                 d2d_ctx,
                 dwrite,
                 tf_small,
+                thumb_cache: HashMap::new(),
                 cw,
                 ch,
             };
@@ -545,6 +550,12 @@ impl DcompOverlay {
             let visible = (((ch - top0 - 16) / row_h).max(1)) as usize;
             list_first = if view.list_sel >= visible { view.list_sel - visible + 1 } else { 0 };
             list_count = view.list_items.len();
+            // 表示行のサムネを（ディスクキャッシュ済みのみ）デコードしておく。
+            let end = (list_first + visible).min(view.list_thumbs.len());
+            if list_first < end {
+                let urls = view.list_thumbs[list_first..end].to_vec();
+                self.ensure_thumbs(&urls);
+            }
             // ✕ 閉じるボタン（右上）。
             let xw = unsafe { self.measure("✕") }.ceil() as i32;
             controls.push(Control::Button {
@@ -627,13 +638,22 @@ impl DcompOverlay {
                 p.fill_rect(rf(0.0, 0.0, cw as f32, ch as f32), color(0.04, 0.04, 0.06, 0.93));
                 p.text(&view.list_header, rf(24.0, 18.0, cw as f32 - 24.0, 54.0), color(1.0, 1.0, 1.0, 1.0));
                 let visible = (((ch - top0 - 16) / row_h).max(1)) as usize;
+                let th = (row_h - 10) as f32;
+                let tw = th * 16.0 / 9.0;
+                let text_left = 20.0 + tw + 12.0;
                 for (i, item) in view.list_items.iter().enumerate().skip(list_first).take(visible) {
                     let y = top0 + (i - list_first) as i32 * row_h;
                     if i == view.list_sel {
                         p.fill_round(rf(16.0, y as f32, cw as f32 - 16.0, (y + row_h - 4) as f32), 6.0, color(0.20, 0.40, 0.85, 0.85));
                     }
+                    // サムネ（デコード済みのみ。16:9）。
+                    if let Some(bmp) = view.list_thumbs.get(i).and_then(|u| self.thumb_cache.get(u)) {
+                        use windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_LINEAR;
+                        let dst = rf(20.0, (y + 3) as f32, 20.0 + tw, (y + 3) as f32 + th);
+                        ctx.DrawBitmap(bmp, Some(&dst), 1.0, D2D1_INTERPOLATION_MODE_LINEAR, None, None);
+                    }
                     let col = if i == view.list_sel { color(1.0, 1.0, 1.0, 1.0) } else { color(0.70, 0.70, 0.75, 1.0) };
-                    p.text(item, rf(20.0, (y + 6) as f32, cw as f32 - 28.0, (y + row_h) as f32), col);
+                    p.text(item, rf(text_left, (y + 6) as f32, cw as f32 - 28.0, (y + row_h) as f32), col);
                 }
                 if view.list_items.is_empty() {
                     p.text("（取得中… ログインが必要です）", rf(28.0, (top0 + 4) as f32, cw as f32 - 28.0, (top0 + 44) as f32), color(0.70, 0.70, 0.75, 1.0));
@@ -694,6 +714,47 @@ impl DcompOverlay {
         self.state.list_row_h = row_h;
         self.state.list_first = list_first;
         self.state.list_count = list_count;
+    }
+
+    /// 表示中サムネ URL のうち未キャッシュのものを、ディスクキャッシュ済みなら WIC デコードして
+    /// ビットマップ化（未キャッシュは非同期取得を起動。ネットワーク取得はしない）。
+    fn ensure_thumbs(&mut self, urls: &[String]) {
+        for url in urls {
+            if url.is_empty() || self.thumb_cache.contains_key(url) {
+                continue;
+            }
+            match crate::image_cache::cached_path(url).and_then(|p| p.to_str().map(String::from)) {
+                Some(ps) => {
+                    if let Some(bmp) = unsafe { self.load_wic(&ps) } {
+                        self.thumb_cache.insert(url.clone(), bmp);
+                    }
+                }
+                None => crate::image_cache::ensure_cached_async(url),
+            }
+        }
+    }
+
+    /// ローカル画像ファイルを WIC でデコードし、d2d_ctx の ID2D1Bitmap1 にする。
+    unsafe fn load_wic(&self, path: &str) -> Option<ID2D1Bitmap1> {
+        use windows::core::HSTRING;
+        use windows::Win32::Foundation::GENERIC_READ;
+        use windows::Win32::Graphics::Imaging::{
+            CLSID_WICImagingFactory, IWICImagingFactory, WICBitmapDitherTypeNone,
+            WICBitmapPaletteTypeMedianCut, WICDecodeMetadataCacheOnLoad,
+            GUID_WICPixelFormat32bppPBGRA,
+        };
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+        let wic: IWICImagingFactory =
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
+        let decoder = wic
+            .CreateDecoderFromFilename(&HSTRING::from(path), None, GENERIC_READ, WICDecodeMetadataCacheOnLoad)
+            .ok()?;
+        let frame = decoder.GetFrame(0).ok()?;
+        let converter = wic.CreateFormatConverter().ok()?;
+        converter
+            .Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut)
+            .ok()?;
+        self.d2d_ctx.CreateBitmapFromWicBitmap(&converter, None).ok()
     }
 
     /// 小フォントでのテキスト幅（px）を計測する。

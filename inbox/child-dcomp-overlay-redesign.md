@@ -82,7 +82,7 @@ mpv テストパターン(`av://lavfi:testsrc`)を親窓に埋め込み、`WS_CH
   - ✅ 2a' コンポーネント化: クリッカブル UI を `Control` 列挙（PlayPause/Seek/Volume/Time）で構成。各部品が**自分の描画とクリック挙動を内包**し、描画とヒットが drift しない。クリック解決は「部品 → 帯余白(吸収) → 動画域(pause)」の順で、座標 catch-all を持たない（＝帯余白で pause が飛ぶ事故が構造的に起きない）。2b 以降のコントロール追加は `Control` を1個足すだけ。検証(devtools): 動画域=pause反転 / 帯余白=不変 / 音量バー click で vol が割合どおり変化。
   - ✅ 2b コントローラ帯の残りボタン: 汎用 `Control::Button`（フラットテキスト）を追加し、👍Like・🔊/🔇ミュート・コーデック巡回・画質巡回・ライブ最新（is_live 時は時間の代わり）を実装。`PlaybackView` に muted/is_live/quality/codec を追加、native_app で各アクションを適用。検証(devtools): 全ボタン描画（egui 踏襲レイアウト一致）、画質click=巡回(自動→2160p)、🔊click=mute反転。
   - ✅ 2c 上部バー: URL 行（入力中テキスト/ガイド表示）・タイトル行・認証ラベル（ログイン済=右寄せテキスト / 未ログイン=🔑ログインボタン→Login アクション）。top_panel を追加しクリック吸収（pause を出さない）。PlaybackView に url_input/auth_label/logged_in/title 追加、native_app で Login 適用。実 YouTube スクショで URL/タイトル/認証/下部帯の同時表示を確認。
-  - 🔄 2d 一覧（テキスト版）: 全面パネル＋ヘッダ＋行＋選択ハイライト、上部ナビタブ（おすすめ/再生リスト/登録/履歴→OpenList）、行クリック→PlayIndex、ホイールスクロール（ListScroll）、✕閉じる（CloseList）。検証(devtools): おすすめタブで list_open=true、✕で list_open=false を実測。行クリック→再生は recommend が gated だと解決失敗（resolver 側）だが一覧 UI は正常。ホイールは dev-tools 注入不可のため GUI 確認（ロジック健全）。**残: サムネ画像描画（次）。**
+  - ✅ 2d 一覧: 全面パネル＋ヘッダ＋行＋選択ハイライト、上部ナビタブ（おすすめ/再生リスト/登録/履歴→OpenList）、行クリック→PlayIndex、ホイールスクロール（ListScroll）、✕閉じる（CloseList）、**サムネ画像**（WIC デコード→ID2D1Bitmap1 キャッシュ→DrawBitmap、16:9・行左。旧 draw_list 同等）。検証(devtools): おすすめタブで list_open=true、✕で list_open=false。サムネ/ホイールは GUI 確認（dcomp 経路の自動検証は裏窓キャプチャ等で murky）。
   - ⬜ 2e チャット（左右分割＋スクロール＋幅ドラッグ）＋💬トグル。
   - 別件保留: 前方シーク後の再生凍結（解決器の range 対応待ち。UI 層は正しい）。
 - ⬜ 手順3 以降（下記）。
