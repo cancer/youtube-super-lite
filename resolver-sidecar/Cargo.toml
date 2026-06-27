@@ -1,0 +1,14 @@
+[package]
+name = "resolver-sidecar"
+version = "0.1.0"
+edition = "2021"
+description = "YouTube 解決器サイドカー（rustypipe）。本体から spawn され、解決+ローカル中継プロキシを提供する。"
+# 注意: rustypipe は GPL-3.0。本体(youtube-super-lite)とは別プロセス・別バイナリに隔離する。
+
+[dependencies]
+# 現行 base.js(VM難読化)に追従した nsig/署名/PoToken と InnerTube クライアントを提供（保守された抽出）。
+rustypipe = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+# rustls-tls = 純Rust TLS（本体の native-tls とは独立。サイドカー単体で完結）。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+futures-util = "0.3"

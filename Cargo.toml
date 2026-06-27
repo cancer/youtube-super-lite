@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "A YouTube video player written in Rust (libmpv backend)"
 
+# 解決器サイドカー（rustypipe）は別 crate に隔離する:
+# - GPL-3.0 / rquickjs(C) を本体バイナリに混ぜない（本体は MIT 系・純Rust のまま）
+# - YouTube 仕様変化への追従は rustypipe 更新＝サイドカーのみ再ビルドで済ませる（将来 CI 自動化）
+[workspace]
+members = ["resolver-sidecar"]
+
 [dependencies]
 # Windowing / event loop（ウィンドウ生成と HWND 取得。描画は mpv(D3D11)+Direct2D）
 winit = "0.30"

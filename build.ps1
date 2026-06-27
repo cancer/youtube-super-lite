@@ -18,13 +18,17 @@ $profileArg = if ($Release) { "--release" } else { "" }
 $outDir     = if ($Release) { "release" } else { "debug" }
 
 # vcvars + MPV_SOURCE を設定して cargo build。失敗時はその終了コードで抜ける。
-cmd /c "`"$vcvars`" >nul 2>&1 && set MPV_SOURCE=$mpvSrc && cd /d `"$root`" && `"$cargo`" build $profileArg"
+# --workspace: 本体に加え resolver-sidecar(gated 用 rustypipe 解決器)も同じ target に出す。
+cmd /c "`"$vcvars`" >nul 2>&1 && set MPV_SOURCE=$mpvSrc && cd /d `"$root`" && `"$cargo`" build $profileArg --workspace"
 $code = $LASTEXITCODE
 if ($code -ne 0) { Write-Error "cargo build failed (exit $code)"; exit $code }
 
-# 実行時に必要なファイルを exe の隣へコピー（解決は native InnerTube に移行済み = yt-dlp 不要）
+# 実行時に必要なファイルを exe の隣へコピー（解決は native InnerTube + サイドカーに移行済み = yt-dlp 不要）
 $dest = Join-Path $root "target\$outDir"
 Copy-Item (Join-Path $mpvSrc "libmpv-2.dll") $dest -Force
+# resolver-sidecar.exe は同じ target\$outDir に出るので追加コピー不要（本体 exe から spawn される）。
 
-Write-Host "Build OK ($outDir). libmpv-2.dll copied to target\$outDir" -ForegroundColor Green
+$sidecar = Join-Path $dest "resolver-sidecar.exe"
+$hasSidecar = Test-Path $sidecar
+Write-Host "Build OK ($outDir). libmpv-2.dll copied. resolver-sidecar present: $hasSidecar" -ForegroundColor Green
 exit 0

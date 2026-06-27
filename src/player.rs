@@ -52,6 +52,11 @@ impl Player {
     pub fn time_pos(&self) -> f64 {
         self.mpv.get_property("time-pos").unwrap_or(0.0)
     }
+    /// 再生対象が無くアイドル状態か。loadfile したのに idle に戻った＝そのファイルを開けなかった
+    /// （403 等）の判定に使う（中継フォールバックの起動条件）。
+    pub fn idle_active(&self) -> bool {
+        self.mpv.get_property("idle-active").unwrap_or(false)
+    }
     pub fn set_time_pos(&self, t: f64) {
         let _ = self.mpv.set_property("time-pos", t);
     }
