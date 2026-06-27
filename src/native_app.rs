@@ -38,6 +38,8 @@ pub struct NativeApp {
     backend: String,
     initial_volume: Option<f64>,
     enable_dev_tools: bool,
+    /// 新オーバーレイ（子窓 + DirectComposition）を使う暫定トグル（移行中）。
+    dcomp: bool,
     state: Option<NativeRunning>,
 }
 
@@ -74,11 +76,12 @@ struct NativeRunning {
     /// 動画に重ねる透過 2D オーバーレイ（コントローラ表示）。Windows のみ。
     #[cfg(windows)]
     overlay: Option<crate::native_overlay::Overlay>,
-    /// 自動非表示用: 最後に操作（マウス移動/キー/クリック）があった時刻と前回カーソル位置。
+    /// 新オーバーレイ（子窓 + DirectComposition）。`--dcomp` 時のみ Some。移行中の暫定並存。
+    #[cfg(windows)]
+    dcomp_overlay: Option<crate::dcomp_overlay::DcompOverlay>,
+    /// 自動非表示用: 最後に操作（マウス移動/キー/クリック）があった時刻。
     #[cfg(windows)]
     last_activity: Instant,
-    #[cfg(windows)]
-    last_cursor: (i32, i32),
     #[cfg(windows)]
     overlay_visible: bool,
     /// dev-tools（--enable-dev-tools）からの要求受信口。None なら無効。
@@ -101,6 +104,7 @@ impl NativeApp {
         backend: String,
         initial_volume: Option<f64>,
         enable_dev_tools: bool,
+        dcomp: bool,
     ) -> Self {
         Self {
             proxy,
@@ -109,6 +113,7 @@ impl NativeApp {
             backend,
             initial_volume,
             enable_dev_tools,
+            dcomp,
             state: None,
         }
     }
@@ -168,15 +173,27 @@ impl NativeApp {
             None
         };
 
-        // 動画に重ねる透過 2D オーバーレイ（Direct2D コントローラ）。
+        // 動画に重ねる透過 2D オーバーレイ。既定は旧 ULV 版、`--dcomp` なら新 子窓+DComp 版。
+        // 移行中は排他で片方だけ生成する（旧版はパリティ達成まで温存）。
         #[cfg(windows)]
-        let overlay = {
+        let (overlay, dcomp_overlay) = if self.dcomp {
+            match crate::dcomp_overlay::DcompOverlay::new(wid) {
+                Ok(o) => {
+                    eprintln!("[native] dcomp overlay (子窓+DirectComposition) を使用");
+                    (None, Some(o))
+                }
+                Err(e) => {
+                    eprintln!("[native] dcomp overlay init failed: {e:#}");
+                    (None, None)
+                }
+            }
+        } else {
             let parent = windows::Win32::Foundation::HWND(wid as *mut core::ffi::c_void);
             match crate::native_overlay::Overlay::new(parent) {
-                Ok(o) => Some(o),
+                Ok(o) => (Some(o), None),
                 Err(e) => {
                     eprintln!("[native] overlay init failed: {e:#}");
-                    None
+                    (None, None)
                 }
             }
         };
@@ -202,9 +219,9 @@ impl NativeApp {
             #[cfg(windows)]
             overlay,
             #[cfg(windows)]
-            last_activity: Instant::now(),
+            dcomp_overlay,
             #[cfg(windows)]
-            last_cursor: (0, 0),
+            last_activity: Instant::now(),
             #[cfg(windows)]
             overlay_visible: true,
             devtools_rx,
@@ -321,6 +338,8 @@ impl NativeRunning {
         self.core.poll_playlist();
         self.core.poll_gpu_usage();
         self.core.poll_resolve();
+        // native 直 URL が mpv で再生失敗していれば、並列に用意した中継(サイドカー)へ切替える。
+        self.core.check_playback_fallback();
     }
 
     /// dev-tools（--enable-dev-tools）からの要求を処理する。毎フレーム呼ぶ。
@@ -355,6 +374,8 @@ impl NativeRunning {
                 Command::Click { x, y, reply } => {
                     #[cfg(windows)]
                     if let Some(ov) = self.overlay.as_ref() {
+                        ov.inject_click(x, y);
+                    } else if let Some(ov) = self.dcomp_overlay.as_ref() {
                         ov.inject_click(x, y);
                     }
                     let _ = reply.send(true);
@@ -901,10 +922,220 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             _state.maybe_save_settings(false);
             // オーバーレイの操作適用・自動非表示・定期再描画。
             #[cfg(windows)]
-            {
-                use windows::Win32::Foundation::POINT;
-                use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-
+            if _state.dcomp_overlay.is_some() {
+                // 新ホスト（子窓+DComp）: クリック適用＋活動記録＋自動非表示＋描画。
+                use crate::dcomp_overlay::{OverlayAction, PlaybackView};
+                let actions = _state
+                    .dcomp_overlay
+                    .as_mut()
+                    .map(|o| o.take_actions())
+                    .unwrap_or_default();
+                for a in actions {
+                    match a {
+                        OverlayAction::TogglePause => {
+                            let p = &_state.core.player;
+                            p.set_paused(!p.paused());
+                        }
+                        OverlayAction::Seek(frac) => {
+                            let p = &_state.core.player;
+                            let dur = p.duration();
+                            if p.seekable() && dur > 0.0 {
+                                p.set_time_pos(frac * dur);
+                            }
+                        }
+                        OverlayAction::SetVolume(v) => {
+                            _state.core.player.set_volume(v.clamp(0.0, 130.0))
+                        }
+                        OverlayAction::VolumeStep(d) => {
+                            let p = &_state.core.player;
+                            p.set_volume((p.volume() + d).clamp(0.0, 130.0));
+                        }
+                        OverlayAction::ToggleMute => {
+                            let p = &_state.core.player;
+                            p.set_muted(!p.muted());
+                        }
+                        OverlayAction::LiveEdge => _state.core.player.seek_to_live(),
+                        OverlayAction::Like => {
+                            if let Some(vid) = auth::extract_video_id(&_state.core.current_url) {
+                                _state.core.start_like(vid);
+                            }
+                        }
+                        OverlayAction::CycleQuality => {
+                            let all = Quality::ALL;
+                            let i = all
+                                .iter()
+                                .position(|q| *q == _state.core.quality)
+                                .unwrap_or(0);
+                            _state.core.quality = all[(i + 1) % all.len()];
+                            if resolve::is_youtube_url(&_state.core.current_url) {
+                                let u = _state.core.current_url.clone();
+                                _state.core.start_resolve(u);
+                            }
+                        }
+                        OverlayAction::CycleCodec => {
+                            let all = Codec::ALL;
+                            let i =
+                                all.iter().position(|c| *c == _state.core.codec).unwrap_or(0);
+                            _state.core.codec = all[(i + 1) % all.len()];
+                            if resolve::is_youtube_url(&_state.core.current_url) {
+                                let u = _state.core.current_url.clone();
+                                _state.core.start_resolve(u);
+                            }
+                        }
+                        OverlayAction::Login => {
+                            if !_state.core.auth_busy {
+                                _state.core.start_login();
+                            }
+                        }
+                        OverlayAction::OpenList(tab) => {
+                            use crate::dcomp_overlay::ListTab;
+                            _state.list_source = match tab {
+                                ListTab::Recommend => ListSource::Recommend,
+                                ListTab::Subs => ListSource::Subs,
+                                ListTab::Playlist => ListSource::Playlist,
+                                ListTab::History => ListSource::History,
+                            };
+                            _state.list_open = true;
+                            _state.list_sel = 0;
+                            _state.ensure_source_fetched();
+                        }
+                        OverlayAction::PlayIndex(idx) => _state.play_list_index(idx),
+                        OverlayAction::CloseList => _state.list_open = false,
+                        OverlayAction::ListScroll(d) => {
+                            let n = _state.list_rows().1.len();
+                            if n > 0 {
+                                let sel = (_state.list_sel as i32 + d).clamp(0, n as i32 - 1);
+                                _state.list_sel = sel as usize;
+                            }
+                        }
+                        OverlayAction::ToggleChat => {
+                            _state.chat_open = !_state.chat_open;
+                            if _state.chat_open {
+                                _state.chat_scroll = 0;
+                            }
+                            let m = if _state.chat_open { _state.chat_width_ratio } else { 0.0 };
+                            _state.core.player.set_video_margin_right(m as f64);
+                        }
+                        OverlayAction::ChatScroll(d) => {
+                            let max = _state.core.chat_messages.len().saturating_sub(1);
+                            _state.chat_scroll =
+                                ((_state.chat_scroll as i32 + d).max(0) as usize).min(max);
+                        }
+                        OverlayAction::SetChatWidth(r) => {
+                            _state.chat_width_ratio = (r as f32).clamp(0.15, 0.6);
+                            if _state.chat_open {
+                                _state
+                                    .core
+                                    .player
+                                    .set_video_margin_right(_state.chat_width_ratio as f64);
+                            }
+                        }
+                        OverlayAction::ChatFontDec => {
+                            _state.chat_font_px = (_state.chat_font_px - 2.0).clamp(10.0, 28.0);
+                        }
+                        OverlayAction::ChatFontInc => {
+                            _state.chat_font_px = (_state.chat_font_px + 2.0).clamp(10.0, 28.0);
+                        }
+                    }
+                    _state.last_activity = Instant::now();
+                }
+                if _state
+                    .dcomp_overlay
+                    .as_mut()
+                    .map(|o| o.take_moved())
+                    .unwrap_or(false)
+                {
+                    _state.last_activity = Instant::now();
+                }
+                // 3 秒無操作で帯を隠す（旧版と同じ。一覧/チャットは UI 移植時に条件追加）。
+                let list_open = _state.list_open;
+                let active = list_open
+                    || _state.chat_open
+                    || _state.last_activity.elapsed() < Duration::from_secs(3);
+                let logged_in = _state.core.channel.as_deref().is_some_and(|c| !c.is_empty());
+                let auth_label = if logged_in {
+                    format!("👤 {}", _state.core.channel.as_deref().unwrap_or(""))
+                } else {
+                    format!("🔑 {}", _state.core.auth_status)
+                };
+                let has_recommend = !_state.core.recommend_items.is_empty();
+                let list_sel = _state.list_sel;
+                let (list_header, list_items, list_thumbs): (String, Vec<String>, Vec<String>) =
+                    if list_open {
+                        let (h, rows) = _state.list_rows();
+                        (
+                            h,
+                            rows.iter().map(|r| r.0.clone()).collect(),
+                            rows.iter().map(|r| r.1.clone()).collect(),
+                        )
+                    } else {
+                        (String::new(), Vec::new(), Vec::new())
+                    };
+                // チャット行（dcomp 用に整形。連続テキストは 1 セグメントに統合）。
+                let chat_open = _state.chat_open;
+                let chat_available = !_state.core.chat_status.is_empty();
+                let chat_scroll = _state.chat_scroll;
+                let chat_width_ratio = _state.chat_width_ratio;
+                let chat_lines: Vec<crate::dcomp_overlay::ChatLine> = if chat_open {
+                    use crate::dcomp_overlay::{ChatLine as DLine, ChatSeg as DSeg};
+                    _state
+                        .core
+                        .chat_messages
+                        .iter()
+                        .map(|m| {
+                            let mut segs: Vec<DSeg> = Vec::new();
+                            for r in &m.runs {
+                                match r {
+                                    ChatRun::Text(t) => {
+                                        if let Some(DSeg::Text(last)) = segs.last_mut() {
+                                            last.push_str(t);
+                                        } else {
+                                            segs.push(DSeg::Text(t.clone()));
+                                        }
+                                    }
+                                    ChatRun::Image { alt, url } => {
+                                        segs.push(DSeg::Emoji { url: url.clone(), alt: alt.clone() })
+                                    }
+                                }
+                            }
+                            DLine { kind: m.kind, author: m.author.clone(), segs }
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let p = &_state.core.player;
+                let view = PlaybackView {
+                    paused: p.paused(),
+                    pos: p.time_pos(),
+                    dur: p.duration(),
+                    seekable: p.seekable(),
+                    volume: p.volume(),
+                    muted: p.muted(),
+                    is_live: _state.core.is_live,
+                    quality: _state.core.quality.label().to_string(),
+                    codec: _state.core.codec.label().to_string(),
+                    url_input: _state.url_input.clone(),
+                    auth_label,
+                    logged_in,
+                    title: p.media_title(),
+                    has_recommend,
+                    list_open,
+                    list_items,
+                    list_thumbs,
+                    list_sel,
+                    list_header,
+                    chat_available,
+                    chat_open,
+                    chat_lines,
+                    chat_scroll,
+                    chat_width_ratio,
+                    chat_font_px: _state.chat_font_px,
+                };
+                if let Some(o) = _state.dcomp_overlay.as_mut() {
+                    o.render(active, &view);
+                }
+            } else {
                 // クリックで溜まった操作をすべて適用（コントロール・動画クリック・一覧行）。
                 let actions = _state
                     .overlay
@@ -916,11 +1147,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     _state.last_activity = Instant::now();
                 }
 
-                // カーソル移動を検出して自動非表示（active 解除）を制御。
-                let mut p = POINT::default();
-                let _ = unsafe { GetCursorPos(&mut p) };
-                if (p.x, p.y) != _state.last_cursor {
-                    _state.last_cursor = (p.x, p.y);
+                // コントロール帯（一覧/チャット含む）上のホバーを活動として拾う。そこはオーバーレイ
+                // 窓が手前にいるため親 winit の CursorMoved が来ず、overlay の WM_MOUSEMOVE で
+                // 立てたフラグを使う。動画領域の移動は winit の CursorMoved 側で拾う。
+                // どちらもウィンドウスコープのイベントなので、他窓・画面外の移動では発火しない。
+                if _state.overlay.as_ref().map(|ov| ov.take_moved()).unwrap_or(false) {
                     _state.last_activity = Instant::now();
                 }
                 // コントロール描画（active）: 一覧/チャット表示中は常時、それ以外は 3 秒無操作で隠す。
@@ -941,16 +1172,18 @@ impl ApplicationHandler<UserEvent> for NativeApp {
 
                 // 窓が可視の時のみ再描画。
                 _state.render_overlay(active);
+            }
 
-                // 保留中のスクリーンショット: 前面化＋再描画の反映を数フレーム待ってからキャプチャ。
-                if _state.pending_shot.is_some() {
-                    if _state.shot_delay == 0 {
-                        if let Some(reply) = _state.pending_shot.take() {
-                            let _ = reply.send(_state.capture_png());
-                        }
-                    } else {
-                        _state.shot_delay -= 1;
+            // 保留中のスクリーンショット（dcomp/旧 どちらの経路でも）: 前面化＋再描画の
+            // 反映を数フレーム待ってからキャプチャ。capture_png は画面 BitBlt なので合成方式に依らない。
+            #[cfg(windows)]
+            if _state.pending_shot.is_some() {
+                if _state.shot_delay == 0 {
+                    if let Some(reply) = _state.pending_shot.take() {
+                        let _ = reply.send(_state.capture_png());
                     }
+                } else {
+                    _state.shot_delay -= 1;
                 }
             }
             event_loop.set_control_flow(ControlFlow::WaitUntil(
@@ -1008,6 +1241,17 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     }
                 }
             }
+            // 動画領域上のカーソル移動を活動として記録し、コントロールを表示する。
+            // winit の CursorMoved はこの窓のクライアント領域にカーソルがある時だけ届く
+            // （他窓に遮蔽されていれば届かない）ので、グローバル座標で自窓上かを推測する必要はない。
+            // コントロール帯はオーバーレイ窓が手前にいて CursorMoved が来ないため、そちらは
+            // about_to_wait で overlay.take_moved() を見て拾う。
+            WindowEvent::CursorMoved { .. } => {
+                #[cfg(windows)]
+                {
+                    state.last_activity = Instant::now();
+                }
+            }
             // フォーカスを失ったらオーバーレイを隠す（他アプリの上に残らないように）。
             WindowEvent::Focused(focused) => {
                 state.focused = focused;
@@ -1020,16 +1264,30 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             }
             // ウィンドウのリサイズ/移動にオーバーレイを即追従させる
             // （モーダルなドラッグループ中は about_to_wait が止まるため、ここで直接再描画）。
-            WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
+            // 位置追従は follow_wndproc が WM_MOVE で行うので、ここはサイズ追従の再描画のみ。
+            // ここで last_activity をリセットしたり強制表示してはいけない——hwdec 切替に伴う
+            // VO 再初期化はプログラム的に Resized を連発し、それを操作扱いすると自動非表示が
+            // 効かなくなる（デグレ）。可視判定は about_to_wait に一任する。
+            WindowEvent::Resized(size) => {
+                // 新ホストは子窓なので位置は OS 追従。サイズだけ合わせて再描画する。
                 #[cfg(windows)]
-                if state.focused {
-                    state.last_activity = Instant::now();
-                    state.overlay_visible = true;
-                    if let Some(ov) = state.overlay.as_ref() {
-                        ov.set_visible(true);
-                    }
-                    // リサイズ/移動直後は操作直後なので active で再描画。
-                    state.render_overlay(true);
+                if let Some(o) = state.dcomp_overlay.as_mut() {
+                    o.resize(size.width as i32, size.height as i32);
+                } else if state.focused && state.overlay_visible {
+                    let active = state.list_open
+                        || state.chat_open
+                        || state.last_activity.elapsed() < Duration::from_secs(3);
+                    state.render_overlay(active);
+                }
+                let _ = size;
+            }
+            WindowEvent::Moved(_) => {
+                #[cfg(windows)]
+                if state.dcomp_overlay.is_none() && state.focused && state.overlay_visible {
+                    let active = state.list_open
+                        || state.chat_open
+                        || state.last_activity.elapsed() < Duration::from_secs(3);
+                    state.render_overlay(active);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {

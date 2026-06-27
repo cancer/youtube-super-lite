@@ -1,4 +1,6 @@
 /target
+# 検証時に別 target dir で吐かれる野良ビルド出力
+/target-verify
 
 # 配布バンドル（bundle.ps1 が生成。再生成可能なため除外）
 /dist
