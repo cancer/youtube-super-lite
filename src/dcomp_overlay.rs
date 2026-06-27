@@ -53,6 +53,10 @@ pub enum OverlayAction {
     OpenList(ListTab),
     /// 一覧の行クリック → その index を再生/ドリル。
     PlayIndex(usize),
+    /// 一覧を閉じる（✕ ボタン）。
+    CloseList,
+    /// 一覧をスクロール（選択を ± 行動かす。ホイール）。
+    ListScroll(i32),
 }
 
 /// 一覧のソースタブ。
@@ -541,6 +545,14 @@ impl DcompOverlay {
             let visible = (((ch - top0 - 16) / row_h).max(1)) as usize;
             list_first = if view.list_sel >= visible { view.list_sel - visible + 1 } else { 0 };
             list_count = view.list_items.len();
+            // ✕ 閉じるボタン（右上）。
+            let xw = unsafe { self.measure("✕") }.ceil() as i32;
+            controls.push(Control::Button {
+                rect: RECT { left: cw - 16 - xw - 12, top: 14, right: cw - 16, bottom: 14 + ROW_H },
+                label: "✕".to_string(),
+                col: color(0.95, 0.95, 0.98, 1.0),
+                action: OverlayAction::CloseList,
+            });
         } else if active {
             controls = self.build_controls(cw, ch, view);
             panel = RECT { left: 0, top: ch - BOTTOM_H, right: cw, bottom: ch };
@@ -625,6 +637,10 @@ impl DcompOverlay {
                 }
                 if view.list_items.is_empty() {
                     p.text("（取得中… ログインが必要です）", rf(28.0, (top0 + 4) as f32, cw as f32 - 28.0, (top0 + 44) as f32), color(0.70, 0.70, 0.75, 1.0));
+                }
+                // ✕ 閉じるボタン等（一覧モードの部品）。
+                for c in &controls {
+                    c.draw(&p);
                 }
             } else if active {
                 // 下部コントローラ帯の背景。
@@ -816,8 +832,16 @@ unsafe extern "system" fn wndproc(
             let mut capture = false;
             if let Some(s) = state_of(hwnd) {
                 if s.list_open {
-                    // 一覧モード: 行クリック → PlayIndex。余白は吸収（pause を出さない）。
-                    if s.list_row_h > 0 && hi >= s.list_top {
+                    // 一覧モード: まず部品（✕ 閉じる等）、無ければ行クリック → PlayIndex。余白は吸収。
+                    let mut handled = false;
+                    for c in &s.controls {
+                        if let Some(Hit::Act(a)) = c.press(lo, hi) {
+                            s.actions.push(a);
+                            handled = true;
+                            break;
+                        }
+                    }
+                    if !handled && s.list_row_h > 0 && hi >= s.list_top {
                         let row = ((hi - s.list_top) / s.list_row_h) as usize;
                         let idx = s.list_first + row;
                         if idx < s.list_count {
@@ -867,8 +891,13 @@ unsafe extern "system" fn wndproc(
         WM_MOUSEWHEEL => {
             let delta = ((wparam.0 >> 16) & 0xFFFF) as i16;
             if let Some(s) = state_of(hwnd) {
-                s.actions
-                    .push(OverlayAction::VolumeStep(if delta > 0 { 5.0 } else { -5.0 }));
+                if s.list_open {
+                    // 一覧表示中はホイールで選択を上下（3 行/ノッチ）。上=過去方向(-)。
+                    s.actions.push(OverlayAction::ListScroll(if delta > 0 { -3 } else { 3 }));
+                } else {
+                    s.actions
+                        .push(OverlayAction::VolumeStep(if delta > 0 { 5.0 } else { -5.0 }));
+                }
             }
             LRESULT(0)
         }

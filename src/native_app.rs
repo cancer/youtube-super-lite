@@ -1000,6 +1000,14 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                             _state.ensure_source_fetched();
                         }
                         OverlayAction::PlayIndex(idx) => _state.play_list_index(idx),
+                        OverlayAction::CloseList => _state.list_open = false,
+                        OverlayAction::ListScroll(d) => {
+                            let n = _state.list_rows().1.len();
+                            if n > 0 {
+                                let sel = (_state.list_sel as i32 + d).clamp(0, n as i32 - 1);
+                                _state.list_sel = sel as usize;
+                            }
+                        }
                     }
                     _state.last_activity = Instant::now();
                 }
