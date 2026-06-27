@@ -987,6 +987,19 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                                 _state.core.start_login();
                             }
                         }
+                        OverlayAction::OpenList(tab) => {
+                            use crate::dcomp_overlay::ListTab;
+                            _state.list_source = match tab {
+                                ListTab::Recommend => ListSource::Recommend,
+                                ListTab::Subs => ListSource::Subs,
+                                ListTab::Playlist => ListSource::Playlist,
+                                ListTab::History => ListSource::History,
+                            };
+                            _state.list_open = true;
+                            _state.list_sel = 0;
+                            _state.ensure_source_fetched();
+                        }
+                        OverlayAction::PlayIndex(idx) => _state.play_list_index(idx),
                     }
                     _state.last_activity = Instant::now();
                 }
@@ -999,12 +1012,21 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     _state.last_activity = Instant::now();
                 }
                 // 3 秒無操作で帯を隠す（旧版と同じ。一覧/チャットは UI 移植時に条件追加）。
-                let active = _state.last_activity.elapsed() < Duration::from_secs(3);
+                let list_open = _state.list_open;
+                let active = list_open || _state.last_activity.elapsed() < Duration::from_secs(3);
                 let logged_in = _state.core.channel.as_deref().is_some_and(|c| !c.is_empty());
                 let auth_label = if logged_in {
                     format!("👤 {}", _state.core.channel.as_deref().unwrap_or(""))
                 } else {
                     format!("🔑 {}", _state.core.auth_status)
+                };
+                let has_recommend = !_state.core.recommend_items.is_empty();
+                let list_sel = _state.list_sel;
+                let (list_header, list_items): (String, Vec<String>) = if list_open {
+                    let (h, rows) = _state.list_rows();
+                    (h, rows.iter().map(|r| r.0.clone()).collect())
+                } else {
+                    (String::new(), Vec::new())
                 };
                 let p = &_state.core.player;
                 let view = PlaybackView {
@@ -1021,6 +1043,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     auth_label,
                     logged_in,
                     title: p.media_title(),
+                    has_recommend,
+                    list_open,
+                    list_items,
+                    list_sel,
+                    list_header,
                 };
                 if let Some(o) = _state.dcomp_overlay.as_mut() {
                     o.render(active, &view);

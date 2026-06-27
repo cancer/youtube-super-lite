@@ -49,6 +49,19 @@ pub enum OverlayAction {
     CycleCodec,
     /// ログイン開始（未ログイン時）。
     Login,
+    /// 一覧（指定タブ）を開く。
+    OpenList(ListTab),
+    /// 一覧の行クリック → その index を再生/ドリル。
+    PlayIndex(usize),
+}
+
+/// 一覧のソースタブ。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ListTab {
+    Recommend,
+    Subs,
+    Playlist,
+    History,
 }
 
 /// 描画に必要な再生/UI 状態（コアから毎フレーム渡す）。
@@ -67,6 +80,12 @@ pub struct PlaybackView {
     pub auth_label: String,
     pub logged_in: bool,
     pub title: String,
+    pub has_recommend: bool,
+    // --- 一覧（list_open 時のみ有効）---
+    pub list_open: bool,
+    pub list_items: Vec<String>,
+    pub list_sel: usize,
+    pub list_header: String,
 }
 
 /// 上部バー・下部コントローラ帯の高さ・行高（旧 native_overlay と同値）。
@@ -197,6 +216,12 @@ struct WndState {
     /// コントローラ帯・上部バー（この矩形内の非部品クリックは吸収＝pause を出さない）。
     panel: RECT,
     top_panel: RECT,
+    /// 一覧表示中か、と行ジオメトリ（クリック行算出用）。
+    list_open: bool,
+    list_top: i32,
+    list_row_h: i32,
+    list_first: usize,
+    list_count: usize,
     /// 帯のクリッカブル/表示部品。クリックはここを探索する。
     controls: Vec<Control>,
     drag: Drag,
@@ -498,35 +523,54 @@ impl DcompOverlay {
             return;
         };
         let (cw, ch) = (self.cw, self.ch);
-
-        // 部品を組み立てる（描画とヒットで同じ素を使う）。
-        let mut controls = if active {
-            self.build_controls(cw, ch, view)
-        } else {
-            Vec::new()
-        };
-        let panel = if active {
-            RECT { left: 0, top: ch - BOTTOM_H, right: cw, bottom: ch }
-        } else {
-            RECT::default()
-        };
-        // 上部バー（タイトルが無ければ 1 行ぶん縮める）。
-        let strip_h = if view.title.is_empty() { TOP_H - ROW_H } else { TOP_H };
-        let top_panel = if active {
-            RECT { left: 0, top: 0, right: cw, bottom: strip_h }
-        } else {
-            RECT::default()
-        };
-        // 未ログイン時はログインボタン（右寄せ・ナビ行）をクリッカブル部品として追加。
         let nav_cy = 6 + ROW_H + ROW_H / 2;
-        if active && !view.logged_in {
-            let lw = unsafe { self.measure(&view.auth_label) }.ceil() as i32;
-            controls.push(Control::Button {
-                rect: RECT { left: cw - 12 - lw - 8, top: nav_cy - ROW_H / 2, right: cw - 12, bottom: nav_cy + ROW_H / 2 },
-                label: view.auth_label.clone(),
-                col: color(1.0, 0.92, 0.55, 1.0),
-                action: OverlayAction::Login,
-            });
+        let strip_h = if view.title.is_empty() { TOP_H - ROW_H } else { TOP_H };
+        let row_h: i32 = 48;
+        let top0: i32 = 64;
+        let nav = |x: i32, w: i32| RECT { left: x, top: nav_cy - ROW_H / 2, right: x + w, bottom: nav_cy + ROW_H / 2 };
+
+        // 部品（描画とヒットで同じ素）と各パネルを組み立てる。
+        let mut controls: Vec<Control> = Vec::new();
+        let mut panel = RECT::default();
+        let mut top_panel = RECT::default();
+        let (mut list_first, mut list_count) = (0usize, 0usize);
+
+        if view.list_open {
+            // 一覧モード: 全面パネル（余白クリックは吸収）。行クリックは wndproc が PlayIndex 化。
+            panel = RECT { left: 0, top: 0, right: cw, bottom: ch };
+            let visible = (((ch - top0 - 16) / row_h).max(1)) as usize;
+            list_first = if view.list_sel >= visible { view.list_sel - visible + 1 } else { 0 };
+            list_count = view.list_items.len();
+        } else if active {
+            controls = self.build_controls(cw, ch, view);
+            panel = RECT { left: 0, top: ch - BOTTOM_H, right: cw, bottom: ch };
+            top_panel = RECT { left: 0, top: 0, right: cw, bottom: strip_h };
+            // 認証（未ログイン=右寄せログインボタン）。
+            if !view.logged_in {
+                let lw = unsafe { self.measure(&view.auth_label) }.ceil() as i32;
+                controls.push(Control::Button {
+                    rect: RECT { left: cw - 12 - lw - 8, top: nav_cy - ROW_H / 2, right: cw - 12, bottom: nav_cy + ROW_H / 2 },
+                    label: view.auth_label.clone(),
+                    col: color(1.0, 0.92, 0.55, 1.0),
+                    action: OverlayAction::Login,
+                });
+            }
+            // ナビタブ（左フロー）: おすすめは候補がある時のみ、再生リスト/登録/履歴はログイン時のみ。
+            let tab_col = color(0.85, 0.90, 1.0, 1.0);
+            let mut tx = 12;
+            if view.has_recommend {
+                let l = "📋 おすすめ";
+                let lw = unsafe { self.measure(l) }.ceil() as i32;
+                controls.push(Control::Button { rect: nav(tx, lw + 8), label: l.to_string(), col: tab_col, action: OverlayAction::OpenList(ListTab::Recommend) });
+                tx += lw + 18;
+            }
+            if view.logged_in {
+                for (l, tab) in [("📃 再生リスト", ListTab::Playlist), ("📺 登録チャンネル", ListTab::Subs), ("🕘 履歴", ListTab::History)] {
+                    let lw = unsafe { self.measure(l) }.ceil() as i32;
+                    controls.push(Control::Button { rect: nav(tx, lw + 8), label: l.to_string(), col: tab_col, action: OverlayAction::OpenList(tab) });
+                    tx += lw + 18;
+                }
+            }
         }
 
         unsafe {
@@ -565,8 +609,24 @@ impl DcompOverlay {
             ctx.SetTransform(&Matrix3x2::translation(offset.x as f32, offset.y as f32));
             ctx.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
 
-            if active {
-                let p = Painter { ctx: &ctx, dwrite: &self.dwrite, tf: &self.tf_small };
+            let p = Painter { ctx: &ctx, dwrite: &self.dwrite, tf: &self.tf_small };
+            if view.list_open {
+                // 一覧（全面パネル）。
+                p.fill_rect(rf(0.0, 0.0, cw as f32, ch as f32), color(0.04, 0.04, 0.06, 0.93));
+                p.text(&view.list_header, rf(24.0, 18.0, cw as f32 - 24.0, 54.0), color(1.0, 1.0, 1.0, 1.0));
+                let visible = (((ch - top0 - 16) / row_h).max(1)) as usize;
+                for (i, item) in view.list_items.iter().enumerate().skip(list_first).take(visible) {
+                    let y = top0 + (i - list_first) as i32 * row_h;
+                    if i == view.list_sel {
+                        p.fill_round(rf(16.0, y as f32, cw as f32 - 16.0, (y + row_h - 4) as f32), 6.0, color(0.20, 0.40, 0.85, 0.85));
+                    }
+                    let col = if i == view.list_sel { color(1.0, 1.0, 1.0, 1.0) } else { color(0.70, 0.70, 0.75, 1.0) };
+                    p.text(item, rf(20.0, (y + 6) as f32, cw as f32 - 28.0, (y + row_h) as f32), col);
+                }
+                if view.list_items.is_empty() {
+                    p.text("（取得中… ログインが必要です）", rf(28.0, (top0 + 4) as f32, cw as f32 - 28.0, (top0 + 44) as f32), color(0.70, 0.70, 0.75, 1.0));
+                }
+            } else if active {
                 // 下部コントローラ帯の背景。
                 p.fill_rect(rf(panel.left as f32, panel.top as f32, panel.right as f32, panel.bottom as f32), color(0.03, 0.03, 0.05, 0.72));
                 // 上部バーの背景。
@@ -581,7 +641,7 @@ impl DcompOverlay {
                     (format!("URL: {}", view.url_input), color(1.0, 1.0, 1.0, 1.0))
                 };
                 p.text(&url_txt, rf(12.0, 6.0, cw as f32 - 12.0, (6 + ROW_H) as f32), url_col);
-                // 認証ラベル（ログイン済みは右寄せテキスト。未ログインは上で Button 追加済み）。
+                // 認証ラベル（ログイン済みは右寄せテキスト。未ログインは Button 追加済み）。
                 if view.logged_in {
                     let lw = self.measure(&view.auth_label);
                     p.text(
@@ -594,7 +654,7 @@ impl DcompOverlay {
                 if !view.title.is_empty() {
                     p.text(&view.title, rf(12.0, (6 + ROW_H * 2) as f32, cw as f32 - 12.0, strip_h as f32), color(1.0, 1.0, 1.0, 1.0));
                 }
-                // 各部品（下部コントロール＋ログインボタン）。
+                // 各部品（下部コントロール＋ナビタブ＋ログインボタン）。
                 for c in &controls {
                     c.draw(&p);
                 }
@@ -613,6 +673,11 @@ impl DcompOverlay {
         self.state.panel = panel;
         self.state.top_panel = top_panel;
         self.state.controls = controls;
+        self.state.list_open = view.list_open;
+        self.state.list_top = top0;
+        self.state.list_row_h = row_h;
+        self.state.list_first = list_first;
+        self.state.list_count = list_count;
     }
 
     /// 小フォントでのテキスト幅（px）を計測する。
@@ -750,7 +815,16 @@ unsafe extern "system" fn wndproc(
         WM_LBUTTONDOWN => {
             let mut capture = false;
             if let Some(s) = state_of(hwnd) {
-                if !s.active {
+                if s.list_open {
+                    // 一覧モード: 行クリック → PlayIndex。余白は吸収（pause を出さない）。
+                    if s.list_row_h > 0 && hi >= s.list_top {
+                        let row = ((hi - s.list_top) / s.list_row_h) as usize;
+                        let idx = s.list_first + row;
+                        if idx < s.list_count {
+                            s.actions.push(OverlayAction::PlayIndex(idx));
+                        }
+                    }
+                } else if !s.active {
                     // 帯非表示中は全面が動画。クリックで pause（同時に活動として帯が出る）。
                     s.actions.push(OverlayAction::TogglePause);
                 } else {
