@@ -48,12 +48,12 @@ png = "0.17"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_System_Performance",
-    # P1 移行実証 (src/bin/mpv_d3d11_probe.rs): 素の Win32 窓を作り mpv(D3D11)で再生する。
+    # ウィンドウ生成・メッセージ処理（mpv を wid 埋め込みする親窓と DComp 子窓）。
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_LibraryLoader",
     "Win32_Graphics_Gdi",
-    # P3a 描画基盤実証 (src/bin/d2d_overlay_probe.rs): Direct2D + DirectWrite + WIC で
-    # 透過オーバーレイ(per-pixel alpha)に AA矩形・日本語テキスト・JPEGサムネを描く。
+    # オーバーレイ描画基盤: Direct2D + DirectWrite + WIC で per-pixel alpha の UI
+    # （AA矩形・日本語テキスト・JPEG/サムネ画像）を描く。
     "Win32_System_Com",
     "Foundation_Numerics",
     "Win32_Graphics_Direct2D",
