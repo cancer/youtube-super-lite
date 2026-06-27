@@ -1021,6 +1021,21 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                             _state.chat_scroll =
                                 ((_state.chat_scroll as i32 + d).max(0) as usize).min(max);
                         }
+                        OverlayAction::SetChatWidth(r) => {
+                            _state.chat_width_ratio = (r as f32).clamp(0.15, 0.6);
+                            if _state.chat_open {
+                                _state
+                                    .core
+                                    .player
+                                    .set_video_margin_right(_state.chat_width_ratio as f64);
+                            }
+                        }
+                        OverlayAction::ChatFontDec => {
+                            _state.chat_font_px = (_state.chat_font_px - 2.0).clamp(10.0, 28.0);
+                        }
+                        OverlayAction::ChatFontInc => {
+                            _state.chat_font_px = (_state.chat_font_px + 2.0).clamp(10.0, 28.0);
+                        }
                     }
                     _state.last_activity = Instant::now();
                 }
@@ -1115,6 +1130,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     chat_lines,
                     chat_scroll,
                     chat_width_ratio,
+                    chat_font_px: _state.chat_font_px,
                 };
                 if let Some(o) = _state.dcomp_overlay.as_mut() {
                     o.render(active, &view);

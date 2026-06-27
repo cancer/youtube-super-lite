@@ -62,6 +62,11 @@ pub enum OverlayAction {
     ToggleChat,
     /// チャットのスクロール（+ で過去へ、- で最新へ。メッセージ数）。
     ChatScroll(i32),
+    /// チャット欄の幅（ウィンドウ幅比 0.15..=0.6）を設定（左端ドラッグ）。
+    SetChatWidth(f64),
+    /// チャット文字サイズを小さく / 大きく。
+    ChatFontDec,
+    ChatFontInc,
 }
 
 /// チャット行のセグメント（テキスト or インライン絵文字画像）。
@@ -197,6 +202,7 @@ pub struct PlaybackView {
     pub chat_lines: Vec<ChatLine>,
     pub chat_scroll: usize,
     pub chat_width_ratio: f32,
+    pub chat_font_px: f32,
 }
 
 /// 上部バー・下部コントローラ帯の高さ・行高（旧 native_overlay と同値）。
@@ -211,6 +217,8 @@ enum Drag {
     None,
     Seek,
     Vol,
+    /// チャット欄の左端をドラッグして幅変更中。
+    ChatW,
 }
 
 /// クリックを当てた部品が返す挙動。
@@ -333,8 +341,9 @@ struct WndState {
     list_row_h: i32,
     list_first: usize,
     list_count: usize,
-    /// チャットパネル矩形（ホイールでのスクロール判定用）。
+    /// チャットパネル矩形（ホイールでのスクロール判定用）と左端リサイズハンドル。
     chat_panel: RECT,
+    chat_resize: RECT,
     /// 帯のクリッカブル/表示部品。クリックはここを探索する。
     controls: Vec<Control>,
     drag: Drag,
@@ -356,6 +365,9 @@ pub struct DcompOverlay {
     dwrite: IDWriteFactory,
     /// 小フォント（コントロール・時間、15px）。
     tf_small: IDWriteTextFormat,
+    /// チャット用フォント（ユーザー調整サイズ。NO_WRAP。size 変化時に作り直す）。
+    chat_tf: Option<IDWriteTextFormat>,
+    chat_tf_px: f32,
     /// 一覧サムネの URL→ビットマップキャッシュ（ディスクキャッシュ済みを WIC デコード）。
     thumb_cache: HashMap<String, ID2D1Bitmap1>,
     cw: i32,
@@ -471,6 +483,8 @@ impl DcompOverlay {
                 d2d_ctx,
                 dwrite,
                 tf_small,
+                chat_tf: None,
+                chat_tf_px: 0.0,
                 thumb_cache: HashMap::new(),
                 cw,
                 ch,
@@ -675,8 +689,10 @@ impl DcompOverlay {
         } else {
             RECT::default()
         };
-        // チャット表示中はインライン絵文字を（ディスクキャッシュ済みのみ）先にデコードしておく。
+        // チャット表示中: フォント用意・インライン絵文字の事前デコード・左端リサイズハンドル。
+        let mut chat_resize = RECT::default();
         if chat_panel.right > chat_panel.left {
+            self.ensure_chat_format(view.chat_font_px);
             let urls: Vec<String> = view
                 .chat_lines
                 .iter()
@@ -688,6 +704,7 @@ impl DcompOverlay {
                 })
                 .collect();
             self.ensure_thumbs(&urls);
+            chat_resize = RECT { left: chat_panel.left, top: chat_panel.top, right: chat_panel.left + 8, bottom: chat_panel.bottom };
         }
 
         if view.list_open {
@@ -740,6 +757,17 @@ impl DcompOverlay {
                     tx += lw + 18;
                 }
             }
+            // チャット文字サイズ A-/A+（チャットヘッダ右）。
+            if chat_panel.right > chat_panel.left {
+                let hcy = chat_panel.top + 14;
+                let acc = color(0.85, 0.90, 1.0, 1.0);
+                let aw = unsafe { self.measure("A+") }.ceil() as i32;
+                let ainc = RECT { left: cw - 10 - aw - 8, top: hcy - ROW_H / 2, right: cw - 10, bottom: hcy + ROW_H / 2 };
+                controls.push(Control::Button { rect: ainc, label: "A+".to_string(), col: acc, action: OverlayAction::ChatFontInc });
+                let ap = unsafe { self.measure("A-") }.ceil() as i32;
+                let adec = RECT { left: ainc.left - 6 - ap - 8, top: hcy - ROW_H / 2, right: ainc.left - 6, bottom: hcy + ROW_H / 2 };
+                controls.push(Control::Button { rect: adec, label: "A-".to_string(), col: acc, action: OverlayAction::ChatFontDec });
+            }
         }
 
         unsafe {
@@ -779,6 +807,88 @@ impl DcompOverlay {
             ctx.Clear(Some(&color(0.0, 0.0, 0.0, 0.0)));
 
             let p = Painter { ctx: &ctx, dwrite: &self.dwrite, tf: &self.tf_small };
+
+            // チャットパネルを先に描く（後でバー/コントロール＝A-/A+ 等が上に乗るように）。
+            // テキストは語/文字単位で手動折返し、絵文字はインライン画像（未デコード時は alt）。
+            if chat_panel.right > chat_panel.left {
+                use windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_LINEAR;
+                let ctf = self.chat_tf.clone();
+                let cf_ref = ctf.as_ref().unwrap_or(&self.tf_small);
+                let pc = Painter { ctx: &ctx, dwrite: &self.dwrite, tf: cf_ref };
+                let (px, ptop, pbot) = (chat_panel.left as f32, chat_panel.top as f32, chat_panel.bottom as f32);
+                p.fill_rect(rf(px, ptop, cw as f32, pbot), color(0.05, 0.05, 0.07, 0.82));
+                // 左端リサイズハンドル（境界線＋中央グリップ）。
+                p.fill_rect(rf(px, ptop, px + 2.0, pbot), color(0.45, 0.45, 0.55, 0.8));
+                let grip_cy = (ptop + pbot) / 2.0;
+                p.fill_round(rf(px + 1.0, grip_cy - 16.0, px + 5.0, grip_cy + 16.0), 2.0, color(0.75, 0.75, 0.85, 0.95));
+                p.text("コメント", rf(px + 10.0, ptop + 2.0, cw as f32 - 10.0, ptop + 24.0), color(0.70, 0.70, 0.75, 1.0));
+
+                let normal = color(0.90, 0.90, 0.95, 1.0);
+                let left = px + 10.0;
+                let right_lim = cw as f32 - 10.0;
+                let fs = view.chat_font_px.clamp(10.0, 28.0);
+                let line_h = (fs * 1.6).max(fs + 8.0);
+                let em = fs * 1.5;
+                let body_top = ptop + 28.0;
+                let avail_h = pbot - body_top - 4.0;
+                let n = view.chat_lines.len();
+                let end = n.saturating_sub(view.chat_scroll).max(if n > 0 { 1 } else { 0 });
+                let cmeasure = |s: &str| self.measure_tf(cf_ref, s);
+
+                // パス1: end から折返し行数を数え、画面に収まる開始 index を決める。
+                let mut acc_lines = 0usize;
+                let mut start = end;
+                for i in (0..end).rev() {
+                    let toks = tokenize_line(&view.chat_lines[i], normal);
+                    let lc = chat_line_count(&toks, em, left, right_lim, &cmeasure);
+                    if start != end && (acc_lines + lc) as f32 * line_h > avail_h {
+                        break;
+                    }
+                    acc_lines += lc;
+                    start = i;
+                    if acc_lines as f32 * line_h >= avail_h {
+                        break;
+                    }
+                }
+
+                // パス2: start から手動ワードラップで描画。
+                let mut y = body_top;
+                'outer: for line in &view.chat_lines[start..end] {
+                    let toks = tokenize_line(line, normal);
+                    let mut cx = left;
+                    let mut ln = 0usize;
+                    for t in &toks {
+                        let tw = chat_tok_width(t, em, &cmeasure);
+                        if cx > left && cx + tw > right_lim {
+                            ln += 1;
+                            cx = left;
+                        }
+                        let ty = y + ln as f32 * line_h;
+                        if ty >= pbot {
+                            break 'outer;
+                        }
+                        match t {
+                            ChatTok::Text(s, tc) => {
+                                pc.text_clip(s, rf(cx, ty, right_lim, ty + line_h), *tc);
+                            }
+                            ChatTok::Emoji { url, alt } => {
+                                if let Some(bmp) = self.thumb_cache.get(url) {
+                                    let top = ty + (line_h - em) / 2.0;
+                                    ctx.DrawBitmap(bmp, Some(&rf(cx, top, cx + em, top + em)), 1.0, D2D1_INTERPOLATION_MODE_LINEAR, None, None);
+                                } else {
+                                    pc.text_clip(alt, rf(cx, ty, right_lim, ty + line_h), normal);
+                                }
+                            }
+                        }
+                        cx += tw;
+                    }
+                    y += (ln + 1) as f32 * line_h;
+                    if y >= pbot {
+                        break;
+                    }
+                }
+            }
+
             if view.list_open {
                 // 一覧（全面パネル）。
                 p.fill_rect(rf(0.0, 0.0, cw as f32, ch as f32), color(0.04, 0.04, 0.06, 0.93));
@@ -836,83 +946,9 @@ impl DcompOverlay {
                 if !view.title.is_empty() {
                     p.text(&view.title, rf(12.0, (6 + ROW_H * 2) as f32, cw as f32 - 12.0, strip_h as f32), color(1.0, 1.0, 1.0, 1.0));
                 }
-                // 各部品（下部コントロール＋ナビタブ＋ログインボタン）。
+                // 各部品（下部コントロール＋ナビタブ＋ログイン＋A-/A+。チャットの上に乗る）。
                 for c in &controls {
                     c.draw(&p);
-                }
-            }
-
-            // チャットパネル（一覧以外で chat_open のとき。active と無関係に出す）。
-            // テキストは語/文字単位で手動折返し、絵文字はインライン画像（未デコード時は alt）。
-            if chat_panel.right > chat_panel.left {
-                use windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_LINEAR;
-                let (px, ptop, pbot) = (chat_panel.left as f32, chat_panel.top as f32, chat_panel.bottom as f32);
-                p.fill_rect(rf(px, ptop, cw as f32, pbot), color(0.05, 0.05, 0.07, 0.82));
-                p.text("コメント", rf(px + 10.0, ptop + 2.0, cw as f32 - 10.0, ptop + 24.0), color(0.70, 0.70, 0.75, 1.0));
-
-                let normal = color(0.90, 0.90, 0.95, 1.0);
-                let left = px + 10.0;
-                let right_lim = cw as f32 - 10.0;
-                let fs = 15.0f32; // tf_small のサイズ。
-                let line_h = (fs * 1.6).max(fs + 8.0);
-                let em = fs * 1.5;
-                let body_top = ptop + 28.0;
-                let avail_h = pbot - body_top - 4.0;
-                let n = view.chat_lines.len();
-                let end = n.saturating_sub(view.chat_scroll).max(if n > 0 { 1 } else { 0 });
-                let measure = |s: &str| self.measure(s);
-
-                // パス1: end から折返し行数を数え、画面に収まる開始 index を決める。
-                let mut acc_lines = 0usize;
-                let mut start = end;
-                for i in (0..end).rev() {
-                    let toks = tokenize_line(&view.chat_lines[i], normal);
-                    let lc = chat_line_count(&toks, em, left, right_lim, &measure);
-                    if start != end && (acc_lines + lc) as f32 * line_h > avail_h {
-                        break;
-                    }
-                    acc_lines += lc;
-                    start = i;
-                    if acc_lines as f32 * line_h >= avail_h {
-                        break;
-                    }
-                }
-
-                // パス2: start から手動ワードラップで描画。
-                let mut y = body_top;
-                'outer: for line in &view.chat_lines[start..end] {
-                    let toks = tokenize_line(line, normal);
-                    let mut cx = left;
-                    let mut ln = 0usize;
-                    for t in &toks {
-                        let tw = chat_tok_width(t, em, &measure);
-                        if cx > left && cx + tw > right_lim {
-                            ln += 1;
-                            cx = left;
-                        }
-                        let ty = y + ln as f32 * line_h;
-                        if ty >= pbot {
-                            break 'outer;
-                        }
-                        match t {
-                            ChatTok::Text(s, tc) => {
-                                p.text_clip(s, rf(cx, ty, right_lim, ty + line_h), *tc);
-                            }
-                            ChatTok::Emoji { url, alt } => {
-                                if let Some(bmp) = self.thumb_cache.get(url) {
-                                    let top = ty + (line_h - em) / 2.0;
-                                    ctx.DrawBitmap(bmp, Some(&rf(cx, top, cx + em, top + em)), 1.0, D2D1_INTERPOLATION_MODE_LINEAR, None, None);
-                                } else {
-                                    p.text_clip(alt, rf(cx, ty, right_lim, ty + line_h), normal);
-                                }
-                            }
-                        }
-                        cx += tw;
-                    }
-                    y += (ln + 1) as f32 * line_h;
-                    if y >= pbot {
-                        break;
-                    }
                 }
             }
 
@@ -935,6 +971,7 @@ impl DcompOverlay {
         self.state.list_first = list_first;
         self.state.list_count = list_count;
         self.state.chat_panel = chat_panel;
+        self.state.chat_resize = chat_resize;
     }
 
     /// 表示中サムネ URL のうち未キャッシュのものを、ディスクキャッシュ済みなら WIC デコードして
@@ -978,17 +1015,50 @@ impl DcompOverlay {
         self.d2d_ctx.CreateBitmapFromWicBitmap(&converter, None).ok()
     }
 
-    /// 小フォントでのテキスト幅（px）を計測する。
+    /// 小フォントでのテキスト幅（px）。
     unsafe fn measure(&self, s: &str) -> f32 {
+        self.measure_tf(&self.tf_small, s)
+    }
+
+    /// 指定フォントでのテキスト幅（px）。
+    unsafe fn measure_tf(&self, tf: &IDWriteTextFormat, s: &str) -> f32 {
         use windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_METRICS;
         let wt: Vec<u16> = s.encode_utf16().collect();
-        if let Ok(layout) = self.dwrite.CreateTextLayout(&wt, &self.tf_small, 8192.0, 64.0) {
+        if let Ok(layout) = self.dwrite.CreateTextLayout(&wt, tf, 8192.0, 64.0) {
             let mut m = DWRITE_TEXT_METRICS::default();
             if layout.GetMetrics(&mut m).is_ok() {
                 return m.widthIncludingTrailingWhitespace;
             }
         }
         s.chars().count() as f32 * 9.0
+    }
+
+    /// チャット用フォントを指定 px で用意する（変化時のみ作り直す）。NO_WRAP（折返しは手動）。
+    fn ensure_chat_format(&mut self, px: f32) {
+        let px = px.clamp(10.0, 28.0);
+        if self.chat_tf.is_some() && (self.chat_tf_px - px).abs() < 0.5 {
+            return;
+        }
+        use windows::core::w;
+        use windows::Win32::Graphics::DirectWrite::{
+            DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_WORD_WRAPPING_NO_WRAP,
+        };
+        unsafe {
+            if let Ok(tf) = self.dwrite.CreateTextFormat(
+                w!("Yu Gothic UI"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                px,
+                w!("ja-jp"),
+            ) {
+                let _ = tf.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+                self.chat_tf = Some(tf);
+                self.chat_tf_px = px;
+            }
+        }
     }
 }
 
@@ -1115,6 +1185,11 @@ unsafe extern "system" fn wndproc(
                     Drag::Vol => s
                         .actions
                         .push(OverlayAction::SetVolume(frac_x(&s.drag_rect, lo) * 130.0)),
+                    Drag::ChatW => {
+                        // 左端を x に動かす → 幅比率 = (cw - x) / cw。
+                        let ratio = ((s.cw - lo) as f64 / s.cw.max(1) as f64).clamp(0.15, 0.6);
+                        s.actions.push(OverlayAction::SetChatWidth(ratio));
+                    }
                     Drag::None => {}
                 }
             }
@@ -1140,6 +1215,10 @@ unsafe extern "system" fn wndproc(
                             s.actions.push(OverlayAction::PlayIndex(idx));
                         }
                     }
+                } else if s.chat_resize.right > s.chat_resize.left && in_rect(&s.chat_resize, lo, hi) {
+                    // チャット欄の左端ハンドル → 幅ドラッグ開始。
+                    s.drag = Drag::ChatW;
+                    capture = true;
                 } else if !s.active {
                     // 帯非表示中は全面が動画。クリックで pause（同時に活動として帯が出る）。
                     s.actions.push(OverlayAction::TogglePause);
