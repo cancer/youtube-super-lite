@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  .app-scroll::-webkit-scrollbar{width:12px}
+  .app-scroll::-webkit-scrollbar-thumb{background:#5a5a5a;border-radius:8px;border:3px solid #0f0f0f}
+  .app-scroll::-webkit-scrollbar-track{background:transparent}
+</style>
+</helmet>
+<div style="min-height:100vh;width:100%;display:flex;align-items:center;justify-content:center;background:radial-gradient(120% 120% at 50% 0%,#2a2a2e,#141416 60%,#0a0a0b);padding:32px;font-family:'Roboto','Noto Sans JP',sans-serif">
+
+  <!-- Desktop window -->
+  <div style="width:1320px;height:840px;border-radius:12px;overflow:hidden;background:#0f0f0f;box-shadow:0 30px 80px -20px rgba(0,0,0,0.7),0 0 0 1px rgba(255,255,255,0.06);display:flex;flex-direction:column">
+
+    <!-- Custom title bar -->
+    <div style="height:44px;flex:0 0 44px;background:#181818;border-bottom:1px solid #272727;display:flex;align-items:center;padding:0 14px;gap:14px;-webkit-app-region:drag">
+      <div style="display:flex;align-items:center;gap:9px">
+        <div style="width:22px;height:22px;border-radius:6px;background:#ff0033;display:flex;align-items:center;justify-content:center">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
+        </div>
+        <span style="font-size:13px;font-weight:700;color:#f1f1f1;letter-spacing:.3px">YouTube Super Lite</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;margin-left:auto;-webkit-app-region:no-drag">
+        <div style="width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#aaa" style-hover="background:#e81123;color:#fff">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Body: sidebar + content -->
+    <div style="flex:1;display:flex;min-height:0">
+
+      <!-- Sidebar -->
+      <div class="app-scroll" style="width:224px;flex:0 0 224px;min-height:0;overflow-y:auto;background:#0f0f0f;border-right:1px solid #272727;padding:12px 8px;display:flex;flex-direction:column;gap:2px">
+        <sc-for list="{{ nav }}" as="n" hint-placeholder-count="4">
+          <div style="display:flex;align-items:center;gap:14px;height:40px;padding:0 14px;border-radius:10px;cursor:pointer;color:{{ n.color }};background:{{ n.bg }};font-size:13.5px;font-weight:{{ n.weight }}" style-hover="background:#1f1f1f">
+            <span style="width:20px;height:20px;display:flex;align-items:center;justify-content:center" dangerouslySetInnerHTML="{{ n.icon }}"></span>
+            <span>{{ n.label }}</span>
+          </div>
+        </sc-for>
+        <div style="height:1px;background:#272727;margin:10px 6px"></div>
+        <div style="font-size:11px;color:#777;font-weight:700;padding:6px 14px;letter-spacing:.5px;display:flex;align-items:center;gap:6px">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="#f5b400"><path d="M12 2l2.4 5.6L20 8l-4 4 1 6-5-3-5 3 1-6-4-4 5.6-.4z"/></svg>お気に入り
+        </div>
+        <sc-for list="{{ favSubs }}" as="s" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:12px;height:38px;padding:0 14px;border-radius:10px;cursor:pointer" style-hover="background:#1f1f1f">
+            <span style="position:relative;width:24px;height:24px;border-radius:50%;flex:0 0 24px;background:{{ s.color }};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;font-family:'Noto Sans JP'">{{ s.initial }}<sc-if value="{{ s.live }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;inset:-3px;border:2px solid #f00;border-radius:50%"></span></sc-if></span>
+            <span style="font-size:13px;color:#f1f1f1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</span>
+          </div>
+        </sc-for>
+        <div style="font-size:11px;color:#777;font-weight:700;padding:6px 14px;letter-spacing:.5px;margin-top:6px">その他</div>
+        <sc-for list="{{ otherSubs }}" as="s" hint-placeholder-count="2">
+          <div style="display:flex;align-items:center;gap:12px;height:38px;padding:0 14px;border-radius:10px;cursor:pointer" style-hover="background:#1f1f1f">
+            <span style="position:relative;width:24px;height:24px;border-radius:50%;flex:0 0 24px;background:{{ s.color }};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;font-family:'Noto Sans JP'">{{ s.initial }}</span>
+            <span style="font-size:13px;color:#f1f1f1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- Content: hero panel + video list -->
+      <div style="flex:1;display:flex;min-width:0">
+
+        <!-- Hero panel -->
+        <div style="width:360px;flex:0 0 360px;min-height:0;overflow:hidden;background:linear-gradient(180deg,#1d1d1f,#0f0f0f 55%);padding:28px 28px 24px;display:flex;flex-direction:column">
+          <!-- big thumbnail -->
+          <div style="position:relative;width:100%;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:{{ hero.bg }};box-shadow:0 8px 24px -6px rgba(0,0,0,0.6)">
+            <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;text-shadow:0 2px 10px rgba(0,0,0,0.5)">
+              <div style="font-family:'Noto Sans JP';font-weight:900;font-size:42px;line-height:1;color:#fff;letter-spacing:1px">{{ hero.big }}</div>
+              <div style="font-family:'Noto Sans JP';font-weight:700;font-size:12px;color:#ffd86e;margin-top:4px">{{ hero.sub }}</div>
+            </div>
+            <div style="position:absolute;top:0;right:0;width:0;height:0;border-top:46px solid #cc0000;border-left:46px solid transparent"></div>
+            <span style="position:absolute;top:4px;right:6px;font-size:13px;font-weight:900;color:#fff;font-style:italic">#1</span>
+          </div>
+
+          <!-- title -->
+          <div style="font-family:'Noto Sans JP';font-size:28px;font-weight:700;color:#f1f1f1;margin-top:18px">{{ hero.title }}</div>
+          <div style="font-size:13px;font-weight:700;color:#f1f1f1;margin-top:12px">{{ hero.owner }}</div>
+          <div style="font-size:13px;color:#aaa;margin-top:4px">{{ hero.meta }}</div>
+
+          <!-- play / shuffle -->
+          <div style="display:flex;gap:12px;margin-top:20px">
+            <button style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:8px;border:none;font-family:inherit;font-size:14px;font-weight:700;color:#0f0f0f;background:#f1f1f1;padding:11px 0;border-radius:999px;cursor:pointer" style-hover="background:#fff">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>すべて再生
+            </button>
+            <button style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:8px;border:none;font-family:inherit;font-size:14px;font-weight:500;color:#f1f1f1;background:#272727;padding:11px 0;border-radius:999px;cursor:pointer" style-hover="background:#3f3f3f">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>シャッフル
+            </button>
+          </div>
+        </div>
+
+        <!-- Video list -->
+        <div class="app-scroll" style="flex:1;min-width:0;overflow-y:auto;background:#0f0f0f;padding:20px 24px 40px">
+
+          <!-- sort chip + dropdown -->
+          <div style="position:relative;width:fit-content;margin-bottom:8px">
+            <button onClick="{{ toggle }}" style="display:inline-flex;align-items:center;gap:6px;border:none;font-family:inherit;font-size:13px;font-weight:500;color:#f1f1f1;background:#272727;padding:8px 14px;border-radius:9px;cursor:pointer" style-hover="background:#3f3f3f">{{ selected }} <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="transform:{{ caret }}"><path d="M7 10l5 5 5-5z"/></svg></button>
+            <sc-if value="{{ open }}" hint-placeholder-val="{{ true }}">
+              <div style="position:absolute;top:calc(100% + 6px);left:0;z-index:40;min-width:220px;background:#282828;border:1px solid #3a3a3a;border-radius:10px;padding:8px 0;box-shadow:0 12px 32px -8px rgba(0,0,0,0.7)">
+                <sc-for list="{{ sortOptions }}" as="o" hint-placeholder-count="6">
+                  <div onClick="{{ o.select }}" style="display:flex;align-items:center;gap:10px;height:40px;padding:0 18px;font-size:13.5px;color:#f1f1f1;cursor:pointer;background:{{ o.bg }}" style-hover="background:#3f3f3f">
+                    <span style="width:14px;display:inline-flex;color:#3ea6ff">{{ o.check }}</span>{{ o.label }}
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+          </div>
+
+          <!-- rows -->
+          <div style="display:flex;flex-direction:column">
+            <sc-for list="{{ rows }}" as="v" hint-placeholder-count="7">
+              <div style="display:flex;align-items:center;gap:12px;padding:8px 4px;border-radius:10px;cursor:pointer" style-hover="background:#1f1f1f">
+                <!-- drag handle -->
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="#717171" style="flex:0 0 18px;cursor:grab"><path d="M4 8h16v2H4zm0 6h16v2H4z"/></svg>
+                <!-- thumbnail -->
+                <div style="position:relative;width:160px;flex:0 0 160px;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:{{ v.bg }}">
+                  <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px;text-align:center;text-shadow:0 2px 8px rgba(0,0,0,0.45)">
+                    <div style="font-family:'Noto Sans JP';font-weight:900;font-size:{{ v.bigSize }};line-height:1.05;color:{{ v.bigColor }};white-space:pre-line">{{ v.big }}</div>
+                    <sc-if value="{{ v.sub }}" hint-placeholder-val="sub"><div style="font-family:'Noto Sans JP';font-weight:700;font-size:9px;color:{{ v.subColor }};margin-top:2px">{{ v.sub }}</div></sc-if>
+                  </div>
+                  <sc-if value="{{ v.flag }}" hint-placeholder-val="{{ true }}">
+                    <div style="position:absolute;top:0;right:0;width:0;height:0;border-top:34px solid #cc0000;border-left:34px solid transparent"></div>
+                    <span style="position:absolute;top:2px;right:4px;font-size:10px;font-weight:900;color:#fff;font-style:italic">#1</span>
+                  </sc-if>
+                  <div style="position:absolute;right:5px;bottom:5px;background:rgba(0,0,0,0.85);color:#fff;font-size:11px;font-weight:500;padding:1px 5px;border-radius:4px">{{ v.duration }}</div>
+                </div>
+                <!-- info -->
+                <div style="min-width:0;flex:1;padding-right:6px">
+                  <div style="font-size:14px;font-weight:500;line-height:1.4;color:#f1f1f1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{{ v.title }}</div>
+                  <div style="font-size:12px;color:#aaa;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ v.meta }}</div>
+                </div>
+                <!-- kebab + menu -->
+                <div style="position:relative;flex:0 0 20px">
+                  <svg onClick="{{ v.toggleMenu }}" width="20" height="20" viewBox="0 0 24 24" fill="#aaa" style="cursor:pointer;display:block" style-hover="opacity:0.7"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+                  <sc-if value="{{ v.menuOpen }}" hint-placeholder-val="{{ false }}">
+                    <div style="position:absolute;top:calc(100% + 4px);right:0;z-index:50;min-width:210px;background:#282828;border:1px solid #3a3a3a;border-radius:10px;padding:8px 0;box-shadow:0 12px 32px -8px rgba(0,0,0,0.7)">
+                      <div onClick="{{ v.remove }}" style="display:flex;align-items:center;gap:14px;height:42px;padding:0 16px;font-size:13.5px;color:#f1f1f1;cursor:pointer" style-hover="background:#3f3f3f">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                        「後で見る」から削除
+                      </div>
+                    </div>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1384,&quot;height&quot;:904}}">
+class Component extends DCLogic {
+  state = { open: true, selected: '手動設定', openRow: null };
+  renderVals() {
+    const sortLabels = ['手動設定','追加日（新しい順）','追加日（古い順）','人気順','公開日（新しい順）','公開日（古い順）'];
+    const sortOptions = sortLabels.map((label) => ({
+      label,
+      bg: label === this.state.selected ? '#3f3f3f' : 'transparent',
+      check: label === this.state.selected ? '✓' : '',
+      select: () => this.setState({ selected: label, open: false }),
+    }));
+    const toggle = () => this.setState((s) => ({ open: !s.open }));
+    const caret = this.state.open ? 'rotate(180deg)' : 'rotate(0deg)';
+    const ic = {
+      subs:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 8H4V6h16v2zm-2-6H6v2h12V2zM4 22h16a2 2 0 002-2V10H2v10a2 2 0 002 2zm6-8.5l6 3.5-6 3.5v-7z"/></svg>',
+      history:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 00-9 9H1l4 4 4-4H6a7 7 0 117 7 7 7 0 01-4.9-2L6.7 18.4A9 9 0 1013 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8z"/></svg>',
+      playlist:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10h11v2H3v-2zm0-4h11v2H3V6zm0 8h7v2H3v-2zm13-1v6l5-3-5-3z"/></svg>',
+      recommend:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 5.6L20 8l-4 4 1 6-5-3-5 3 1-6-4-4 5.6-.4z"/></svg>'
+    };
+    const H = (s) => ({ __html:s });
+    const nav = [
+      { label:'登録チャンネル', icon:H(ic.subs), color:'#aaa', bg:'transparent', weight:500 },
+      { label:'履歴', icon:H(ic.history), color:'#aaa', bg:'transparent', weight:500 },
+      { label:'再生リスト', icon:H(ic.playlist), color:'#fff', bg:'#272727', weight:700 },
+      { label:'おすすめ', icon:H(ic.recommend), color:'#aaa', bg:'transparent', weight:500 },
+    ];
+    const favSubs = [
+      { name:'ACHRORA', initial:'A', color:'#7c5cff', live:true },
+      { name:'水宮枢 Su Ch.', initial:'水', color:'#39a0e8', live:true },
+      { name:'兎田ぺこら', initial:'ペ', color:'#d84a4a', live:true },
+    ];
+    const otherSubs = [
+      { name:'夏色まつり', initial:'夏', color:'#ff9bb8' },
+      { name:'ロボ子さん', initial:'ロ', color:'#ff7aa8' },
+    ];
+
+    const hero = {
+      bg:'linear-gradient(135deg,#b91c4a,#e84a6f 55%,#ff9a6e)',
+      big:'BIOHAZARD', sub:'RESIDENT EVIL',
+      title:'後で見る', owner:'cancer', meta:'101 本の動画・0 回視聴・本日更新'
+    };
+
+    const row = (o) => ({
+      bg:o.bg, big:o.big, bigSize:o.bigSize||'18px', bigColor:o.bigColor||'#fff',
+      sub:o.sub||'', subColor:o.subColor||'#ffffff',
+      title:o.title, meta:o.meta, duration:o.duration, flag:!!o.flag
+    });
+
+    const rows = [
+      row({ bg:'linear-gradient(135deg,#b91c4a,#e84a6f 55%,#ff9a6e)', big:'BIOHAZARD', bigSize:'16px', sub:'RESIDENT EVIL', subColor:'#ffd86e', flag:true,
+        title:'完全初見のBIOHAZARD7 RESIDENT EVIL #1【ホロライブ / 星街すいせい】',
+        meta:'Suisei Channel・34万回視聴・5 年前 に配信済み', duration:'2:07:27' }),
+      row({ bg:'linear-gradient(135deg,#d84a8f,#ff8fb1 55%,#ffd0e0)', big:'先行体験', bigSize:'18px', sub:'AQUA', subColor:'#fff',
+        title:'【あくありうむ。】本人が本人を攻略するゲームやるってまじ？【湊あくあ/ホロライブ】',
+        meta:'Aqua Ch. 湊あくあ・68万回視聴・3 年前 に配信済み', duration:'2:56:02' }),
+      row({ bg:'linear-gradient(135deg,#caa46a,#e8c98a 55%,#f4e3bf)', big:'お悩み\n相談所', bigSize:'15px', sub:'KANATAMA', subColor:'#6a4a2a',
+        title:'【#かなたま相談所】個人勢・企業勢問わず!? Vtuberのお悩み解決【犬山たまき/かなえ先生】',
+        meta:'Tamaki Ch. 犬山たまき / 佃煮のりお、犯罪学教室のかなえ先生 V Criminologist・', duration:'3:51:28' }),
+      row({ bg:'linear-gradient(135deg,#7a4a9a,#a86ad6 55%,#d6b0f0)', big:'2026年\n業界予想', bigSize:'15px', sub:'VTUBER', subColor:'#ffd86e',
+        title:'【#かなたま業界予想】Vtuber2026年業界予想＆2025年表批評【犬山たまき/かなえ先生】',
+        meta:'Tamaki Ch. 犬山たまき / 佃煮のりお、犯罪学教室のかなえ先生 V Criminologist・', duration:'3:47:46' }),
+      row({ bg:'linear-gradient(135deg,#3a3a44,#5a5a6a 55%,#9a9ab0)', big:'FF\nTACTICS', bigSize:'14px', sub:'#3 CHAPTER 2', subColor:'#ffd86e',
+        title:'#3【FFタクティクス】チャプター2！ファイナルファンタジータクティクスをやってみるぞ！FINAL FANTASY TACTICS【周防パト…',
+        meta:'Patra Channel / 周防パトラ・13万回視聴・1 年前 に配信済み', duration:'6:26:34' }),
+      row({ bg:'linear-gradient(135deg,#2a3a4a,#4a5a6a 55%,#8a9ab0)', big:'FF\nTACTICS', bigSize:'14px', sub:'#4 CHAPTER 3', subColor:'#ffd86e',
+        title:'#4【FFタクティクス】チャプター3！ファイナルファンタジータクティクスをやってみるぞ！FINAL FANTASY TACTICS【周防パト…',
+        meta:'Patra Channel / 周防パトラ・11万回視聴・1 年前 に配信済み', duration:'5:32:49' }),
+      row({ bg:'linear-gradient(135deg,#7a1f3a,#c43a6a 50%,#e88aa0)', big:'不仲', bigSize:'24px', sub:'INABA HANERU', subColor:'#fff',
+        title:'【#因幡はねる襲来】不仲になった先輩Vtuberと和解してみた【犬山たまき/神楽めあ/かなえ先生】',
+        meta:'Tamaki Ch. 犬山たまき / 佃煮のりお・31万回視聴・1 年前 に配信済み', duration:'1:08:46' }),
+    ];
+
+    rows.forEach((r, i) => {
+      r.menuOpen = this.state.openRow === i;
+      r.toggleMenu = () => this.setState((s) => ({ openRow: s.openRow === i ? null : i }));
+      r.remove = () => this.setState({ openRow: null });
+    });
+
+    return { nav, favSubs, otherSubs, hero, rows, sortOptions, toggle, caret, open: this.state.open, selected: this.state.selected };
+  }
+}
+</script>
+</body>
+</html>

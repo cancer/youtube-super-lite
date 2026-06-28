@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  .app-scroll::-webkit-scrollbar{width:12px}
+  .app-scroll::-webkit-scrollbar-thumb{background:#5a5a5a;border-radius:8px;border:3px solid #0f0f0f}
+  .app-scroll::-webkit-scrollbar-track{background:transparent}
+  .chip-row::-webkit-scrollbar{height:0;display:none}
+</style>
+</helmet>
+<div style="min-height:100vh;width:100%;display:flex;align-items:center;justify-content:center;background:radial-gradient(120% 120% at 50% 0%,#2a2a2e,#141416 60%,#0a0a0b);padding:32px;font-family:'Roboto','Noto Sans JP',sans-serif">
+
+  <!-- Desktop window -->
+  <div style="width:1320px;height:840px;border-radius:12px;overflow:hidden;background:#0f0f0f;box-shadow:0 30px 80px -20px rgba(0,0,0,0.7),0 0 0 1px rgba(255,255,255,0.06);display:flex;flex-direction:column">
+
+    <!-- Custom title bar -->
+    <div style="height:44px;flex:0 0 44px;background:#181818;border-bottom:1px solid #272727;display:flex;align-items:center;padding:0 14px;gap:14px">
+      <div style="display:flex;align-items:center;gap:9px">
+        <div style="width:22px;height:22px;border-radius:6px;background:#ff0033;display:flex;align-items:center;justify-content:center">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
+        </div>
+        <span style="font-size:13px;font-weight:700;color:#f1f1f1;letter-spacing:.3px">YouTube Super Lite</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;margin-left:auto">
+        <div style="width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#aaa" style-hover="background:#e81123;color:#fff">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Body: sidebar + content -->
+    <div style="flex:1;display:flex;min-height:0">
+
+      <!-- Sidebar -->
+      <div class="app-scroll" style="width:224px;flex:0 0 224px;min-height:0;overflow-y:auto;background:#0f0f0f;border-right:1px solid #272727;padding:12px 8px;display:flex;flex-direction:column;gap:2px">
+        <sc-for list="{{ nav }}" as="n" hint-placeholder-count="4">
+          <div style="display:flex;align-items:center;gap:14px;height:40px;padding:0 14px;border-radius:10px;cursor:pointer;color:{{ n.color }};background:{{ n.bg }};font-size:13.5px;font-weight:{{ n.weight }}" style-hover="background:#1f1f1f">
+            <span style="width:20px;height:20px;display:flex;align-items:center;justify-content:center" dangerouslySetInnerHTML="{{ n.icon }}"></span>
+            <span>{{ n.label }}</span>
+          </div>
+        </sc-for>
+        <div style="height:1px;background:#272727;margin:10px 6px"></div>
+        <div style="font-size:11px;color:#777;font-weight:700;padding:6px 14px;letter-spacing:.5px;display:flex;align-items:center;gap:6px">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="#f5b400"><path d="M12 2l2.4 5.6L20 8l-4 4 1 6-5-3-5 3 1-6-4-4 5.6-.4z"/></svg>お気に入り
+        </div>
+        <sc-for list="{{ favSubs }}" as="s" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:12px;height:38px;padding:0 14px;border-radius:10px;cursor:pointer" style-hover="background:#1f1f1f">
+            <span style="position:relative;width:24px;height:24px;border-radius:50%;flex:0 0 24px;background:{{ s.color }};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;font-family:'Noto Sans JP'">{{ s.initial }}<sc-if value="{{ s.live }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;inset:-3px;border:2px solid #f00;border-radius:50%"></span></sc-if></span>
+            <span style="font-size:13px;color:#f1f1f1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</span>
+          </div>
+        </sc-for>
+        <div style="font-size:11px;color:#777;font-weight:700;padding:6px 14px;letter-spacing:.5px;margin-top:6px">その他</div>
+        <sc-for list="{{ otherSubs }}" as="s" hint-placeholder-count="2">
+          <div style="display:flex;align-items:center;gap:12px;height:38px;padding:0 14px;border-radius:10px;cursor:pointer" style-hover="background:#1f1f1f">
+            <span style="position:relative;width:24px;height:24px;border-radius:50%;flex:0 0 24px;background:{{ s.color }};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;font-family:'Noto Sans JP'">{{ s.initial }}<sc-if value="{{ s.live }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;inset:-3px;border:2px solid #f00;border-radius:50%"></span></sc-if></span>
+            <span style="font-size:13px;color:#f1f1f1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- Content -->
+      <div class="app-scroll" style="flex:1;min-width:0;overflow-y:auto;background:#0f0f0f;display:flex;flex-direction:column">
+
+        <!-- Filter chip bar (sticky) -->
+        <div style="position:sticky;top:0;z-index:5;background:#0f0f0f;padding:12px 0 12px 24px">
+          <div style="position:relative">
+            <div class="chip-row" style="display:flex;gap:12px;overflow-x:auto;padding-right:54px">
+              <sc-for list="{{ chips }}" as="c" hint-placeholder-count="9">
+                <div style="flex:0 0 auto;height:32px;display:flex;align-items:center;padding:0 12px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;color:{{ c.color }};background:{{ c.bg }}" style-hover="opacity:0.88">{{ c.label }}</div>
+              </sc-for>
+            </div>
+            <div style="position:absolute;top:0;right:0;width:54px;height:32px;background:linear-gradient(90deg,rgba(15,15,15,0) 0%,#0f0f0f 55%);display:flex;align-items:center;justify-content:flex-end;padding-right:8px">
+              <div style="width:32px;height:32px;border-radius:50%;background:#272727;display:flex;align-items:center;justify-content:center;cursor:pointer" style-hover="background:#3f3f3f">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="#f1f1f1"><path d="M9 6l6 6-6 6z"/></svg>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="padding:4px 24px 56px">
+
+          <!-- Top video row -->
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:24px 16px">
+            <sc-for list="{{ rowA }}" as="v" hint-placeholder-count="3">
+              <div style="cursor:pointer;min-width:0" style-hover="opacity:0.96">
+                <div style="position:relative;width:100%;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:{{ v.bg }};box-shadow:0 0 0 1px rgba(255,255,255,0.04)">
+                  <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px;text-align:center;text-shadow:0 2px 8px rgba(0,0,0,0.4)">
+                    <div style="font-family:'Noto Sans JP';font-weight:900;font-size:{{ v.bigSize }};line-height:1.04;color:{{ v.bigColor }};letter-spacing:1px;white-space:pre-line">{{ v.big }}</div>
+                    <div style="font-family:'Noto Sans JP';font-weight:700;font-size:13px;color:{{ v.subColor }};margin-top:4px">{{ v.sub }}</div>
+                  </div>
+                  <sc-if value="{{ v.live }}" hint-placeholder-val="{{ true }}">
+                    <div style="position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,0.85);color:#fff;font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;display:flex;align-items:center;gap:4px">
+                      <span style="width:6px;height:6px;border-radius:50%;background:#f00;display:inline-block"></span>ライブ
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ v.duration }}" hint-placeholder-val="8:38">
+                    <div style="position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,0.85);color:#fff;font-size:11px;font-weight:700;padding:2px 5px;border-radius:4px">{{ v.duration }}</div>
+                  </sc-if>
+                </div>
+                <div style="display:flex;gap:12px;padding:12px 0 0">
+                  <div style="width:36px;height:36px;border-radius:50%;flex:0 0 36px;background:{{ v.avatar }};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff;font-family:'Noto Sans JP';position:relative">{{ v.initial }}<sc-if value="{{ v.live }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;inset:-3px;border:2px solid #f00;border-radius:50%"></span></sc-if></div>
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:14px;font-weight:500;line-height:1.35;color:#f1f1f1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{{ v.title }}</div>
+                    <div style="display:flex;align-items:center;gap:5px;font-size:12px;color:#aaa;margin-top:4px">
+                      <sc-if value="{{ v.live }}" hint-placeholder-val="{{ true }}"><span style="background:#f00;color:#fff;font-size:10px;font-weight:700;padding:1px 4px;border-radius:3px;flex:0 0 auto">ライブ</span></sc-if>
+                      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ v.channel }}</span>
+                      <sc-if value="{{ v.verified }}" hint-placeholder-val="{{ true }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="#aaa" style="flex:0 0 auto"><path d="M12 2l2.4 1.8 3-.3.6 2.9 2.6 1.6-1.2 2.8 1.2 2.8-2.6 1.6-.6 2.9-3-.3L12 22l-2.4-1.8-3 .3-.6-2.9L3.4 16l1.2-2.8L3.4 10.4 6 8.8l.6-2.9 3 .3L12 2zm-1.2 13l4.5-4.5-1.1-1.1-3.4 3.4-1.5-1.5-1.1 1.1 2.6 2.6z"/></svg></sc-if>
+                    </div>
+                    <div style="font-size:12px;color:#aaa;margin-top:1px">{{ v.meta }}</div>
+                  </div>
+                  <svg onClick="{{ openMenu }}" width="18" height="18" viewBox="0 0 24 24" fill="#aaa" style="flex:0 0 18px;margin-top:2px;cursor:pointer" style-hover="fill:#fff"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <!-- Shorts shelf -->
+          <div style="display:flex;align-items:center;justify-content:space-between;margin:30px 0 14px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="width:26px;height:26px;border-radius:7px;background:#ff0033;display:flex;align-items:center;justify-content:center">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><path d="M9 5v14l11-7z"/></svg>
+              </div>
+              <span style="font-size:18px;font-weight:700;color:#f1f1f1">ショート</span>
+            </div>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="#aaa" style="cursor:pointer"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:16px">
+            <sc-for list="{{ shorts }}" as="s" hint-placeholder-count="5">
+              <div style="cursor:pointer;min-width:0" style-hover="opacity:0.96">
+                <div style="position:relative;width:100%;aspect-ratio:9/16;border-radius:12px;overflow:hidden;background:{{ s.bg }}">
+                  <sc-if value="{{ s.top }}" hint-placeholder-val="x">
+                    <div style="position:absolute;top:8px;left:0;right:0;text-align:center;font-family:'Noto Sans JP';font-weight:900;font-size:13px;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,0.6);padding:0 6px">{{ s.top }}</div>
+                  </sc-if>
+                  <div style="position:absolute;left:0;right:0;bottom:14px;text-align:center;font-family:'Noto Sans JP';font-weight:900;font-size:{{ s.bigSize }};line-height:1.05;color:{{ s.bigColor }};letter-spacing:1px;text-shadow:0 2px 8px rgba(0,0,0,0.5);padding:0 8px;white-space:pre-line">{{ s.big }}</div>
+                </div>
+                <div style="padding:10px 0 0">
+                  <div style="font-size:14px;font-weight:500;line-height:1.35;color:#f1f1f1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{{ s.title }}</div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-top:3px">
+                    <span style="font-size:12px;color:#aaa">{{ s.views }}</span>
+                    <svg onClick="{{ openMenu }}" width="16" height="16" viewBox="0 0 24 24" fill="#aaa" style="cursor:pointer" style-hover="fill:#fff"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+                  </div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <!-- Bottom video row -->
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:24px 16px;margin-top:32px">
+            <sc-for list="{{ rowB }}" as="v" hint-placeholder-count="3">
+              <div style="cursor:pointer;min-width:0" style-hover="opacity:0.96">
+                <div style="position:relative;width:100%;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:{{ v.bg }};box-shadow:0 0 0 1px rgba(255,255,255,0.04)">
+                  <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px;text-align:center;text-shadow:0 2px 8px rgba(0,0,0,0.4)">
+                    <div style="font-family:'Noto Sans JP';font-weight:900;font-size:{{ v.bigSize }};line-height:1.04;color:{{ v.bigColor }};letter-spacing:1px;white-space:pre-line">{{ v.big }}</div>
+                    <div style="font-family:'Noto Sans JP';font-weight:700;font-size:13px;color:{{ v.subColor }};margin-top:4px">{{ v.sub }}</div>
+                  </div>
+                  <sc-if value="{{ v.live }}" hint-placeholder-val="{{ true }}">
+                    <div style="position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,0.85);color:#fff;font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;display:flex;align-items:center;gap:4px">
+                      <span style="width:6px;height:6px;border-radius:50%;background:#f00;display:inline-block"></span>ライブ
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ v.duration }}" hint-placeholder-val="8:38">
+                    <div style="position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,0.85);color:#fff;font-size:11px;font-weight:700;padding:2px 5px;border-radius:4px">{{ v.duration }}</div>
+                  </sc-if>
+                </div>
+                <div style="display:flex;gap:12px;padding:12px 0 0">
+                  <div style="width:36px;height:36px;border-radius:50%;flex:0 0 36px;background:{{ v.avatar }};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff;font-family:'Noto Sans JP';position:relative">{{ v.initial }}<sc-if value="{{ v.live }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;inset:-3px;border:2px solid #f00;border-radius:50%"></span></sc-if></div>
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:14px;font-weight:500;line-height:1.35;color:#f1f1f1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{{ v.title }}</div>
+                    <div style="display:flex;align-items:center;gap:5px;font-size:12px;color:#aaa;margin-top:4px">
+                      <sc-if value="{{ v.live }}" hint-placeholder-val="{{ true }}"><span style="background:#f00;color:#fff;font-size:10px;font-weight:700;padding:1px 4px;border-radius:3px;flex:0 0 auto">ライブ</span></sc-if>
+                      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ v.channel }}</span>
+                      <sc-if value="{{ v.verified }}" hint-placeholder-val="{{ true }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="#aaa" style="flex:0 0 auto"><path d="M12 2l2.4 1.8 3-.3.6 2.9 2.6 1.6-1.2 2.8 1.2 2.8-2.6 1.6-.6 2.9-3-.3L12 22l-2.4-1.8-3 .3-.6-2.9L3.4 16l1.2-2.8L3.4 10.4 6 8.8l.6-2.9 3 .3L12 2zm-1.2 13l4.5-4.5-1.1-1.1-3.4 3.4-1.5-1.5-1.1 1.1 2.6 2.6z"/></svg></sc-if>
+                    </div>
+                    <div style="font-size:12px;color:#aaa;margin-top:1px">{{ v.meta }}</div>
+                  </div>
+                  <svg onClick="{{ openMenu }}" width="18" height="18" viewBox="0 0 24 24" fill="#aaa" style="flex:0 0 18px;margin-top:2px;cursor:pointer" style-hover="fill:#fff"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Card context menu -->
+  <sc-if value="{{ menu.open }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeMenu }}" style="position:fixed;inset:0;z-index:50">
+      <div onClick="{{ stop }}" style="position:absolute;left:{{ menu.x }};top:{{ menu.y }};width:268px;background:#282828;border-radius:12px;padding:8px 0;box-shadow:0 8px 28px rgba(0,0,0,0.6);font-family:'Roboto','Noto Sans JP',sans-serif">
+        <sc-for list="{{ menuItems }}" as="m" hint-placeholder-count="8">
+          <div style="display:flex;align-items:center;gap:18px;height:40px;padding:0 16px;cursor:pointer;color:#f1f1f1;font-size:14px" style-hover="background:#3f3f3f">
+            <span style="width:22px;height:22px;flex:0 0 22px;display:flex;align-items:center;justify-content:center" dangerouslySetInnerHTML="{{ m.icon }}"></span>
+            <span>{{ m.label }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1384,&quot;height&quot;:904}}">
+class Component extends DCLogic {
+  state = { menu: { open:false, x:'0px', y:'0px' } };
+
+  openMenu = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const W = 268, M = 8;
+    let x = e.clientX - W + 12;
+    let y = e.clientY + 8;
+    if (x < M) x = M;
+    if (x + W > window.innerWidth - M) x = window.innerWidth - W - M;
+    if (y + 380 > window.innerHeight - M) y = Math.max(M, e.clientY - 380);
+    this.setState({ menu: { open:true, x:x+'px', y:y+'px' } });
+  };
+  closeMenu = () => this.setState({ menu: { ...this.state.menu, open:false } });
+  stop = (e) => e.stopPropagation();
+
+  renderVals() {
+    const ic = {
+      subs:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 8H4V6h16v2zm-2-6H6v2h12V2zM4 22h16a2 2 0 002-2V10H2v10a2 2 0 002 2zm6-8.5l6 3.5-6 3.5v-7z"/></svg>',
+      history:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 00-9 9H1l4 4 4-4H6a7 7 0 117 7 7 7 0 01-4.9-2L6.7 18.4A9 9 0 1013 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8z"/></svg>',
+      playlist:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10h11v2H3v-2zm0-4h11v2H3V6zm0 8h7v2H3v-2zm13-1v6l5-3-5-3z"/></svg>',
+      recommend:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 5.6L20 8l-4 4 1 6-5-3-5 3 1-6-4-4 5.6-.4z"/></svg>'
+    };
+    const H = (s) => ({ __html:s });
+    const nav = [
+      { label:'登録チャンネル', icon:H(ic.subs), color:'#aaa', bg:'transparent', weight:500 },
+      { label:'履歴', icon:H(ic.history), color:'#aaa', bg:'transparent', weight:500 },
+      { label:'再生リスト', icon:H(ic.playlist), color:'#aaa', bg:'transparent', weight:500 },
+      { label:'おすすめ', icon:H(ic.recommend), color:'#fff', bg:'#272727', weight:700 },
+    ];
+    const favSubs = [
+      { name:'さくらみこ', initial:'み', color:'#e8517a', live:true },
+      { name:'花芽なずな', initial:'な', color:'#7c5cff', live:true },
+      { name:'兎田ぺこら', initial:'ペ', color:'#d84a4a', live:false },
+    ];
+    const otherSubs = [
+      { name:'V宝庫', initial:'V', color:'#3a8a5a', live:false },
+      { name:'響咲リオナ', initial:'リ', color:'#e84393', live:false },
+    ];
+
+    const chipLabels = ['すべて','ゲーム','音楽','ライブ','ミックス','アニメーション','アクション＆アドベンチャー ゲーム','料理','スポーツ ビデオゲーム','最近アップロードされた動画','視聴済み'];
+    const chips = chipLabels.map((label, i) => i === 0
+      ? { label, color:'#0f0f0f', bg:'#f1f1f1' }
+      : { label, color:'#f1f1f1', bg:'#272727' });
+
+    const live = (o) => ({
+      bg:o.bg, big:o.big, bigSize:o.bigSize||'40px', bigColor:o.bigColor||'#fff',
+      sub:o.sub||'', subColor:o.subColor||'#fff',
+      avatar:o.avatar, initial:o.initial, title:o.title, channel:o.channel,
+      verified:!!o.verified, live:true, duration:'', meta:o.viewers+' 人が視聴中'
+    });
+    const vod = (o) => ({
+      bg:o.bg, big:o.big, bigSize:o.bigSize||'40px', bigColor:o.bigColor||'#fff',
+      sub:o.sub||'', subColor:o.subColor||'#fff',
+      avatar:o.avatar, initial:o.initial, title:o.title, channel:o.channel,
+      verified:!!o.verified, live:false, duration:o.duration, meta:o.meta
+    });
+
+    const rowA = [
+      live({ bg:'linear-gradient(135deg,#e23b5a,#ff8a3c 55%,#ffd24a)', big:'2年目秋', bigSize:'40px', bigColor:'#fff', sub:'はじめての秋大会へ！パワプロ2026', subColor:'#fff0c0', avatar:'#e8517a', initial:'み',
+        title:'【パワプロ2026】2年目秋から!! 栄冠ナイン3年モードで新・桜咲高校はじめる🌸', channel:'Miko Ch. さくらみこ', verified:true, viewers:'2.3万' }),
+      live({ bg:'linear-gradient(160deg,#3a2a5a,#6a4a9a 50%,#caa8e0)', big:'歌枠', bigSize:'48px', bigColor:'#fff', sub:'SINGING STREAM', subColor:'#e9d6ff', avatar:'#7c5cff', initial:'な',
+        title:'【歌枠】平成アニソンまみれです【ぶいすぽ/花芽なずな】', channel:'花芽なずな / Nazuna Kaga', verified:true, viewers:'2466' }),
+      vod({ bg:'linear-gradient(135deg,#1a1230,#3a2a6a 55%,#e85a8a)', big:'難しさを\n痛感する笹木', bigSize:'24px', bigColor:'#ffe27a', sub:'今までスマブラしてたんだ…', subColor:'#9fd0ff', avatar:'#3a8a5a', initial:'V',
+        title:'【まとめ】初クラシックで4時間トレモで練習し、難しさを痛感する笹木ww', channel:'V宝庫', duration:'8:38', meta:'2.9万回視聴・1日前' }),
+    ];
+
+    const shorts = [
+      { bg:'linear-gradient(180deg,#5a5a5a,#2a2a2a)', big:'あがりませんでしたか？', bigSize:'18px', bigColor:'#fff',
+        title:'今日は動画が動画上がりません', views:'24万回視聴' },
+      { bg:'linear-gradient(160deg,#7ec8e3,#bfe6c8 60%,#f0d8a0)', big:'', bigSize:'18px',
+        title:'初出航🏖️🌊🍡👒？ #夜の踊り子 #踊ってみた', views:'6578回視聴' },
+      { bg:'linear-gradient(160deg,#2a1240,#8a2a6a 55%,#e0408a)', big:'', bigSize:'18px',
+        title:'Ring my name / 響咲リオナ 踊ってみた！', views:'14万回視聴' },
+      { bg:'linear-gradient(170deg,#1a2a4a,#3a5a3a 55%,#d8c89a)', top:'見惚れる藍沢エマ', big:'バニーガーデン\n通いw', bigSize:'20px', bigColor:'#fff',
+        title:'【スト6】ケンのコンボに詳しい藍沢エマ【ぶ', views:'24万回視聴' },
+      { bg:'linear-gradient(160deg,#f0a8c0,#f6e0b0 60%,#a8d0e0)', big:'DeepDive', bigSize:'22px', bigColor:'#e8e8f0',
+        title:'DeepDiveみにぱんちょーで踊ってみた【轟は', views:'1.3万回視聴' },
+    ];
+
+    const rowB = [
+      live({ bg:'linear-gradient(135deg,#f4e54a,#ff7ab0 55%,#7cc3f0)', big:'RIRARA\nNIGHT', bigSize:'30px', bigColor:'#fff', sub:'SAYANA / MINAMI', subColor:'#fff', avatar:'#e84393', initial:'リ',
+        title:'【3D LIVE】RIRARA NIGHT 〜まったりお喋り雑談配信〜', channel:'RIRARA Project', verified:true, viewers:'8932' }),
+      vod({ bg:'linear-gradient(135deg,#0a1424,#1a3a5a 55%,#2a6a8a)', big:'このゲーム\n臨場感すごーい！', bigSize:'24px', bigColor:'#fff', sub:'みんな！シートベルトして！', subColor:'#ffd24a', avatar:'#d84a4a', initial:'ペ',
+        title:'【新作レースゲーム】このゲーム臨場感すごーい！みんなシートベルトして！', channel:'Pekora Ch. 兎田ぺこら', verified:true, duration:'24:17', meta:'45万回視聴・8時間前' }),
+      vod({ bg:'linear-gradient(135deg,#3a2a1a,#7a5a3a 55%,#e0c080)', big:'なぜわための\n採用？', bigSize:'24px', bigColor:'#fff', sub:'', subColor:'#fff', avatar:'#f5b400', initial:'わ',
+        title:'なぜわためを採用したの？プロが語るスカウト秘話【角巻わため/ホロライブ】', channel:'Watame Ch. 角巻わため', verified:true, duration:'12:04', meta:'18万回視聴・2日前' }),
+    ];
+
+    const mIcon = {
+      queue:'<svg width="22" height="22" viewBox="0 0 24 24" fill="#f1f1f1"><path d="M3 6h13v2H3V6zm0 4h13v2H3v-2zm0 4h9v2H3v-2zm12 0v6l5-3-5-3z"/></svg>',
+      later:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f1f1f1" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2" stroke-linecap="round"/></svg>',
+      save:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f1f1f1" stroke-width="1.8"><path d="M6 4h12v16l-6-4-6 4V4z" stroke-linejoin="round"/></svg>',
+      mobile:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f1f1f1" stroke-width="1.8"><rect x="3" y="6" width="13" height="11" rx="1.5"/><rect x="18" y="8" width="4" height="9" rx="1"/><path d="M3 19h12"/></svg>',
+      share:'<svg width="22" height="22" viewBox="0 0 24 24" fill="#f1f1f1"><path d="M14 9V5l7 7-7 7v-4.1c-5 0-8.5 1.6-11 5.1 1-5 4-10 11-11z"/></svg>',
+      no:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f1f1f1" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8" stroke-linecap="round"/></svg>',
+      block:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f1f1f1" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M8 12h8" stroke-linecap="round"/></svg>',
+      report:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f1f1f1" stroke-width="1.8"><path d="M5 21V4h11l-1.5 3.5L16 11H5" stroke-linejoin="round" stroke-linecap="round"/></svg>'
+    };
+    const menuItems = [
+      { label:'後で見るに保存', icon:H(mIcon.later) },
+      { label:'再生リストに保存', icon:H(mIcon.save) },
+      { label:'興味なし', icon:H(mIcon.no) },
+      { label:'おすすめに表示しない', icon:H(mIcon.block) },
+      { label:'報告', icon:H(mIcon.report) },
+    ];
+
+    return { nav, favSubs, otherSubs, chips, rowA, shorts, rowB, openMenu:this.openMenu, closeMenu:this.closeMenu, stop:this.stop, menu:this.state.menu, menuItems };
+  }
+}
+</script>
+</body>
+</html>

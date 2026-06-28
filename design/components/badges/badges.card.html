@@ -1,0 +1,11 @@
+<!-- @dsCard group="Components" viewport="700x170" name="Badges — LIVE / Duration" subtitle="Thumbnail overlay badges" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css">
+<style>body{margin:0;background:var(--s-bg-canvas);font-family:var(--p-font-sans);padding:24px;display:flex;gap:30px;align-items:center}
+.thumb{position:relative;width:200px;aspect-ratio:16/9;border-radius:var(--s-radius-container);background:linear-gradient(135deg,#3a3550,#20202b);overflow:hidden}
+.live{position:absolute;left:8px;bottom:8px;display:inline-flex;align-items:center;gap:4px;background:var(--s-accent-live);color:var(--s-text-on-accent);font-size:var(--p-size-sm);font-weight:var(--p-weight-medium);padding:3px 6px;border-radius:var(--s-radius-overlay)}
+.live .d{width:6px;height:6px;border-radius:50%;background:#fff}
+.dur{position:absolute;right:8px;bottom:8px;background:var(--s-bg-scrim);color:var(--s-text-on-accent);font-size:var(--p-size-sm);font-weight:var(--p-weight-medium);padding:3px 5px;border-radius:var(--s-radius-overlay)}</style></head>
+<body>
+<div class="thumb"><span class="dur">12:04</span></div>
+<div class="thumb"><span class="live"><span class="d"></span>ライブ</span><span class="dur">1:11:13</span></div>
+</body></html>

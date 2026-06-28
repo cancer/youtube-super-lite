@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  .app-scroll::-webkit-scrollbar{width:12px}
+  .app-scroll::-webkit-scrollbar-thumb{background:#5a5a5a;border-radius:8px;border:3px solid #0f0f0f}
+  .app-scroll::-webkit-scrollbar-track{background:transparent}
+</style>
+</helmet>
+<div style="min-height:100vh;width:100%;display:flex;align-items:center;justify-content:center;background:radial-gradient(120% 120% at 50% 0%,#2a2a2e,#141416 60%,#0a0a0b);padding:32px;font-family:'Roboto','Noto Sans JP',sans-serif">
+
+  <!-- Desktop window -->
+  <div style="width:1320px;height:840px;border-radius:12px;overflow:hidden;background:#0f0f0f;box-shadow:0 30px 80px -20px rgba(0,0,0,0.7),0 0 0 1px rgba(255,255,255,0.06);display:flex;flex-direction:column">
+
+    <!-- Custom title bar -->
+    <div style="height:44px;flex:0 0 44px;background:#181818;border-bottom:1px solid #272727;display:flex;align-items:center;padding:0 14px;gap:14px;-webkit-app-region:drag">
+      <div style="display:flex;align-items:center;gap:9px">
+        <div style="width:22px;height:22px;border-radius:6px;background:#ff0033;display:flex;align-items:center;justify-content:center">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
+        </div>
+        <span style="font-size:13px;font-weight:700;color:#f1f1f1;letter-spacing:.3px">YouTube Super Lite</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;margin-left:auto;-webkit-app-region:no-drag">
+        <div style="width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#aaa" style-hover="background:#e81123;color:#fff">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Body: sidebar + content -->
+    <div style="flex:1;display:flex;min-height:0">
+
+      <!-- Sidebar -->
+      <div class="app-scroll" style="width:224px;flex:0 0 224px;min-height:0;overflow-y:auto;background:#0f0f0f;border-right:1px solid #272727;padding:12px 8px;display:flex;flex-direction:column;gap:2px">
+        <sc-for list="{{ nav }}" as="n" hint-placeholder-count="4">
+          <div style="display:flex;align-items:center;gap:14px;height:40px;padding:0 14px;border-radius:10px;cursor:pointer;color:{{ n.color }};background:{{ n.bg }};font-size:13.5px;font-weight:{{ n.weight }}" style-hover="background:#1f1f1f">
+            <span style="width:20px;height:20px;display:flex;align-items:center;justify-content:center" dangerouslySetInnerHTML="{{ n.icon }}"></span>
+            <span>{{ n.label }}</span>
+          </div>
+        </sc-for>
+        <div style="height:1px;background:#272727;margin:10px 6px"></div>
+        <div style="font-size:11px;color:#777;font-weight:700;padding:6px 14px;letter-spacing:.5px;display:flex;align-items:center;gap:6px">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="#f5b400"><path d="M12 2l2.4 5.6L20 8l-4 4 1 6-5-3-5 3 1-6-4-4 5.6-.4z"/></svg>お気に入り
+        </div>
+        <sc-for list="{{ favSubs }}" as="s" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:12px;height:38px;padding:0 14px;border-radius:10px;cursor:pointer" style-hover="background:#1f1f1f">
+            <span style="position:relative;width:24px;height:24px;border-radius:50%;flex:0 0 24px;background:{{ s.color }};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;font-family:'Noto Sans JP'">{{ s.initial }}<sc-if value="{{ s.live }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;inset:-3px;border:2px solid #f00;border-radius:50%"></span></sc-if></span>
+            <span style="font-size:13px;color:#f1f1f1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</span>
+          </div>
+        </sc-for>
+        <div style="font-size:11px;color:#777;font-weight:700;padding:6px 14px;letter-spacing:.5px;margin-top:6px">その他</div>
+        <sc-for list="{{ otherSubs }}" as="s" hint-placeholder-count="2">
+          <div style="display:flex;align-items:center;gap:12px;height:38px;padding:0 14px;border-radius:10px;cursor:pointer" style-hover="background:#1f1f1f">
+            <span style="position:relative;width:24px;height:24px;border-radius:50%;flex:0 0 24px;background:{{ s.color }};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;font-family:'Noto Sans JP'">{{ s.initial }}</span>
+            <span style="font-size:13px;color:#f1f1f1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- Content -->
+      <div class="app-scroll" style="flex:1;min-width:0;overflow-y:auto;background:#0f0f0f;padding:28px 40px 56px">
+
+        <!-- title -->
+        <div style="font-family:'Noto Sans JP';font-size:32px;font-weight:700;color:#f1f1f1;letter-spacing:.5px;margin-bottom:28px">再生リスト</div>
+
+        <!-- playlist grid -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:30px 18px">
+          <sc-for list="{{ playlists }}" as="p" hint-placeholder-count="8">
+            <div style="min-width:0;cursor:pointer" style-hover="opacity:0.95">
+              <!-- stacked card -->
+              <div style="position:relative;margin-top:6px">
+                <div style="position:absolute;left:6%;right:6%;top:-6px;height:10px;border-radius:8px;background:#3a3a3a"></div>
+                <div style="position:absolute;left:3%;right:3%;top:-3px;height:10px;border-radius:8px;background:#525252"></div>
+                <div style="position:relative;width:100%;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:{{ p.bg }};box-shadow:0 0 0 1px rgba(255,255,255,0.04)">
+                  <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px;text-align:center;text-shadow:0 2px 8px rgba(0,0,0,0.45)">
+                    <div style="font-family:'Noto Sans JP';font-weight:900;font-size:{{ p.bigSize }};line-height:1.05;color:{{ p.bigColor }};letter-spacing:.5px;white-space:pre-line">{{ p.big }}</div>
+                    <sc-if value="{{ p.sub }}" hint-placeholder-val="sub"><div style="font-family:'Noto Sans JP';font-weight:700;font-size:11px;color:{{ p.subColor }};margin-top:3px">{{ p.sub }}</div></sc-if>
+                  </div>
+                  <div style="position:absolute;right:8px;bottom:8px;display:inline-flex;align-items:center;gap:4px;background:rgba(0,0,0,0.85);color:#fff;font-size:11px;font-weight:500;padding:3px 6px;border-radius:4px">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10h11v2H3zm0-4h11v2H3zm0 8h7v2H3zm13-2v6l5-3z"/></svg>{{ p.count }} 本の動画
+                  </div>
+                </div>
+              </div>
+              <!-- info -->
+              <div style="padding-top:12px;position:relative">
+                <div style="font-size:14px;line-height:1.35;font-weight:500;color:#f1f1f1;padding-right:22px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{{ p.title }}</div>
+                <div style="font-size:12px;color:#aaa;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.owner }}</div>
+                <sc-if value="{{ p.updated }}" hint-placeholder-val="updated"><div style="font-size:12px;color:#aaa;margin-top:2px">{{ p.updated }}</div></sc-if>
+                <div style="font-size:12px;color:#aaa;margin-top:6px">再生リストの全体を見る</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1384,&quot;height&quot;:904}}">
+class Component extends DCLogic {
+  renderVals() {
+    const ic = {
+      subs:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 8H4V6h16v2zm-2-6H6v2h12V2zM4 22h16a2 2 0 002-2V10H2v10a2 2 0 002 2zm6-8.5l6 3.5-6 3.5v-7z"/></svg>',
+      history:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 00-9 9H1l4 4 4-4H6a7 7 0 117 7 7 7 0 01-4.9-2L6.7 18.4A9 9 0 1013 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8z"/></svg>',
+      playlist:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10h11v2H3v-2zm0-4h11v2H3V6zm0 8h7v2H3v-2zm13-1v6l5-3-5-3z"/></svg>',
+      recommend:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 5.6L20 8l-4 4 1 6-5-3-5 3 1-6-4-4 5.6-.4z"/></svg>'
+    };
+    const H = (s) => ({ __html:s });
+    const nav = [
+      { label:'登録チャンネル', icon:H(ic.subs), color:'#aaa', bg:'transparent', weight:500 },
+      { label:'履歴', icon:H(ic.history), color:'#aaa', bg:'transparent', weight:500 },
+      { label:'再生リスト', icon:H(ic.playlist), color:'#fff', bg:'#272727', weight:700 },
+      { label:'おすすめ', icon:H(ic.recommend), color:'#aaa', bg:'transparent', weight:500 },
+    ];
+    const favSubs = [
+      { name:'ACHRORA', initial:'A', color:'#7c5cff', live:true },
+      { name:'水宮枢 Su Ch.', initial:'水', color:'#39a0e8', live:true },
+      { name:'兎田ぺこら', initial:'ペ', color:'#d84a4a', live:true },
+    ];
+    const otherSubs = [
+      { name:'夏色まつり', initial:'夏', color:'#ff9bb8' },
+      { name:'ロボ子さん', initial:'ロ', color:'#ff7aa8' },
+    ];
+
+    const chips = [
+      { label:'新しい順', bg:'#272727', color:'#f1f1f1', caret:true },
+      { label:'再生リスト', bg:'#f1f1f1', color:'#0f0f0f' },
+      { label:'音楽', bg:'#272727', color:'#f1f1f1' },
+      { label:'自分が所有', bg:'#272727', color:'#f1f1f1' },
+      { label:'保存済み', bg:'#272727', color:'#f1f1f1' },
+    ];
+
+    const pl = (o) => ({
+      bg:o.bg, big:o.big, bigSize:o.bigSize||'24px', bigColor:o.bigColor||'#fff',
+      sub:o.sub||'', subColor:o.subColor||'#ffffff',
+      count:o.count, title:o.title, owner:o.owner||'非公開・プレイリスト', updated:o.updated||''
+    });
+
+    const playlists = [
+      pl({ bg:'linear-gradient(135deg,#b91c4a,#e84a6f 55%,#ff9a6e)', big:'#1', bigSize:'40px', sub:'BIOHAZARD', subColor:'#ffd86e',
+        count:'101', title:'後で見る', updated:'本日更新' }),
+      pl({ bg:'linear-gradient(135deg,#caa46a,#e8c98a 55%,#f4e3bf)', big:'本のお片付け', bigSize:'20px', sub:'LIBRARIAN', subColor:'#6a4a2a',
+        count:'5,000', title:'高く評価した動画', updated:'本日更新' }),
+      pl({ bg:'linear-gradient(135deg,#1a2436,#2b3a52 55%,#46617f)', big:'SF6', bigSize:'34px', sub:'ストⅥ', subColor:'#ffd86e',
+        count:'9', title:'SF6', updated:'更新: 2 日前' }),
+      pl({ bg:'linear-gradient(135deg,#1e3a36,#2f5a52 55%,#7fae9f)', big:'10分瞑想', bigSize:'22px', sub:'Mindfulness meditation', subColor:'#d6fff0',
+        count:'9', title:'瞑想用' }),
+      pl({ bg:'linear-gradient(135deg,#39a0e8,#7c5cff 60%,#ff9bb8)', big:'いちさんご\nラジオ', bigSize:'20px', sub:'IchiSango Radio', subColor:'#fff',
+        count:'30', title:'いちさんご（周央サンゴ＆ジョー・カー）', owner:'ジョー・カー Joe Rikiichi ✓ ・プレイリスト' }),
+      pl({ bg:'linear-gradient(135deg,#1e6f4a,#2fa86a 50%,#9fe0b0)', big:'DLC開拓開始', bigSize:'18px', sub:'OXYGEN NOT INCLUDED', subColor:'#ffd86e',
+        count:'34', title:'【Oxygen Not Included Spaced Out!】DLCで学ぶ！効率的惑星群開拓録【', owner:'ゆあちゃんねる / Yua Channel・プレイリ…' }),
+      pl({ bg:'linear-gradient(135deg,#d84a8f,#ff8fb1 55%,#ffd0e0)', big:'あくたん', bigSize:'26px', sub:'AQUTAN', subColor:'#fff',
+        count:'15', title:'あくたん' }),
+      pl({ bg:'linear-gradient(135deg,#0a2a5c,#1a4a9a 55%,#3a7ad6)', big:'ブルー\nアーカイブ', bigSize:'20px', sub:'Blue Archive', subColor:'#bfe0ff',
+        count:'56', title:'ブルーアーカイブ', owner:'栞葉るり / Shioriha Ruri【にじさんじ】・プ…' }),
+    ];
+
+    return { nav, favSubs, otherSubs, chips, playlists };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+<!-- @dsCard group="Components" viewport="700x150" name="Controls — PillButton / FilterChip" subtitle="Pills and filter chips" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css">
+<style>body{margin:0;background:var(--s-bg-canvas);font-family:var(--p-font-sans);padding:24px;display:flex;flex-direction:column;gap:18px}
+.row{display:flex;gap:10px;align-items:center}
+.pill{display:inline-flex;align-items:center;gap:6px;border:none;cursor:pointer;font-size:var(--p-size-md);font-weight:500;color:var(--s-text-primary);background:var(--s-bg-elevated);padding:8px 20px;border-radius:var(--s-radius-control-pill)}
+.chip{border:none;cursor:pointer;font-size:var(--p-size-md);font-weight:500;background:var(--s-bg-elevated);color:var(--s-text-primary);padding:6px 12px;border-radius:var(--s-radius-control-soft)}
+.chip.sel{background:var(--s-bg-inverse);color:var(--s-text-inverse)}
+.lbl{font-size:11px;color:var(--s-text-secondary);width:80px}</style></head>
+<body>
+<div class="row"><span class="lbl">PillButton</span><button class="pill">もっと見る <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg></button><button class="pill">並び替え <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg></button></div>
+<div class="row"><span class="lbl">FilterChip</span><button class="chip sel">すべて</button><button class="chip">動画</button><button class="chip">ショート</button><button class="chip">ポッドキャスト</button><button class="chip">音楽</button></div>
+</body></html>
