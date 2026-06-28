@@ -1,0 +1,104 @@
+{
+  "color": {
+    "bg.app": "#0F0F0F",
+    "bg.titlebar": "#181818",
+    "bg.sidebar": "#0F0F0F",
+    "bg.elevated": "#1F1F1F",
+    "bg.chip": "#272727",
+    "bg.chip.hover": "#3F3F3F",
+    "border.subtle": "#272727",
+    "border.divider": "#303030",
+    "text.primary": "#F1F1F1",
+    "text.secondary": "#AAAAAA",
+    "text.tertiary": "#777777",
+    "accent.live": "#FF0000",
+    "accent.brand": "#FF0033",
+    "accent.close": "#E81123",
+    "overlay.badge": "rgba(0,0,0,0.85)",
+    "card.ring": "rgba(255,255,255,0.04)"
+  },
+  "typography": {
+    "fontFamily.ui": "Roboto, 'Noto Sans JP', sans-serif",
+    "fontFamily.jp": "'Noto Sans JP', sans-serif",
+    "sortHeading": {
+      "size": 18,
+      "weight": 700,
+      "lineHeight": 1.2
+    },
+    "subHeading": {
+      "size": 12,
+      "weight": 400,
+      "color": "text.secondary"
+    },
+    "videoTitle": {
+      "size": 14,
+      "weight": 500,
+      "lineHeight": 1.35,
+      "maxLines": 2
+    },
+    "metaText": {
+      "size": 12,
+      "weight": 400,
+      "color": "text.secondary"
+    },
+    "chip": {
+      "size": 13,
+      "weight": 500
+    },
+    "liveBadge": {
+      "size": 10,
+      "weight": 700
+    },
+    "thumbBadge": {
+      "size": 11,
+      "weight": 700
+    },
+    "navItem": {
+      "size": 13.5,
+      "weight": 500,
+      "activeWeight": 700
+    }
+  },
+  "radius": {
+    "card": 12,
+    "chip": 18,
+    "badge": 4,
+    "liveTag": 3,
+    "navItem": 10,
+    "window": 12,
+    "avatar": "50%"
+  },
+  "spacing": {
+    "windowPad": 24,
+    "gridColGap": 18,
+    "gridRowGap": 28,
+    "cardMetaGap": 12,
+    "metaTopPad": 12,
+    "sidebarPad": 8,
+    "navItemPadX": 14
+  },
+  "size": {
+    "titlebar.height": 44,
+    "sidebar.width": 224,
+    "navItem.height": 40,
+    "subItem.height": 38,
+    "avatar.card": 36,
+    "avatar.sidebar": 24,
+    "winControl": 30,
+    "chip.height": 30,
+    "thumb.aspect": "16 / 9"
+  },
+  "grid": {
+    "browser.columns": 4,
+    "desktop.columns": 3,
+    "minCardWidth": 280,
+    "note": "Columns are fixed by viewport tier; use repeat(N,1fr). Thumbnail drives card height via 16:9 aspect-ratio."
+  },
+  "state": {
+    "card.hover": "opacity: 0.96",
+    "chip.hover": "bg.chip.hover (#3F3F3F)",
+    "nav.hover": "#1F1F1F",
+    "nav.active": "bg.chip (#272727), text.primary, weight 700",
+    "winClose.hover": "accent.close (#E81123), icon #FFF"
+  }
+}

@@ -1,0 +1,22 @@
+<!-- @dsCard group="Components" viewport="700x320" name="Navigation — NavItem / ChannelRow" subtitle="Sidebar rows, sections, status dots" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css">
+<style>body{margin:0;background:var(--s-bg-canvas);font-family:var(--p-font-sans);padding:20px}
+.side{width:260px;padding:8px;background:var(--s-bg-canvas)}
+.item{display:flex;align-items:center;gap:12px;height:40px;padding:0 12px;border-radius:var(--s-radius-control-soft);cursor:pointer;color:var(--s-text-primary);font-size:var(--p-size-md)}
+.item.sel{background:var(--s-bg-selected);font-weight:500}
+.item svg{width:24px;height:24px;color:var(--s-icon-default)}
+.sec{font-size:var(--p-size-sm);color:var(--s-text-secondary);padding:14px 12px 6px;display:flex;align-items:center;gap:4px}
+.av{position:relative;width:24px;height:24px;border-radius:50%;flex:0 0 24px;background:var(--s-bg-elevated);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+.av .d{position:absolute;bottom:-1px;right:-1px;width:8px;height:8px;border-radius:50%;border:2px solid var(--s-bg-canvas)}
+.live{background:var(--s-accent-brand)}.notify{background:var(--s-indicator-notify)}</style></head>
+<body>
+<div class="side">
+<div class="item sel"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>ホーム</div>
+<div class="item"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 8H4V6h16v2zm-2-6H6v2h12V2zM4 22h16a2 2 0 002-2V10H2v10a2 2 0 002 2zm6-8.5l6 3.5-6 3.5v-7z"/></svg>登録チャンネル</div>
+<div class="item"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 00-9 9H1l4 4 4-4H6a7 7 0 117 7 7 7 0 01-4.9-2L6.7 18.4A9 9 0 1013 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8z"/></svg>再生履歴</div>
+<div class="sec">登録チャンネル ›</div>
+<div class="item"><span class="av">ぺ<span class="d live"></span></span>兎田ぺこら</div>
+<div class="item"><span class="av">ま<span class="d notify"></span></span>夏色まつり</div>
+<div class="item"><span class="av">ロ</span>ロボ子さん</div>
+</div>
+</body></html>

@@ -1,0 +1,30 @@
+:root{
+  /* surfaces */
+  --bg-app:#0F0F0F;
+  --bg-titlebar:#181818;
+  --bg-elevated:#1F1F1F;
+  --bg-chip:#272727;
+  --bg-chip-hover:#3F3F3F;
+  --border-subtle:#272727;
+  --border-divider:#303030;
+  /* text */
+  --text-primary:#F1F1F1;
+  --text-secondary:#AAAAAA;
+  --text-tertiary:#777777;
+  /* accent */
+  --accent-live:#FF0000;
+  --accent-brand:#FF0033;
+  --accent-close:#E81123;
+  /* radii */
+  --r-card:12px;
+  --r-chip:18px;
+  --r-badge:4px;
+  --r-nav:10px;
+  --r-window:12px;
+  /* sizing */
+  --titlebar-h:44px;
+  --sidebar-w:224px;
+  --avatar-card:36px;
+  /* type */
+  --font-ui:Roboto,'Noto Sans JP',sans-serif;
+}

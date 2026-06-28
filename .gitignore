@@ -30,3 +30,9 @@
 # dev-tools 検証時の一時リダイレクト出力
 /se*.txt
 /so*.txt
+
+# Claude Design の梱包材・素材（参照正典ではないため除外）
+#  _export = ハンドオフ用エクスポート（design/直下の重複コピー）
+#  uploads = キャンバスに貼り付けた生の参照画像
+/design/_export/
+/design/uploads/
