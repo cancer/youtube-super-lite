@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  .app-scroll::-webkit-scrollbar{width:12px}
+  .app-scroll::-webkit-scrollbar-thumb{background:#5a5a5a;border-radius:8px;border:3px solid #0f0f0f}
+  .app-scroll::-webkit-scrollbar-track{background:transparent}
+</style>
+</helmet>
+<div style="min-height:100vh;width:100%;display:flex;align-items:center;justify-content:center;background:radial-gradient(120% 120% at 50% 0%,#2a2a2e,#141416 60%,#0a0a0b);padding:32px;font-family:'Roboto','Noto Sans JP',sans-serif">
+
+  <!-- Desktop window -->
+  <div style="width:1320px;height:840px;border-radius:12px;overflow:hidden;background:#0f0f0f;box-shadow:0 30px 80px -20px rgba(0,0,0,0.7),0 0 0 1px rgba(255,255,255,0.06);display:flex;flex-direction:column">
+
+    <!-- Custom title bar (Rust window decorations) -->
+    <div style="height:44px;flex:0 0 44px;background:#181818;border-bottom:1px solid #272727;display:flex;align-items:center;padding:0 14px;gap:14px;-webkit-app-region:drag">
+      <div style="display:flex;align-items:center;gap:9px">
+        <div style="width:22px;height:22px;border-radius:6px;background:#ff0033;display:flex;align-items:center;justify-content:center">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
+        </div>
+        <span style="font-size:13px;font-weight:700;color:#f1f1f1;letter-spacing:.3px">YouTube Super Lite</span>
+      </div>
+      <!-- window controls -->
+      <div style="display:flex;align-items:center;gap:4px;margin-left:auto;-webkit-app-region:no-drag">
+        <div style="width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#aaa" style-hover="background:#e81123;color:#fff">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Body: sidebar + content -->
+    <div style="flex:1;display:flex;min-height:0">
+
+      <!-- Sidebar -->
+      <div class="app-scroll" style="width:224px;flex:0 0 224px;min-height:0;overflow-y:auto;background:#0f0f0f;border-right:1px solid #272727;padding:12px 8px;display:flex;flex-direction:column;gap:2px">
+        <sc-for list="{{ nav }}" as="n" hint-placeholder-count="6">
+          <div style="display:flex;align-items:center;gap:14px;height:40px;padding:0 14px;border-radius:10px;cursor:pointer;color:{{ n.color }};background:{{ n.bg }};font-size:13.5px;font-weight:{{ n.weight }}" style-hover="background:#1f1f1f">
+            <span style="width:20px;height:20px;display:flex;align-items:center;justify-content:center" dangerouslySetInnerHTML="{{ n.icon }}"></span>
+            <span>{{ n.label }}</span>
+          </div>
+        </sc-for>
+        <div style="height:1px;background:#272727;margin:10px 6px"></div>
+        <div style="font-size:11px;color:#777;font-weight:700;padding:6px 14px;letter-spacing:.5px;display:flex;align-items:center;gap:6px">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="#f5b400"><path d="M12 2l2.4 5.6L20 8l-4 4 1 6-5-3-5 3 1-6-4-4 5.6-.4z"/></svg>お気に入り
+        </div>
+        <sc-for list="{{ favSubs }}" as="s" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:12px;height:38px;padding:0 14px;border-radius:10px;cursor:pointer" style-hover="background:#1f1f1f">
+            <span style="position:relative;width:24px;height:24px;border-radius:50%;flex:0 0 24px;background:{{ s.color }};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;font-family:'Noto Sans JP'">{{ s.initial }}<sc-if value="{{ s.live }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;inset:-3px;border:2px solid #f00;border-radius:50%"></span></sc-if></span>
+            <span style="font-size:13px;color:#f1f1f1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</span>
+          </div>
+        </sc-for>
+        <div style="font-size:11px;color:#777;font-weight:700;padding:6px 14px;letter-spacing:.5px;margin-top:6px">その他</div>
+        <sc-for list="{{ otherSubs }}" as="s" hint-placeholder-count="2">
+          <div style="display:flex;align-items:center;gap:12px;height:38px;padding:0 14px;border-radius:10px;cursor:pointer" style-hover="background:#1f1f1f">
+            <span style="position:relative;width:24px;height:24px;border-radius:50%;flex:0 0 24px;background:{{ s.color }};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;font-family:'Noto Sans JP'">{{ s.initial }}<sc-if value="{{ s.live }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;inset:-3px;border:2px solid #f00;border-radius:50%"></span></sc-if></span>
+            <span style="font-size:13px;color:#f1f1f1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- Content -->
+      <div class="app-scroll" style="flex:1;min-width:0;overflow-y:auto;background:#0f0f0f;padding:18px 24px 56px">
+
+        <!-- header -->
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px">
+          <div>
+            <div style="display:flex;align-items:center;gap:6px;font-size:18px;font-weight:700;color:#f1f1f1;cursor:pointer">
+              <span>新しい順</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="#f1f1f1"><path d="M7 10l5 5 5-5z"/></svg>
+            </div>
+            <div style="font-size:12px;color:#aaa;margin-top:3px;display:flex;align-items:center;gap:5px;cursor:pointer">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="#aaa"><path d="M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z"/></svg>
+              <span>関連が強い</span>
+            </div>
+          </div>
+          <button style="background:#272727;border:none;color:#f1f1f1;font-size:13px;font-weight:500;padding:9px 16px;border-radius:18px;cursor:pointer;font-family:inherit;white-space:nowrap" style-hover="background:#3f3f3f">すべての登録チャンネル</button>
+        </div>
+
+        <!-- grid -->
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:28px 18px">
+          <sc-for list="{{ items }}" as="v" hint-placeholder-count="9">
+            <div style="cursor:pointer;min-width:0" style-hover="opacity:0.96">
+              <div style="position:relative;width:100%;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:{{ v.bg }};box-shadow:0 0 0 1px rgba(255,255,255,0.04)">
+                <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px;text-align:center;text-shadow:0 2px 8px rgba(0,0,0,0.35)">
+                  <div style="font-family:'Noto Sans JP';font-weight:900;font-size:{{ v.bigSize }};line-height:1.05;color:{{ v.bigColor }};letter-spacing:1px;white-space:pre-line">{{ v.big }}</div>
+                  <div style="font-family:'Noto Sans JP';font-weight:700;font-size:13px;color:{{ v.subColor }};margin-top:4px">{{ v.sub }}</div>
+                </div>
+                <div style="position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,0.85);color:#fff;font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;display:flex;align-items:center;gap:4px">
+                  <span style="width:6px;height:6px;border-radius:50%;background:#f00;display:inline-block"></span>ライブ
+                </div>
+              </div>
+              <div style="display:flex;gap:12px;padding:12px 0 0">
+                <div style="width:36px;height:36px;border-radius:50%;flex:0 0 36px;background:{{ v.avatar }};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff;font-family:'Noto Sans JP';position:relative">{{ v.initial }}<sc-if value="{{ v.live }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;inset:-3px;border:2px solid #f00;border-radius:50%"></span></sc-if></div>
+                <div style="min-width:0;flex:1">
+                  <div style="font-size:14px;font-weight:500;line-height:1.35;color:#f1f1f1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{{ v.title }}</div>
+                  <div style="display:flex;align-items:center;gap:5px;font-size:12px;color:#aaa;margin-top:4px">
+                    <span style="background:#f00;color:#fff;font-size:10px;font-weight:700;padding:1px 4px;border-radius:3px;flex:0 0 auto">ライブ</span>
+                    <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ v.channel }}</span>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="#aaa" style="flex:0 0 auto"><path d="M12 2l2.4 1.8 3-.3.6 2.9 2.6 1.6-1.2 2.8 1.2 2.8-2.6 1.6-.6 2.9-3-.3L12 22l-2.4-1.8-3 .3-.6-2.9L3.4 16l1.2-2.8L3.4 10.4 6 8.8l.6-2.9 3 .3L12 2zm-1.2 13l4.5-4.5-1.1-1.1-3.4 3.4-1.5-1.5-1.1 1.1 2.6 2.6z"/></svg>
+                  </div>
+                  <div style="font-size:12px;color:#aaa;margin-top:1px">{{ v.viewers }}人が視聴中</div>
+                </div>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="#aaa" style="flex:0 0 18px;margin-top:2px;cursor:pointer" onClick="{{ openMenu }}"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Context menu -->
+  <sc-if value="{{ menu }}" hint-placeholder-val="{{ null }}">
+    <div onClick="{{ closeMenu }}" style="position:fixed;inset:0;z-index:50">
+      <div onClick="{{ stop }}" style="position:absolute;left:{{ menu.x }};top:{{ menu.y }};min-width:236px;background:#282828;border-radius:12px;padding:8px 0;box-shadow:0 8px 28px rgba(0,0,0,0.6);font-family:'Roboto','Noto Sans JP',sans-serif">
+        <sc-for list="{{ menuItems }}" as="m" hint-placeholder-count="6">
+          <div onClick="{{ closeMenu }}" style="display:flex;align-items:center;gap:18px;height:44px;padding:0 18px;cursor:pointer;color:#f1f1f1;font-size:14px" style-hover="background:#3f3f3f">
+            <span style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;color:#f1f1f1" dangerouslySetInnerHTML="{{ m.icon }}"></span>
+            <span>{{ m.label }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1384,&quot;height&quot;:904}}">
+class Component extends DCLogic {
+  state = { menu: null };
+  renderVals() {
+    const ic = {
+      home:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>',
+      fire:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 23c4.4 0 8-3.6 8-8 0-3.5-2-6-3.5-8-.3 1.6-1.3 2.7-2.5 2.7-1.8 0-2-2.3-1.5-6.7C9 5 6 9 6 14c0 1.7.5 3.2 1.4 4.4C7.2 18 7 17.3 7 16.5 7 14.5 8.7 13 11 12c-.5 2 .5 3.5 2 3.5 1.2 0 2-.9 2-2.2 1 .9 1.5 2.1 1.5 3.4 0 2.4-2 4.3-4.5 4.3z"/></svg>',
+      subs:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 8H4V6h16v2zm-2-6H6v2h12V2zM4 22h16a2 2 0 002-2V10H2v10a2 2 0 002 2zm6-8.5l6 3.5-6 3.5v-7z"/></svg>',
+      live:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zm0 6a2 2 0 110-4 2 2 0 010 4zM6.3 6.3l-1.4-1.4a10 10 0 000 14.2l1.4-1.4a8 8 0 010-11.4zm12.8-1.4l-1.4 1.4a8 8 0 010 11.4l1.4 1.4a10 10 0 000-14.2z"/></svg>',
+      library:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6H2v14a2 2 0 002 2h14v-2H4V6zm16-4H8a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2V4a2 2 0 00-2-2zm-9 12V6l5 4-5 4z"/></svg>',
+      history:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 00-9 9H1l4 4 4-4H6a7 7 0 117 7 7 7 0 01-4.9-2L6.7 18.4A9 9 0 1013 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8z"/></svg>',
+      playlist:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10h11v2H3v-2zm0-4h11v2H3V6zm0 8h7v2H3v-2zm13-1v6l5-3-5-3z"/></svg>',
+      recommend:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 5.6L20 8l-4 4 1 6-5-3-5 3 1-6-4-4 5.6-.4z"/></svg>'
+    };
+    const H = (s) => ({ __html:s });
+    const nav = [
+      { label:'登録チャンネル', icon:H(ic.subs), color:'#fff', bg:'#272727', weight:700 },
+      { label:'履歴', icon:H(ic.history), color:'#aaa', bg:'transparent', weight:500 },
+      { label:'再生リスト', icon:H(ic.playlist), color:'#aaa', bg:'transparent', weight:500 },
+      { label:'おすすめ', icon:H(ic.recommend), color:'#aaa', bg:'transparent', weight:500 },
+    ];
+    const favSubs = [
+      { name:'ACHRORA', initial:'A', color:'#7c5cff', live:true },
+      { name:'水宮枢 Su Ch.', initial:'水', color:'#39a0e8', live:true },
+      { name:'兎田ぺこら', initial:'ペ', color:'#d84a4a', live:true },
+    ];
+    const otherSubs = [
+      { name:'夏色まつり', initial:'夏', color:'#ff9bb8', live:false },
+      { name:'ロボ子さん', initial:'ロ', color:'#ff7aa8', live:false },
+    ];
+
+    const card = (o) => ({
+      bg:o.bg, big:o.big, bigSize:o.bigSize||'40px', bigColor:o.bigColor||'#fff',
+      sub:o.sub||'', subColor:o.subColor||'#ffffff',
+      avatar:o.avatar, initial:o.initial, live:o.live !== undefined ? o.live : true,
+      title:o.title, channel:o.channel, viewers:o.viewers
+    });
+    const items = [
+      card({ bg:'linear-gradient(135deg,#2b2150,#5840a0 45%,#b89ad8)', big:'24時間配信', bigSize:'30px', sub:'700万円突破！', subColor:'#ffe27a', avatar:'#7c5cff', initial:'A',
+        title:'【#あくろろ24】24時間配信頑張ります！！！🔥 mekPark全員集合【3枠目】#ACHRORA #UNITB', channel:'ACHRORA - mekPark', viewers:'4761' }),
+      card({ bg:'linear-gradient(160deg,#2196f3,#7fd3ff 60%,#e3f6ff)', big:'同時視聴', bigSize:'34px', sub:'サンリオキャラクター大賞', subColor:'#fff', avatar:'#39a0e8', initial:'水',
+        title:'【同時視聴】サンリオキャラクター大賞 サムくん🐧💙見届ける！！【水宮枢／ホロライブDEV_IS】', channel:'Su Ch. 水宮枢 - FLOW GLOW', viewers:'4098' }),
+      card({ bg:'linear-gradient(135deg,#0a1a3a,#12305c 50%,#1a4a7a)', big:'EVO', bigSize:'46px', sub:'日本語実況 LIVE配信  DAY2 6/27', subColor:'#7fbfff', avatar:'#1565c0', initial:'C',
+        title:'【日本語実況】Evo 2026- Day2 Part 2「CAPCOM Pro Tour 2026 Premier」', channel:'Capcom Fighters JP', viewers:'3.8万' }),
+      card({ bg:'linear-gradient(135deg,#ffd6e8,#ffeaf2 50%,#ffd0c0)', big:'同時視聴', bigSize:'32px', bigColor:'#e84393', sub:'サンリオキャラクター大賞 2026', subColor:'#e87aab', avatar:'#ff9bb8', initial:'夏',
+        title:'【同時視聴】サンリオキャラクター大賞🐰がおばあわぅ全力応援！【ホロライブ/夏色まつり】', channel:'Matsuri Channel 夏色まつり', viewers:'1197' }),
+      card({ bg:'linear-gradient(135deg,#ff8fb1,#ffd36e 70%)', big:'歌枠', bigSize:'42px', sub:'No.28 / 定期KARAOKE', subColor:'#fff', avatar:'#ff7aa8', initial:'ロ',
+        title:'【歌枠】No.28 ランチタイムに 6月最後のろぼめろでぃ〜 RBmelody 🎤【ホロライブ/ロボ子さん】', channel:'Roboco Ch. ロボ子', viewers:'2358' }),
+      card({ bg:'linear-gradient(135deg,#0a0a14,#1a2a4a 60%,#3a5a8a)', big:'#10', bigSize:'52px', sub:'ドラゴンクエストⅥ', subColor:'#ffd86e', avatar:'#d84a4a', initial:'ペ',
+        title:'#10【SFC】完全初見！ドラゴンクエストⅥ 幻の大地 ぺこ！【ホロライブ/兎田ぺこら】', channel:'Pekora Ch. 兎田ぺこら', viewers:'1.9万' }),
+      card({ bg:'linear-gradient(135deg,#ff6fa8,#ff9ec4 55%,#ffd6e8)', big:'結果発表\n同時視聴', bigSize:'28px', sub:'サンリオキャラクター大賞', subColor:'#fff', avatar:'#ff5e9c', initial:'サ',
+        title:'【サンリオフェス2026】サンリオキャラクター大賞 結果発表同時視聴【周央サンゴ／にじさんじ】', channel:'周央 サンゴ【にじさんじ】', viewers:'1624' }),
+      card({ bg:'linear-gradient(135deg,#1e6f6a,#2fa89a 55%,#9fe0d6)', big:'同時視聴', bigSize:'30px', sub:'今年のプリンくんの順位は…！？', subColor:'#d6fff8', avatar:'#2fa89a', initial:'儒',
+        title:'【同時視聴】サンリオキャラクター大賞同時視聴！今年のプリンくんの順位は…！？【儒烏風亭らでん #ReGLOSS】', channel:'Raden Ch. 儒烏風亭らでん #ReGLOSS', viewers:'5567' }),
+      card({ bg:'linear-gradient(135deg,#f4e54a,#7cc3f0 55%,#2b2150)', big:'24時間配信\n3枠目', bigSize:'26px', sub:'', subColor:'#fff', avatar:'#7c5cff', initial:'A',
+        title:'【#あくろろ24】24時間配信頑張ります！！！🔥 mekPark全員集合【3枠目】#ACHRORA #UNITB', channel:'ACHRORA - mekPark', viewers:'4761' }),
+    ];
+
+    const mi = {
+      queue:'<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10h11v2H3v-2zm0-4h11v2H3V6zm0 8h7v2H3v-2zm13-1v6l5-3-5-3z"/></svg>',
+      watch:'<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a9 9 0 100 18 9 9 0 000-18zm0 16a7 7 0 110-14 7 7 0 010 14zm.5-11H11v6l5 3 .8-1.3-4.3-2.6V8z"/></svg>',
+      save:'<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H7a2 2 0 00-2 2v16l7-3 7 3V5a2 2 0 00-2-2z"/></svg>',
+      mobile:'<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M17 1H7a2 2 0 00-2 2v18a2 2 0 002 2h10a2 2 0 002-2V3a2 2 0 00-2-2zm0 18H7V5h10v14z"/></svg>',
+      share:'<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M14 9V5l7 7-7 7v-4.1c-5 0-8.5 1.6-11 5.1 1-5 4-10 11-11z"/></svg>',
+      hide:'<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4a8 8 0 100 16 8 8 0 000-16zm0 2a6 6 0 014.5 9.9L6.1 7.5A6 6 0 0112 6zM7.5 8.1l10.4 10.4A6 6 0 017.5 8.1z"/></svg>'
+    };
+    const H2 = (s) => ({ __html:s });
+    const menuItems = [
+      { label:'キューに追加', icon:H2(mi.queue) },
+      { label:'[後で見る] に保存', icon:H2(mi.watch) },
+      { label:'再生リストに保存', icon:H2(mi.save) },
+      { label:'モバイルに一時保存', icon:H2(mi.mobile) },
+      { label:'共有', icon:H2(mi.share) },
+      { label:'非表示', icon:H2(mi.hide) },
+    ];
+    const m = this.state.menu;
+    const menu = m ? { x: m.x + 'px', y: m.y + 'px' } : null;
+    const openMenu = (e) => {
+      e.stopPropagation(); e.preventDefault();
+      const r = e.currentTarget.getBoundingClientRect();
+      const x = Math.min(r.right - 236, window.innerWidth - 248);
+      const y = Math.min(r.bottom + 4, window.innerHeight - 290);
+      this.setState({ menu: { x: Math.max(8, x), y: Math.max(8, y) } });
+    };
+    const closeMenu = () => this.setState({ menu: null });
+    const stop = (e) => e.stopPropagation();
+
+    return { nav, favSubs, otherSubs, items, menuItems, menu, openMenu, closeMenu, stop };
+  }
+}
+</script>
+</body>
+</html>

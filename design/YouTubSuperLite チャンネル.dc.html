@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  .app-scroll::-webkit-scrollbar{width:12px}
+  .app-scroll::-webkit-scrollbar-thumb{background:#5a5a5a;border-radius:8px;border:3px solid #0f0f0f}
+  .app-scroll::-webkit-scrollbar-track{background:transparent}
+  .shelf-scroll::-webkit-scrollbar{height:8px}
+  .shelf-scroll::-webkit-scrollbar-thumb{background:#3f3f3f;border-radius:8px}
+  .shelf-scroll::-webkit-scrollbar-track{background:transparent}
+</style>
+</helmet>
+<div style="min-height:100vh;width:100%;display:flex;align-items:center;justify-content:center;background:radial-gradient(120% 120% at 50% 0%,#2a2a2e,#141416 60%,#0a0a0b);padding:32px;font-family:'Roboto','Noto Sans JP',sans-serif">
+
+  <!-- Desktop window -->
+  <div style="position:relative;width:1320px;height:840px;border-radius:12px;overflow:hidden;background:#0f0f0f;box-shadow:0 30px 80px -20px rgba(0,0,0,0.7),0 0 0 1px rgba(255,255,255,0.06);display:flex;flex-direction:column">
+
+    <!-- Custom title bar -->
+    <div style="height:44px;flex:0 0 44px;background:#181818;border-bottom:1px solid #272727;display:flex;align-items:center;padding:0 14px;gap:14px;-webkit-app-region:drag">
+      <div style="display:flex;align-items:center;gap:9px">
+        <div style="width:22px;height:22px;border-radius:6px;background:#ff0033;display:flex;align-items:center;justify-content:center">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
+        </div>
+        <span style="font-size:13px;font-weight:700;color:#f1f1f1;letter-spacing:.3px">YouTube Super Lite</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;margin-left:auto;-webkit-app-region:no-drag">
+        <div style="width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#aaa" style-hover="background:#e81123;color:#fff">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Body: sidebar + content -->
+    <div style="flex:1;display:flex;min-height:0">
+
+      <!-- Sidebar -->
+      <div class="app-scroll" style="width:224px;flex:0 0 224px;min-height:0;overflow-y:auto;background:#0f0f0f;border-right:1px solid #272727;padding:12px 8px;display:flex;flex-direction:column;gap:2px">
+        <sc-for list="{{ nav }}" as="n" hint-placeholder-count="4">
+          <div style="display:flex;align-items:center;gap:14px;height:40px;padding:0 14px;border-radius:10px;cursor:pointer;color:{{ n.color }};background:{{ n.bg }};font-size:13.5px;font-weight:{{ n.weight }}" style-hover="background:#1f1f1f">
+            <span style="width:20px;height:20px;display:flex;align-items:center;justify-content:center" dangerouslySetInnerHTML="{{ n.icon }}"></span>
+            <span>{{ n.label }}</span>
+          </div>
+        </sc-for>
+        <div style="height:1px;background:#272727;margin:10px 6px"></div>
+        <div style="font-size:11px;color:#777;font-weight:700;padding:6px 14px;letter-spacing:.5px;display:flex;align-items:center;gap:6px">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="#f5b400"><path d="M12 2l2.4 5.6L20 8l-4 4 1 6-5-3-5 3 1-6-4-4 5.6-.4z"/></svg>お気に入り
+        </div>
+        <sc-for list="{{ favSubs }}" as="s" hint-placeholder-count="3">
+          <div style="display:flex;align-items:center;gap:12px;height:38px;padding:0 14px;border-radius:10px;cursor:pointer;background:{{ s.bg }}" style-hover="background:#1f1f1f">
+            <span style="position:relative;width:24px;height:24px;border-radius:50%;flex:0 0 24px;background:{{ s.color }};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;font-family:'Noto Sans JP'">{{ s.initial }}<sc-if value="{{ s.live }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;inset:-3px;border:2px solid #f00;border-radius:50%"></span></sc-if></span>
+            <span style="font-size:13px;color:{{ s.text }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:{{ s.weight }}">{{ s.name }}</span>
+          </div>
+        </sc-for>
+        <div style="font-size:11px;color:#777;font-weight:700;padding:6px 14px;letter-spacing:.5px;margin-top:6px">その他</div>
+        <sc-for list="{{ otherSubs }}" as="s" hint-placeholder-count="2">
+          <div style="display:flex;align-items:center;gap:12px;height:38px;padding:0 14px;border-radius:10px;cursor:pointer" style-hover="background:#1f1f1f">
+            <span style="position:relative;width:24px;height:24px;border-radius:50%;flex:0 0 24px;background:{{ s.color }};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;font-family:'Noto Sans JP'">{{ s.initial }}</span>
+            <span style="font-size:13px;color:#f1f1f1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.name }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- Content -->
+      <div class="app-scroll" style="flex:1;min-width:0;overflow-y:auto;background:#0f0f0f">
+        <div style="max-width:1060px;margin:0 auto;padding:20px 24px 56px">
+
+          <!-- Banner -->
+          <div style="position:relative;width:100%;aspect-ratio:6.2/1;border-radius:12px;overflow:hidden;background:linear-gradient(110deg,#0a1f5c 0%,#1565c0 32%,#3aa0ec 56%,#9fd8ff 100%)">
+            <div style="position:absolute;inset:0;background:repeating-linear-gradient(125deg,rgba(255,255,255,0.05) 0 2px,transparent 2px 22px)"></div>
+            <div style="position:absolute;right:48px;top:50%;transform:translateY(-50%);text-align:right;text-shadow:0 2px 14px rgba(0,40,90,0.5)">
+              <div style="font-family:'Roboto';font-style:italic;font-weight:900;font-size:42px;color:#fff;letter-spacing:1px;line-height:1">Mizumiya Su</div>
+              <div style="font-size:13px;color:#cdeaff;font-weight:700;margin-top:8px;letter-spacing:2px">2026.01.21  /  1st ALBUM</div>
+              <div style="font-family:'Roboto';font-weight:900;font-size:26px;color:#fff;letter-spacing:3px;margin-top:2px">FLOW GLOW</div>
+            </div>
+          </div>
+
+          <!-- Identity row -->
+          <div style="display:flex;align-items:flex-start;gap:24px;padding:24px 8px 0">
+            <div style="position:relative;flex:0 0 152px">
+              <div style="width:152px;height:152px;border-radius:50%;overflow:hidden;background:radial-gradient(circle at 38% 32%,#bfe6ff,#3a9fe8 55%,#1d4f9c);box-shadow:0 0 0 4px #0f0f0f,0 0 0 7px #f00">
+                <div style="position:absolute;inset:0;background:repeating-linear-gradient(135deg,rgba(255,255,255,0.06) 0 1px,transparent 1px 14px)"></div>
+              </div>
+              <div style="position:absolute;left:50%;bottom:6px;transform:translateX(-50%);background:#f00;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;font-family:'Noto Sans JP'">ライブ</div>
+            </div>
+
+            <div style="flex:1;min-width:0;padding-top:6px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <h1 style="font-size:34px;font-weight:900;color:#f1f1f1;font-family:'Noto Sans JP';letter-spacing:.2px">Su Ch. 水宮枢 - FLOW GLOW</h1>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="#aaa" style="flex:0 0 20px"><path d="M12 2l2.4 1.8 3-.3.6 2.9 2.6 1.6-1.2 2.8 1.2 2.8-2.6 1.6-.6 2.9-3-.3L12 22l-2.4-1.8-3 .3-.6-2.9L3.4 16l1.2-2.8L3.4 10.4 6 8.8l.6-2.9 3 .3L12 2zm-1.2 13l4.5-4.5-1.1-1.1-3.4 3.4-1.5-1.5-1.1 1.1 2.6 2.6z"/></svg>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:13px;color:#aaa;margin-top:8px;flex-wrap:wrap">
+                <span style="color:#f1f1f1;font-weight:500">@MizumiyaSu</span>
+                <span>·</span><span>チャンネル登録者数 69.5万人</span>
+                <span>·</span><span>951 本の動画</span>
+              </div>
+              <div style="font-size:13px;color:#aaa;margin-top:8px;display:flex;align-items:center;gap:6px">
+                <span>しゅぴしゅわ〜！すうの充電たりてる…⚡♡</span>
+                <span style="color:#f1f1f1;font-weight:500;cursor:pointer" onClick="{{ openDesc }}">...さらに表示</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:13px;color:#3ea6ff;margin-top:10px;cursor:pointer">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="#3ea6ff"><path d="M3.9 12a3.1 3.1 0 013.1-3.1h4V7H7a5 5 0 100 10h4v-1.9H7A3.1 3.1 0 013.9 12zM8 13h8v-2H8v2zm9-6h-4v1.9h4a3.1 3.1 0 010 6.2h-4V17h4a5 5 0 000-10z"/></svg>
+                <span>X (Twitter)</span>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:10px;margin-top:16px">
+                <button style="display:flex;align-items:center;gap:8px;background:#272727;border:none;color:#f1f1f1;font-size:14px;font-weight:500;padding:9px 18px;border-radius:20px;cursor:pointer;font-family:inherit" style-hover="background:#3f3f3f">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="#f1f1f1"><path d="M12 22a2 2 0 002-2h-4a2 2 0 002 2zm6-6V11c0-3-1.6-5.5-4.5-6.2V4a1.5 1.5 0 00-3 0v.8C7.6 5.5 6 8 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+                  登録済み
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="#f1f1f1"><path d="M7 10l5 5 5-5z"/></svg>
+                </button>
+                <button style="display:flex;align-items:center;gap:8px;background:transparent;border:1px solid #3f3f3f;color:#f1f1f1;font-size:14px;font-weight:500;padding:9px 18px;border-radius:20px;cursor:pointer;font-family:inherit" style-hover="background:#272727">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="#f1f1f1"><path d="M12 2l2.9 6.3 6.9.6-5.2 4.6 1.6 6.8L12 17l-6.2 3.9 1.6-6.8L2.2 8.9l6.9-.6z"/></svg>
+                  メンバーになる
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tabs -->
+          <div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid #272727;margin-top:22px;padding:0 4px">
+            <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="6">
+              <div style="position:relative;padding:14px 12px;font-size:14px;font-weight:{{ t.weight }};color:{{ t.color }};cursor:pointer;white-space:nowrap;font-family:'Noto Sans JP'" style-hover="color:#f1f1f1">
+                {{ t.label }}
+                <sc-if value="{{ t.active }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;left:8px;right:8px;bottom:0;height:2px;background:#f1f1f1;border-radius:2px"></span></sc-if>
+              </div>
+            </sc-for>
+            <div style="margin-left:auto;width:34px;height:34px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#f1f1f1">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            </div>
+          </div>
+
+          <!-- Featured live (API-driven) -->
+          <div style="display:flex;gap:24px;padding:24px 4px 8px">
+            <div style="position:relative;flex:0 0 400px;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:{{ featured.bg }};cursor:pointer">
+              <div style="position:absolute;inset:0;background:repeating-linear-gradient(120deg,rgba(255,255,255,0.05) 0 2px,transparent 2px 20px)"></div>
+              <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;text-shadow:0 2px 10px rgba(0,0,0,0.35)">
+                <div style="font-family:'Noto Sans JP';font-weight:900;font-size:34px;color:#fff;letter-spacing:2px">{{ featured.big }}</div>
+                <div style="font-family:'Noto Sans JP';font-weight:700;font-size:14px;color:#dff1ff;margin-top:4px">{{ featured.sub }}</div>
+              </div>
+              <sc-if value="{{ featured.live }}" hint-placeholder-val="{{ true }}">
+                <div style="position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,0.85);color:#fff;font-size:12px;font-weight:700;padding:3px 8px;border-radius:5px;display:flex;align-items:center;gap:5px;font-family:'Noto Sans JP'">
+                  <span style="width:7px;height:7px;border-radius:50%;background:#f00;display:inline-block"></span>ライブ
+                </div>
+              </sc-if>
+            </div>
+            <div style="flex:1;min-width:0;padding-top:2px">
+              <div style="display:flex;align-items:flex-start;gap:10px">
+                <div style="flex:1;min-width:0;font-size:18px;font-weight:700;color:#f1f1f1;line-height:1.4;font-family:'Noto Sans JP'">{{ featured.title }}</div>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="#aaa" style="flex:0 0 20px;cursor:pointer;margin-top:2px" onClick="{{ openMenu }}"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:13px;color:#aaa;margin-top:10px">
+                <span>{{ featured.channel }}</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="#aaa"><path d="M12 2l2.4 1.8 3-.3.6 2.9 2.6 1.6-1.2 2.8 1.2 2.8-2.6 1.6-.6 2.9-3-.3L12 22l-2.4-1.8-3 .3-.6-2.9L3.4 16l1.2-2.8L3.4 10.4 6 8.8l.6-2.9 3 .3L12 2zm-1.2 13l4.5-4.5-1.1-1.1-3.4 3.4-1.5-1.5-1.1 1.1 2.6 2.6z"/></svg>
+                <span>·</span><span>{{ featured.viewers }}</span>
+              </div>
+              <div style="font-size:13px;color:#aaa;margin-top:14px;line-height:1.6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{{ featured.desc }}</div>
+            </div>
+          </div>
+
+          <!-- Shelf -->
+          <sc-for list="{{ shelves }}" as="sh" hint-placeholder-count="2">
+            <div style="border-top:1px solid #272727;padding:22px 4px 4px;margin-top:6px">
+              <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+                <span style="font-size:18px;font-weight:700;color:#f1f1f1;font-family:'Noto Sans JP'">{{ sh.title }}</span>
+                <div style="display:flex;align-items:center;gap:6px;font-size:13px;color:#f1f1f1;font-weight:500;cursor:pointer">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="#f1f1f1"><path d="M8 5v14l11-7z"/></svg>
+                  <span style="font-family:'Noto Sans JP'">すべて再生</span>
+                </div>
+                <sc-if value="{{ sh.desc }}" hint-placeholder-val=""><span style="font-size:13px;color:#aaa;font-family:'Noto Sans JP'">{{ sh.desc }}</span></sc-if>
+              </div>
+              <div class="shelf-scroll" style="display:flex;gap:16px;overflow-x:auto;padding-bottom:10px">
+                <sc-for list="{{ sh.cards }}" as="c" hint-placeholder-count="4">
+                  <div style="flex:0 0 230px;cursor:pointer" style-hover="opacity:0.95">
+                    <div style="position:relative;width:230px;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:{{ c.bg }}">
+                      <div style="position:absolute;inset:0;background:repeating-linear-gradient(120deg,rgba(255,255,255,0.05) 0 2px,transparent 2px 18px)"></div>
+                      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:6px;text-shadow:0 2px 8px rgba(0,0,0,0.35)">
+                        <div style="font-family:'Noto Sans JP';font-weight:900;font-size:{{ c.bigSize }};color:{{ c.bigColor }};line-height:1.05;letter-spacing:1px;white-space:pre-line">{{ c.big }}</div>
+                      </div>
+                      <sc-if value="{{ c.isPlaylist }}" hint-placeholder-val="{{ true }}">
+                        <div style="position:absolute;right:0;top:0;bottom:0;width:60px;background:rgba(0,0,0,0.78);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#fff">
+                          <span style="font-size:15px;font-weight:700">{{ c.count }}</span>
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><path d="M3 10h11v2H3v-2zm0-4h11v2H3V6zm0 8h7v2H3v-2zm13-1v6l5-3-5-3z"/></svg>
+                        </div>
+                      </sc-if>
+                      <sc-if value="{{ c.duration }}" hint-placeholder-val="">
+                        <div style="position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,0.85);color:#fff;font-size:11px;font-weight:700;padding:1px 5px;border-radius:4px">{{ c.duration }}</div>
+                      </sc-if>
+                    </div>
+                    <div style="display:flex;align-items:flex-start;gap:6px;margin-top:10px">
+                      <div style="flex:1;min-width:0;font-size:14px;font-weight:500;color:#f1f1f1;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-family:'Noto Sans JP'">{{ c.title }}</div>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="#aaa" style="flex:0 0 18px;cursor:pointer;margin-top:1px" onClick="{{ openMenu }}"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+                    </div>
+                    <div style="font-size:12px;color:#aaa;margin-top:5px;font-family:'Noto Sans JP'">{{ c.meta }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Description modal (contained in window) -->
+    <sc-if value="{{ descOpen }}" hint-placeholder-val="{{ true }}">
+    <div onClick="{{ closeDesc }}" style="position:absolute;inset:0;z-index:60;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;padding:40px;font-family:'Roboto','Noto Sans JP',sans-serif">
+      <div onClick="{{ stop }}" style="width:560px;max-width:100%;max-height:100%;background:#212121;border-radius:16px;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.6);overflow:hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:22px 24px 12px;flex:0 0 auto">
+          <div style="font-size:20px;font-weight:700;color:#f1f1f1;font-family:'Noto Sans JP'">Su Ch. 水宮枢 - FLOW GLOW</div>
+          <svg onClick="{{ closeDesc }}" width="24" height="24" viewBox="0 0 24 24" fill="#f1f1f1" style="cursor:pointer;flex:0 0 24px"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
+        </div>
+        <div class="app-scroll" style="flex:1;min-height:0;overflow-y:auto;padding:8px 24px 28px">
+          <div style="font-size:16px;font-weight:700;color:#f1f1f1;font-family:'Noto Sans JP';margin-bottom:14px">説明</div>
+          <sc-for list="{{ descLines }}" as="d" hint-placeholder-count="8">
+            <div style="font-size:14px;line-height:1.7;color:{{ d.color }};white-space:pre-wrap;word-break:break-word;font-family:'Noto Sans JP'">{{ d.t }}</div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+  </div>
+
+  <!-- Context menu -->
+  <sc-if value="{{ menu }}" hint-placeholder-val="{{ null }}">
+    <div onClick="{{ closeMenu }}" style="position:fixed;inset:0;z-index:50">
+      <div onClick="{{ stop }}" style="position:absolute;left:{{ menu.x }};top:{{ menu.y }};min-width:236px;background:#282828;border-radius:12px;padding:8px 0;box-shadow:0 8px 28px rgba(0,0,0,0.6);font-family:'Roboto','Noto Sans JP',sans-serif">
+        <sc-for list="{{ menuItems }}" as="m" hint-placeholder-count="2">
+          <div onClick="{{ closeMenu }}" style="display:flex;align-items:center;gap:18px;height:44px;padding:0 18px;cursor:pointer;color:#f1f1f1;font-size:14px" style-hover="background:#3f3f3f">
+            <span style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;color:#f1f1f1" dangerouslySetInnerHTML="{{ m.icon }}"></span>
+            <span>{{ m.label }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1384,&quot;height&quot;:904}}">
+class Component extends DCLogic {
+  state = { menu: null, descOpen: false };
+  renderVals() {
+    const ic = {
+      subs:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 8H4V6h16v2zm-2-6H6v2h12V2zM4 22h16a2 2 0 002-2V10H2v10a2 2 0 002 2zm6-8.5l6 3.5-6 3.5v-7z"/></svg>',
+      history:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 00-9 9H1l4 4 4-4H6a7 7 0 117 7 7 7 0 01-4.9-2L6.7 18.4A9 9 0 1013 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8z"/></svg>',
+      playlist:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10h11v2H3v-2zm0-4h11v2H3V6zm0 8h7v2H3v-2zm13-1v6l5-3-5-3z"/></svg>',
+      recommend:'<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 5.6L20 8l-4 4 1 6-5-3-5 3 1-6-4-4 5.6-.4z"/></svg>'
+    };
+    const H = (s) => ({ __html:s });
+    const nav = [
+      { label:'登録チャンネル', icon:H(ic.subs), color:'#aaa', bg:'transparent', weight:500 },
+      { label:'履歴', icon:H(ic.history), color:'#aaa', bg:'transparent', weight:500 },
+      { label:'再生リスト', icon:H(ic.playlist), color:'#aaa', bg:'transparent', weight:500 },
+      { label:'おすすめ', icon:H(ic.recommend), color:'#aaa', bg:'transparent', weight:500 },
+    ];
+    const favSubs = [
+      { name:'ACHRORA', initial:'A', color:'#7c5cff', live:true, bg:'transparent', text:'#f1f1f1', weight:400 },
+      { name:'水宮枢 Su Ch.', initial:'水', color:'#39a0e8', live:true, bg:'#272727', text:'#fff', weight:700 },
+      { name:'兎田ぺこら', initial:'ペ', color:'#d84a4a', live:true, bg:'transparent', text:'#f1f1f1', weight:400 },
+    ];
+    const otherSubs = [
+      { name:'夏色まつり', initial:'夏', color:'#ff9bb8' },
+      { name:'ロボ子さん', initial:'ロ', color:'#ff7aa8' },
+    ];
+
+    const tab = (label, active) => ({ label, active, color: active ? '#f1f1f1' : '#aaa', weight: active ? 700 : 500 });
+    const tabs = [
+      tab('ホーム', true), tab('動画', false), tab('ショート', false), tab('ライブ', false),
+      tab('再生リスト', false), tab('メンバーシップ', false), tab('ストア', false),
+    ];
+
+    const featured = {
+      bg:'linear-gradient(150deg,#173a78,#3a9fe8 55%,#bfe6ff)',
+      big:'歌枠 KARAOKE',
+      sub:'縦型雑談〜マイク調節会',
+      live:true,
+      title:'【歌枠 KARAOKE】縦型雑談〜マイク調節会！【水宮枢／ホロライブDEV_IS】',
+      channel:'Su Ch. 水宮枢 - FLOW GLOW',
+      viewers:'1,511 人が視聴中',
+      desc:'提供:XING INC. ※本サービスは株式会社エクシングより許諾を得た上で配信を行なっています。※JOYSOUND音源を使用しているため、本人以外の本動画への…'
+    };
+
+    const card = (o) => ({
+      bg:o.bg, big:o.big, bigSize:o.bigSize||'24px', bigColor:o.bigColor||'#fff',
+      title:o.title, meta:o.meta, duration:o.duration||'', isPlaylist:!!o.count, count:o.count||''
+    });
+    const shelves = [
+      { title:'3D生誕ライブ', desc:'5種のダンス！ HIPHOP等ステップ多め', cards:[
+        card({ bg:'linear-gradient(150deg,#7e5cff,#c79bff 55%,#ffd6f0)', big:'Step into\nDreams', bigSize:'22px', count:'15', title:'【 3DLIVE 】Step Into Dreams【水宮枢／ホロライブDEV_IS】', meta:'57万 回視聴 · 11 日前' }),
+        card({ bg:'linear-gradient(150deg,#1565c0,#3aa0ec 55%,#bfe6ff)', big:'3D生誕\n2026', bigSize:'24px', duration:'1:42:08', title:'【#水宮枢3D】はじめての3Dお披露目ライブ！しゅぴしゅわ〜！', meta:'88万 回視聴 · 1 か月前' }),
+        card({ bg:'linear-gradient(150deg,#0a2d6b,#2f7fd6 60%,#9fd0ff)', big:'MC\nDANCE', bigSize:'26px', duration:'8:21', title:'【3D】HIPHOPメドレー フルダンスパフォーマンス', meta:'42万 回視聴 · 1 か月前' }),
+        card({ bg:'linear-gradient(150deg,#173a78,#56b0f0 55%,#dff3ff)', big:'ENCORE', bigSize:'26px', duration:'12:03', title:'【3D生誕】アンコール＆エンディングトーク', meta:'31万 回視聴 · 1 か月前' }),
+        card({ bg:'linear-gradient(150deg,#2a1d6b,#5a6fe0 55%,#bcd0ff)', big:'OPENING', bigSize:'24px', duration:'6:55', title:'【3D】オープニングアクト ノンストップメドレー', meta:'29万 回視聴 · 1 か月前' }),
+      ]},
+      { title:'オリジナル楽曲', desc:'', cards:[
+        card({ bg:'linear-gradient(150deg,#0a1f5c,#1f86e0 55%,#aee0ff)', big:'FLOW\nGLOW', bigSize:'26px', bigColor:'#fff', duration:'4:12', title:'水宮枢 - FLOW GLOW / Music Video', meta:'214万 回視聴 · 5 か月前' }),
+        card({ bg:'linear-gradient(150deg,#3a1d6b,#9b5cff 55%,#e6d0ff)', big:'電光\nシグナル', bigSize:'22px', duration:'3:48', title:'水宮枢 - 電光シグナル / Original Song', meta:'97万 回視聴 · 8 か月前' }),
+        card({ bg:'linear-gradient(150deg,#0b4f6b,#1fb0c0 55%,#bff3f7)', big:'Aqua\nLoop', bigSize:'24px', duration:'3:21', title:'水宮枢 - Aqua Loop (feat. FLOW GLOW)', meta:'63万 回視聴 · 3 か月前' }),
+        card({ bg:'linear-gradient(150deg,#5c1d4a,#e85ca0 55%,#ffd0e8)', big:'ハートビート', bigSize:'19px', duration:'3:55', title:'水宮枢 - ハートビート・チャージ / MV', meta:'48万 回視聴 · 2 か月前' }),
+        card({ bg:'linear-gradient(150deg,#1d3a6b,#4f8fe0 55%,#cfe2ff)', big:'COVER', bigSize:'26px', duration:'4:30', title:'【歌ってみた】人気曲カバー / 水宮枢', meta:'72万 回視聴 · 6 か月前' }),
+      ]},
+    ];
+
+    const mi = {
+      watch:'<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a9 9 0 100 18 9 9 0 000-18zm0 16a7 7 0 110-14 7 7 0 010 14zm.5-11H11v6l5 3 .8-1.3-4.3-2.6V8z"/></svg>',
+      save:'<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H7a2 2 0 00-2 2v16l7-3 7 3V5a2 2 0 00-2-2z"/></svg>'
+    };
+    const menuItems = [
+      { label:'[後で見る] に保存', icon:H(mi.watch) },
+      { label:'再生リストに保存', icon:H(mi.save) },
+    ];
+    const m = this.state.menu;
+    const menu = m ? { x: m.x + 'px', y: m.y + 'px' } : null;
+    const openMenu = (e) => {
+      e.stopPropagation(); e.preventDefault();
+      const r = e.currentTarget.getBoundingClientRect();
+      const x = Math.min(r.right - 236, window.innerWidth - 248);
+      const y = Math.min(r.bottom + 4, window.innerHeight - 116);
+      this.setState({ menu: { x: Math.max(8, x), y: Math.max(8, y) } });
+    };
+    const closeMenu = () => this.setState({ menu: null });
+    const stop = (e) => e.stopPropagation();
+
+    const line = (t, opt) => ({ t, color:(opt&&opt.link)?'#3ea6ff':'#f1f1f1' });
+    const div = () => line('▸ ◂---▸ ◂---▸ ◂---▸ ◂');
+    const descLines = [
+      line('しゅぴしゅわ〜！すうの充電たりてる… ⚡♡'),
+      div(),
+      line('💬 X ここでもまってる！'),
+      line('@mizumiya_su', { link:true }),
+      div(),
+      line('水宮枢がやってくる、、みんなとはじめましてをしに、、'),
+      line(' '),
+      line('💙 配信タグ （ちゃんと見てるよ👀）'),
+      line('　#すう成長中'),
+      line('🖤 FAタグ（嬉しい✨）'),
+      line('　#すくすく枢'),
+      line('　#AIすくすく枢 (AIファンアートはこっちにのみ載せてね)'),
+      div(),
+      line('◆ FLOW GLOW ◆'),
+      line('響咲リオナ / Isaki Riona'),
+      line('　↳ https://www.youtube.com/@IsakiRiona', { link:true }),
+      line('虎金妃笑虎 / Koganei Niko'),
+      line('　↳ https://www.youtube.com/@KoganeiNiko', { link:true }),
+      line('水宮枢 / Mizumiya Su'),
+      line('　↳ https://www.youtube.com/@MizumiyaSu', { link:true }),
+    ];
+    const descOpen = this.state.descOpen;
+    const openDesc = () => this.setState({ descOpen: true });
+    const closeDesc = () => this.setState({ descOpen: false });
+
+    return { nav, favSubs, otherSubs, tabs, featured, shelves, menuItems, menu, openMenu, closeMenu, stop, descLines, descOpen, openDesc, closeDesc };
+  }
+}
+</script>
+</body>
+</html>

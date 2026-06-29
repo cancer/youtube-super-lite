@@ -1,0 +1,58 @@
+/* ============================================================
+   SEMANTIC TOKENS (--s-*) — reference primitives by role.
+   UI implementations reference THIS layer only. (DESIGN.md §3)
+   ============================================================ */
+:root{
+  /* surfaces / background */
+  --s-bg-canvas:var(--p-gray-900);
+  --s-bg-surface:var(--p-gray-800);
+  --s-bg-elevated:var(--p-gray-750);
+  --s-bg-hover:var(--p-gray-750);
+  --s-bg-selected:var(--p-gray-700);
+  --s-bg-scrim:var(--p-alpha-black-80);
+  --s-bg-inverse:var(--p-gray-100);
+
+  /* text */
+  --s-text-primary:var(--p-gray-100);
+  --s-text-secondary:var(--p-gray-400);
+  --s-text-disabled:var(--p-gray-600);
+  --s-text-on-accent:var(--p-white);
+  --s-text-inverse:var(--p-gray-900);
+
+  /* border */
+  --s-border-subtle:var(--p-gray-700);
+
+  /* accent / state */
+  --s-accent-live:var(--p-red-600);
+  --s-accent-brand:var(--p-red-500);
+  --s-indicator-notify:var(--p-red-500);
+
+  /* icon */
+  --s-icon-default:var(--p-gray-200);
+  --s-icon-muted:var(--p-gray-500);
+  --s-icon-verified:var(--p-gray-400);
+
+  /* radius (by shape role) */
+  --s-radius-control-pill:var(--p-radius-pill);
+  --s-radius-control-soft:var(--p-radius-sm);
+  --s-radius-container:var(--p-radius-md);
+  --s-radius-overlay:var(--p-radius-xs);
+  --s-radius-circle:var(--p-radius-full);
+
+  /* spacing (by spatial relation) */
+  --s-space-inset:var(--p-space-3);
+  --s-space-inset-pill:var(--p-space-5);
+  --s-space-gap-tight:var(--p-space-3);
+  --s-space-gap-loose:var(--p-space-4);
+  --s-space-section:var(--p-space-6);
+  --s-space-overlay-offset:var(--p-space-2);
+
+  /* sizing (by role) */
+  --s-size-avatar-channel:var(--p-avatar-md);
+  --s-size-avatar-nav:var(--p-avatar-sm);
+  --s-size-icon:var(--p-icon-md);
+  --s-size-indicator:var(--p-dot);
+  --s-size-nav-row:var(--p-sidebar-row-h);
+  --s-ratio-media:var(--p-thumb-ratio);
+  --s-grid-columns:var(--p-grid-cols);
+}

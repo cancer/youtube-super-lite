@@ -1,0 +1,5 @@
+/* YouTube Super Lite — typeface.
+   App stack: Roboto, Noto Sans JP, Yu Gothic UI, Meiryo, sans-serif.
+   Roboto + Noto Sans JP are loaded from Google Fonts (CDN); Yu Gothic UI /
+   Meiryo are Windows system fonts and need no @font-face. */
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap');

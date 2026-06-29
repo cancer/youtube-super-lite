@@ -1,0 +1,68 @@
+/* ============================================================
+   PRIMITIVE TOKENS (--p-*)  — raw values, no meaning.
+   Source: YouTubeSuperLite/DESIGN.md §2
+   ============================================================ */
+:root{
+  /* --- color: neutral ramp --- */
+  --p-black:#000000;
+  --p-gray-900:#0F0F0F;   /* page canvas (near black) */
+  --p-gray-850:#181818;   /* one step up */
+  --p-gray-800:#212121;   /* card / surface */
+  --p-gray-750:#272727;   /* hover surface / chip bg */
+  --p-gray-700:#3F3F3F;   /* border / divider */
+  --p-gray-600:#606060;   /* disabled text */
+  --p-gray-500:#717171;   /* weak icon */
+  --p-gray-400:#AAAAAA;   /* secondary text (views etc) */
+  --p-gray-200:#CCCCCC;   /* bright icon */
+  --p-gray-100:#F1F1F1;   /* primary text (near white) */
+  --p-white:#FFFFFF;
+
+  /* --- color: red accent (the only chromatic family) --- */
+  --p-red-600:#CC0000;    /* LIVE base */
+  --p-red-500:#FF0000;    /* brand red / notify */
+
+  /* --- alpha overlays --- */
+  --p-alpha-black-80:rgba(0,0,0,0.80);  /* duration badge bg */
+  --p-alpha-black-60:rgba(0,0,0,0.60);  /* thumbnail bottom scrim */
+  --p-alpha-white-10:rgba(255,255,255,0.10); /* faint hover */
+
+  /* --- typography --- */
+  --p-font-sans:"Roboto","Noto Sans JP","Yu Gothic UI","Meiryo",sans-serif;
+  --p-weight-regular:400;
+  --p-weight-medium:500;
+  --p-weight-bold:700;
+
+  /* type scale (size / matching line-height) */
+  --p-size-3xl:36px;  --p-lh-3xl:44px;
+  --p-size-2xl:24px;  --p-lh-2xl:32px;
+  --p-size-xl:20px;   --p-lh-xl:28px;
+  --p-size-lg:16px;   --p-lh-lg:22px;
+  --p-size-md:14px;   --p-lh-md:20px;
+  --p-size-sm:12px;   --p-lh-sm:16px;
+
+  /* --- spacing (4px grid) --- */
+  --p-space-1:4px;
+  --p-space-2:8px;
+  --p-space-3:12px;
+  --p-space-4:16px;
+  --p-space-5:20px;
+  --p-space-6:24px;
+  --p-space-8:32px;
+  --p-space-10:40px;
+
+  /* --- radius --- */
+  --p-radius-xs:4px;      /* duration / LIVE badge */
+  --p-radius-sm:8px;      /* filter chip */
+  --p-radius-md:12px;     /* thumbnail / card */
+  --p-radius-pill:9999px; /* pill button / chip */
+  --p-radius-full:50%;    /* avatar / dot */
+
+  /* --- sizing --- */
+  --p-avatar-sm:24px;
+  --p-avatar-md:36px;
+  --p-icon-md:24px;
+  --p-dot:8px;
+  --p-thumb-ratio:16 / 9;
+  --p-sidebar-row-h:40px;
+  --p-grid-cols:4;
+}
