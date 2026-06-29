@@ -38,3 +38,5 @@
 #  uploads = キャンバスに貼り付けた生の参照画像
 /design/_export/
 /design/uploads/
+#  screenshots = 指示/作業に使った画像（機微・履歴から除去済み）
+/design/screenshots/
