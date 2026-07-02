@@ -68,9 +68,27 @@ async fn main() {
         Err(e) => { println!("ERROR=rustypipe build: {e}"); std::process::exit(1); }
     };
 
-    let player = match rp.query().player(&id).await {
-        Ok(p) => p,
-        Err(e) => { println!("ERROR=resolve: {e}"); std::process::exit(1); }
+    // rustypipe 0.11.4（=最新・2025-04 以降更新なし）は、YouTube が itag140 等の
+    // adaptiveFormats に contentLength を返さない応答を「no ... content length」等の
+    // extraction error で即失敗にする。この欠落は同一 videoId でも応答ごとに出たり出な
+    // かったりする間欠的挙動なので、そのエラーに限りフレッシュな player 要求をリトライする。
+    // bot ゲート/unplayable 等の恒久エラーはリトライしても無駄なので即座に返す。
+    let mut player = None;
+    let mut last_err = String::new();
+    for attempt in 0..5u32 {
+        match rp.query().player(&id).await {
+            Ok(p) => { player = Some(p); break; }
+            Err(e) => {
+                last_err = e.to_string();
+                let transient = last_err.contains("content length");
+                if !transient || attempt + 1 >= 5 { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            }
+        }
+    }
+    let player = match player {
+        Some(p) => p,
+        None => { println!("ERROR=resolve: {last_err}"); std::process::exit(1); }
     };
     let title = player.details.name.as_deref().unwrap_or("").to_string();
 
