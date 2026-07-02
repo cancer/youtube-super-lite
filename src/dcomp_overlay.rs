@@ -15,6 +15,7 @@
 
 #![cfg(windows)]
 
+use crate::design as ds;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use windows::core::Interface;
@@ -53,6 +54,18 @@ pub enum OverlayAction {
     OpenList(ListTab),
     /// 一覧の行クリック → その index を再生/ドリル。
     PlayIndex(usize),
+    /// カードのアバター/チャンネル名クリック → その index のチャンネルを開く。
+    OpenChannelOf(usize),
+    /// カードのケバブ(⋮)クリック → その index のコンテキストメニューを開く。
+    OpenCardMenu(usize),
+    /// 開いているカードメニューを閉じる（メニュー外クリック / ✕ 相当）。
+    CloseCardMenu,
+    /// メニュー項目「後で見るに保存」。
+    SaveWatchLater(usize),
+    /// メニュー項目「興味なし」。
+    NotInterested(usize),
+    /// メニュー項目「チャンネルをおすすめに表示しない」。
+    NotRecommendChannel(usize),
     /// 一覧を閉じる（✕ ボタン）。
     CloseList,
     /// 一覧をスクロール（選択を ± 行動かす。ホイール）。
@@ -172,6 +185,34 @@ pub enum ListTab {
     History,
 }
 
+/// 一覧の 1 項目（動画カード or 再生リスト行）。
+///
+/// `title`/`channel`/`thumb`/`id` は現状のデータ源から常に埋まる。`avatar`/`duration`/`live`/
+/// `meta`/`verified` は [`crate::recommend::VideoItem`]（おすすめ）では常に埋まるが、
+/// `subscriptions`/`history` 側はまだ未対応で既定値のまま（あれば描く）。
+#[derive(Clone, Default)]
+pub struct Card {
+    /// 再生対象の video_id（再生リスト一覧では playlist_id）。
+    pub id: String,
+    pub title: String,
+    /// チャンネル名（再生リスト一覧では件数などのサブ情報を入れる）。
+    pub channel: String,
+    /// サムネ URL（空なら未指定＝プレースホルダ）。
+    pub thumb: String,
+    /// チャンネルアバター URL（空なら未指定＝プレースホルダ円）。
+    pub avatar: String,
+    /// 再生時間（秒）。あれば時間バッジを描く。
+    pub duration: Option<f64>,
+    /// ライブ配信フラグ。true なら LIVE バッジ。
+    pub live: bool,
+    /// 視聴回数/経過時間などのメタ行（任意）。
+    pub meta: Option<String>,
+    /// 認証チャンネルの✔（任意）。
+    pub verified: bool,
+    /// ケバブメニュー用データ（実チャンネルID／興味なし・非表示の feedbackToken）。
+    pub menu: crate::subscriptions::CardMenu,
+}
+
 /// 描画に必要な再生/UI 状態（コアから毎フレーム渡す）。
 pub struct PlaybackView {
     pub paused: bool,
@@ -188,13 +229,15 @@ pub struct PlaybackView {
     pub auth_label: String,
     pub logged_in: bool,
     pub title: String,
-    pub has_recommend: bool,
     // --- 一覧（list_open 時のみ有効）---
     pub list_open: bool,
-    pub list_items: Vec<String>,
-    pub list_thumbs: Vec<String>,
+    pub list_cards: Vec<Card>,
     pub list_sel: usize,
     pub list_header: String,
+    /// 現在の一覧ソース（サイドバーのアクティブ表示用）。
+    pub list_tab: ListTab,
+    /// ケバブで開いているカードメニューの index（無ければ None）。
+    pub card_menu_open: Option<usize>,
     // --- チャット ---
     pub chat_available: bool,
     pub chat_open: bool,
@@ -209,6 +252,70 @@ const TOP_H: i32 = 86;
 const BOTTOM_H: i32 = 52;
 const ROW_H: i32 = 26;
 const VOL_W: i32 = 110;
+
+/// 一覧（おすすめグリッド）レイアウト定数（DESIGN / おすすめ.dc.html 準拠）。
+const TITLEBAR_H: f32 = 44.0; // 一覧パネル上部の見出し帯
+const SIDEBAR_W: f32 = 224.0; // 左サイドバー幅
+const NAV_ROW_H: f32 = 40.0; // サイドバーナビ行高
+
+/// おすすめグリッドの算出済みジオメトリ。描画・サムネ先読み・ヒット判定で共有する。
+#[derive(Clone, Copy)]
+struct BrowseGrid {
+    cols: usize,
+    card_w: f32,
+    thumb_h: f32,
+    card_h: f32,
+    row_pitch: f32,
+    content_x: f32,
+    grid_y0: f32,
+    /// 先頭に描くカード index（縦スクロール相当。選択が見える位置に寄せる）。
+    first: usize,
+    /// 画面に収まるカード行数。
+    visible_rows: usize,
+    heading_y: f32,
+    chips_y: f32,
+}
+
+/// list_open 時のグリッド寸法を、クライアント幅・件数・選択から算出する。
+fn browse_grid(cw: i32, ch: i32, count: usize, sel: usize) -> BrowseGrid {
+    let pad = ds::SPACE_SECTION; // 24
+    let gap = ds::GAP_LOOSE; // 16
+    let content_x = SIDEBAR_W + pad;
+    let content_w = (cw as f32 - content_x - pad).max(200.0);
+    // 目標カード幅 ~300px。列数は 2..=4 でクランプ（デザイン基準 3）。
+    let cols = (((content_w + gap) / (300.0 + gap)).floor() as usize).clamp(2, 4);
+    let card_w = ((content_w - gap * (cols - 1) as f32) / cols as f32).max(120.0);
+    let thumb_h = card_w * 9.0 / 16.0;
+    let info_h = 64.0; // タイトル2行 + チャンネル + メタ
+    let card_h = thumb_h + ds::GAP_TIGHT + info_h;
+    let row_pitch = card_h + ds::SPACE_SECTION;
+
+    let heading_y = TITLEBAR_H + ds::GAP_LOOSE;
+    let chips_y = heading_y + ds::SIZE_3XL + ds::GAP_TIGHT;
+    let grid_y0 = chips_y + 32.0 + ds::GAP_LOOSE; // チップ行(32) の下
+
+    let grid_h = (ch as f32 - grid_y0 - ds::GAP_LOOSE).max(row_pitch);
+    let visible_rows = ((grid_h + ds::SPACE_SECTION) / row_pitch).floor().max(1.0) as usize;
+
+    let sel_row = if cols > 0 { sel / cols } else { 0 };
+    let first_row = sel_row.saturating_sub(visible_rows.saturating_sub(1));
+    let first = first_row * cols.max(1);
+    let _ = count;
+
+    BrowseGrid {
+        cols,
+        card_w,
+        thumb_h,
+        card_h,
+        row_pitch,
+        content_x,
+        grid_y0,
+        first,
+        visible_rows,
+        heading_y,
+        chips_y,
+    }
+}
 
 #[derive(Default, Clone, Copy, PartialEq, Debug)]
 enum Drag {
@@ -278,7 +385,7 @@ impl Control {
     }
 
     unsafe fn draw(&self, p: &Painter) {
-        let fg = color(0.96, 0.96, 0.98, 1.0);
+        let fg = ds::TEXT_PRIMARY;
         match self {
             Control::PlayPause { rect, paused } => {
                 let glyph = if *paused { "▶" } else { "⏸" };
@@ -293,25 +400,25 @@ impl Control {
                 let cy = ((rect.top + rect.bottom) / 2) as f32;
                 let (x0, x1) = (rect.left as f32, rect.right as f32);
                 let th = 3.0;
-                p.fill_round(rf(x0, cy - th / 2.0, x1, cy + th / 2.0), 1.5, color(1.0, 1.0, 1.0, 0.25));
+                p.fill_round(rf(x0, cy - th / 2.0, x1, cy + th / 2.0), 1.5, ds::alpha(ds::TEXT_PRIMARY, 0.25));
                 let prog_col = if *enabled {
-                    color(0.92, 0.20, 0.20, 1.0)
+                    ds::ACCENT_BRAND
                 } else {
-                    color(0.55, 0.55, 0.60, 0.9)
+                    ds::alpha(ds::TEXT_DISABLED, 0.9)
                 };
                 let px = (x0 + (x1 - x0) * *frac).max(x0);
                 p.fill_round(rf(x0, cy - th / 2.0, px, cy + th / 2.0), 1.5, prog_col);
                 if *enabled {
-                    p.fill_ellipse(px, cy, 6.0, color(0.92, 0.20, 0.20, 1.0));
+                    p.fill_ellipse(px, cy, 6.0, ds::ACCENT_BRAND);
                 }
             }
             Control::Volume { rect, frac } => {
                 let cy = ((rect.top + rect.bottom) / 2) as f32;
                 let (x0, x1) = (rect.left as f32, rect.right as f32);
-                p.fill_round(rf(x0, cy - 2.0, x1, cy + 2.0), 2.0, color(1.0, 1.0, 1.0, 0.25));
+                p.fill_round(rf(x0, cy - 2.0, x1, cy + 2.0), 2.0, ds::alpha(ds::TEXT_PRIMARY, 0.25));
                 let vx = x0 + (x1 - x0) * *frac;
-                p.fill_round(rf(x0, cy - 2.0, vx.max(x0), cy + 2.0), 2.0, color(0.92, 0.92, 0.96, 1.0));
-                p.fill_ellipse(vx, cy, 5.0, color(1.0, 1.0, 1.0, 1.0));
+                p.fill_round(rf(x0, cy - 2.0, vx.max(x0), cy + 2.0), 2.0, ds::TEXT_PRIMARY);
+                p.fill_ellipse(vx, cy, 5.0, ds::TEXT_ON_ACCENT);
             }
             Control::Button { rect, label, col, .. } => {
                 let cy = (rect.top + rect.bottom) / 2;
@@ -334,12 +441,20 @@ struct WndState {
     /// コントローラ帯・上部バー（この矩形内の非部品クリックは吸収＝pause を出さない）。
     panel: RECT,
     top_panel: RECT,
-    /// 一覧表示中か、と行ジオメトリ（クリック行算出用）。
+    /// 一覧（おすすめグリッド）表示中か。
     list_open: bool,
-    list_top: i32,
-    list_row_h: i32,
-    list_first: usize,
-    list_count: usize,
+    /// おすすめグリッドのカード矩形→カード index（クリック→PlayIndex）。
+    card_hits: Vec<(RECT, usize)>,
+    /// カード内の小領域（アバター/チャンネル→OpenChannelOf, ケバブ→OpenCardMenu）。card_hits より優先。
+    card_extra_hits: Vec<(RECT, OverlayAction)>,
+    /// カードメニューが開いているか、と各項目の矩形→アクション。開いている間はこれを最優先で
+    /// 判定し、当たらなければ CloseCardMenu を発火してそのクリックを消費する（吸収）。
+    menu_open: bool,
+    menu_hits: Vec<(RECT, OverlayAction)>,
+    /// サイドバーナビ矩形→切替アクション（クリック→OpenList）。
+    nav_hits: Vec<(RECT, OverlayAction)>,
+    /// 現在のグリッド列数（ホイール/キーの 1 行移動量）。
+    grid_cols: usize,
     /// チャットパネル矩形（ホイールでのスクロール判定用）と左端リサイズハンドル。
     chat_panel: RECT,
     chat_resize: RECT,
@@ -364,6 +479,8 @@ pub struct DcompOverlay {
     dwrite: IDWriteFactory,
     /// 小フォント（コントロール・時間、15px）。
     tf_small: IDWriteTextFormat,
+    /// 見出しフォント（一覧ページ見出し、36px/700）。
+    tf_title: IDWriteTextFormat,
     /// チャット用フォント（ユーザー調整サイズ。NO_WRAP。size 変化時に作り直す）。
     chat_tf: Option<IDWriteTextFormat>,
     chat_tf_px: f32,
@@ -387,7 +504,7 @@ impl DcompOverlay {
         use windows::Win32::Graphics::DirectComposition::DCompositionCreateDevice;
         use windows::Win32::Graphics::DirectWrite::{
             DWriteCreateFactory, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
         };
         use windows::Win32::Graphics::Dxgi::IDXGIDevice;
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -470,6 +587,16 @@ impl DcompOverlay {
                 15.0,
                 w!("ja-jp"),
             )?;
+            // 一覧ページ見出し用（3xl / bold）。DESIGN.md の page-title 相当。
+            let tf_title: IDWriteTextFormat = dwrite.CreateTextFormat(
+                w!("Yu Gothic UI"),
+                None,
+                DWRITE_FONT_WEIGHT_BOLD,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                ds::SIZE_3XL,
+                w!("ja-jp"),
+            )?;
 
             let mut me = DcompOverlay {
                 hwnd,
@@ -482,6 +609,7 @@ impl DcompOverlay {
                 d2d_ctx,
                 dwrite,
                 tf_small,
+                tf_title,
                 chat_tf: None,
                 chat_tf_px: 0.0,
                 thumb_cache: HashMap::new(),
@@ -491,6 +619,47 @@ impl DcompOverlay {
             me.rebuild_surface()?;
             Ok(me)
         }
+    }
+
+    /// 現在のおすすめグリッドの列数（キーボードの 1 行移動量。未描画時は 1）。
+    pub fn grid_cols(&self) -> usize {
+        self.state.grid_cols.max(1)
+    }
+
+    /// オーバーレイ子窓を兄弟の最前面（入力の受け口）に保つ。
+    ///
+    /// mpv は `wid`(親窓)に d3d11 VO 用の子窓を動画ロード時に生成し、それが z-order 最前面に
+    /// 入るため、放置すると実マウス入力を mpv 子窓が先取りしてしまう（DirectComposition は
+    /// 見た目だけ DWM が最前面に合成するので、視覚と入力の最前面がズレる）。ここで毎フレーム
+    /// トップを再主張して入力を確実にオーバーレイへ入れる。`SWP_NOACTIVATE` で winit 親窓の
+    /// キーボードフォーカスは奪わない。透過は子窓の per-pixel alpha でそのまま効く。
+    fn ensure_topmost(&self) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindow, SetWindowPos, GW_HWNDPREV, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        };
+        unsafe {
+            // 兄弟の最前面なら GW_HWNDPREV は無い。上に別窓（mpv 子窓等）がある時だけ引き上げる
+            // （毎フレームの冗長な SetWindowPos と z-order の取り合いを避ける）。
+            if GetWindow(self.hwnd, GW_HWNDPREV).is_err() {
+                return;
+            }
+            let _ = SetWindowPos(
+                self.hwnd,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    /// オーバーレイ子窓が現在、兄弟の最前面（＝実マウス入力を受けられる位置）にあるかを返す。
+    /// 入力は一切動かさない読み取り専用の z-order 確認（dev-tools `/state` の検証用）。
+    pub fn is_topmost(&self) -> bool {
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_HWNDPREV};
+        unsafe { GetWindow(self.hwnd, GW_HWNDPREV).is_err() }
     }
 
     /// 親クライアントサイズの変化に合わせて子窓とサーフェスを更新する（位置は OS 追従＝不要）。
@@ -560,7 +729,7 @@ impl DcompOverlay {
         let cy = h - 16;
         let top = cy - ROW_H / 2;
         let bot = cy + ROW_H / 2;
-        let fg = color(0.96, 0.96, 0.98, 1.0);
+        let fg = ds::TEXT_PRIMARY;
         let row = |l: i32, r: i32| RECT { left: l, top, right: r, bottom: bot };
         let mut controls: Vec<Control> = Vec::new();
 
@@ -590,7 +759,7 @@ impl DcompOverlay {
         if v.is_live {
             // ライブ: 時間の代わりに「● ライブ」（先端なら赤、遅れていれば白＝追いつける合図）。
             let at_live = !v.seekable || v.dur <= 0.0 || (v.pos / v.dur) >= 0.99;
-            let col = if at_live { color(1.0, 0.30, 0.30, 1.0) } else { fg };
+            let col = if at_live { ds::ACCENT_BRAND } else { fg };
             let label = "● ライブ".to_string();
             let lw = unsafe { self.measure(&label) }.ceil() as i32;
             let r = row(x, x + lw + 8);
@@ -613,7 +782,7 @@ impl DcompOverlay {
         // 💬 チャット（接続中 or メッセージがある時のみ）。
         if v.chat_available {
             let (label, col) = if v.chat_open {
-                ("💬 非表示".to_string(), color(0.55, 0.80, 1.0, 1.0))
+                ("💬 非表示".to_string(), ds::ACCENT_BRAND)
             } else {
                 ("💬 チャット".to_string(), fg)
             };
@@ -663,18 +832,24 @@ impl DcompOverlay {
         let Some(surface) = self.surface.clone() else {
             return;
         };
+        // mpv の映像子窓より上に居続けて実マウス入力を受ける（視覚は DComp が最前面合成）。
+        self.ensure_topmost();
         let (cw, ch) = (self.cw, self.ch);
         let nav_cy = 6 + ROW_H + ROW_H / 2;
         let strip_h = if view.title.is_empty() { TOP_H - ROW_H } else { TOP_H };
-        let row_h: i32 = 48;
-        let top0: i32 = 64;
         let nav = |x: i32, w: i32| RECT { left: x, top: nav_cy - ROW_H / 2, right: x + w, bottom: nav_cy + ROW_H / 2 };
 
         // 部品（描画とヒットで同じ素）と各パネルを組み立てる。
         let mut controls: Vec<Control> = Vec::new();
         let mut panel = RECT::default();
         let mut top_panel = RECT::default();
-        let (mut list_first, mut list_count) = (0usize, 0usize);
+        let mut grid: Option<BrowseGrid> = None;
+        let mut card_hits: Vec<(RECT, usize)> = Vec::new();
+        let mut nav_hits: Vec<(RECT, OverlayAction)> = Vec::new();
+        // カード内の小領域（アバター/チャンネル名→OpenChannelOf, ケバブ→OpenCardMenu）。
+        // カード本体(card_hits=再生)より優先して判定する。
+        let mut card_extra_hits: Vec<(RECT, OverlayAction)> = Vec::new();
+        let mut menu_hits: Vec<(RECT, OverlayAction)> = Vec::new();
 
         // チャットパネル（一覧表示中以外で、チャット表示中なら右に出す。active と無関係）。
         let chat_panel = if view.chat_open && !view.list_open {
@@ -707,23 +882,26 @@ impl DcompOverlay {
         }
 
         if view.list_open {
-            // 一覧モード: 全面パネル（余白クリックは吸収）。行クリックは wndproc が PlayIndex 化。
+            // 一覧モード: 全面パネル（余白クリックは吸収）。カードクリックは wndproc が PlayIndex 化。
             panel = RECT { left: 0, top: 0, right: cw, bottom: ch };
-            let visible = (((ch - top0 - 16) / row_h).max(1)) as usize;
-            list_first = if view.list_sel >= visible { view.list_sel - visible + 1 } else { 0 };
-            list_count = view.list_items.len();
-            // 表示行のサムネを（ディスクキャッシュ済みのみ）デコードしておく。
-            let end = (list_first + visible).min(view.list_thumbs.len());
-            if list_first < end {
-                let urls = view.list_thumbs[list_first..end].to_vec();
+            let g = browse_grid(cw, ch, view.list_cards.len(), view.list_sel);
+            // グリッドに収まる範囲のサムネを（ディスクキャッシュ済みのみ）デコードしておく。
+            let end = (g.first + g.cols * g.visible_rows).min(view.list_cards.len());
+            if g.first < end {
+                let urls: Vec<String> = view.list_cards[g.first..end]
+                    .iter()
+                    .flat_map(|c| [c.thumb.clone(), c.avatar.clone()])
+                    .filter(|u| !u.is_empty())
+                    .collect();
                 self.ensure_thumbs(&urls);
             }
+            grid = Some(g);
             // ✕ 閉じるボタン（右上）。
             let xw = unsafe { self.measure("✕") }.ceil() as i32;
             controls.push(Control::Button {
                 rect: RECT { left: cw - 16 - xw - 12, top: 14, right: cw - 16, bottom: 14 + ROW_H },
                 label: "✕".to_string(),
-                col: color(0.95, 0.95, 0.98, 1.0),
+                col: ds::TEXT_PRIMARY,
                 action: OverlayAction::CloseList,
             });
         } else if active {
@@ -736,14 +914,14 @@ impl DcompOverlay {
                 controls.push(Control::Button {
                     rect: RECT { left: cw - 12 - lw - 8, top: nav_cy - ROW_H / 2, right: cw - 12, bottom: nav_cy + ROW_H / 2 },
                     label: view.auth_label.clone(),
-                    col: color(1.0, 0.92, 0.55, 1.0),
+                    col: ds::TEXT_PRIMARY,
                     action: OverlayAction::Login,
                 });
             }
-            // ナビタブ（左フロー）: おすすめは候補がある時のみ、再生リスト/登録/履歴はログイン時のみ。
-            let tab_col = color(0.85, 0.90, 1.0, 1.0);
+            // ナビタブ（左フロー）: おすすめは常時、再生リスト/登録/履歴はログイン時のみ。
+            let tab_col = ds::TEXT_PRIMARY;
             let mut tx = 12;
-            if view.has_recommend {
+            {
                 let l = "📋 おすすめ";
                 let lw = unsafe { self.measure(l) }.ceil() as i32;
                 controls.push(Control::Button { rect: nav(tx, lw + 8), label: l.to_string(), col: tab_col, action: OverlayAction::OpenList(ListTab::Recommend) });
@@ -759,7 +937,7 @@ impl DcompOverlay {
             // チャット文字サイズ A-/A+（チャットヘッダ右）。
             if chat_panel.right > chat_panel.left {
                 let hcy = chat_panel.top + 14;
-                let acc = color(0.85, 0.90, 1.0, 1.0);
+                let acc = ds::TEXT_PRIMARY;
                 let aw = unsafe { self.measure("A+") }.ceil() as i32;
                 let ainc = RECT { left: cw - 10 - aw - 8, top: hcy - ROW_H / 2, right: cw - 10, bottom: hcy + ROW_H / 2 };
                 controls.push(Control::Button { rect: ainc, label: "A+".to_string(), col: acc, action: OverlayAction::ChatFontInc });
@@ -815,14 +993,14 @@ impl DcompOverlay {
                 let cf_ref = ctf.as_ref().unwrap_or(&self.tf_small);
                 let pc = Painter { ctx: &ctx, dwrite: &self.dwrite, tf: cf_ref };
                 let (px, ptop, pbot) = (chat_panel.left as f32, chat_panel.top as f32, chat_panel.bottom as f32);
-                p.fill_rect(rf(px, ptop, cw as f32, pbot), color(0.05, 0.05, 0.07, 0.82));
+                p.fill_rect(rf(px, ptop, cw as f32, pbot), ds::alpha(ds::BG_CANVAS, 0.82));
                 // 左端リサイズハンドル（境界線＋中央グリップ）。
-                p.fill_rect(rf(px, ptop, px + 2.0, pbot), color(0.45, 0.45, 0.55, 0.8));
+                p.fill_rect(rf(px, ptop, px + 2.0, pbot), ds::alpha(ds::ICON_MUTED, 0.8));
                 let grip_cy = (ptop + pbot) / 2.0;
-                p.fill_round(rf(px + 1.0, grip_cy - 16.0, px + 5.0, grip_cy + 16.0), 2.0, color(0.75, 0.75, 0.85, 0.95));
-                p.text("コメント", rf(px + 10.0, ptop + 2.0, cw as f32 - 10.0, ptop + 24.0), color(0.70, 0.70, 0.75, 1.0));
+                p.fill_round(rf(px + 1.0, grip_cy - 16.0, px + 5.0, grip_cy + 16.0), 2.0, ds::alpha(ds::ICON_DEFAULT, 0.95));
+                p.text("コメント", rf(px + 10.0, ptop + 2.0, cw as f32 - 10.0, ptop + 24.0), ds::TEXT_SECONDARY);
 
-                let normal = color(0.90, 0.90, 0.95, 1.0);
+                let normal = ds::TEXT_PRIMARY;
                 let left = px + 10.0;
                 let right_lim = cw as f32 - 10.0;
                 let fs = view.chat_font_px.clamp(10.0, 28.0);
@@ -889,47 +1067,224 @@ impl DcompOverlay {
             }
 
             if view.list_open {
-                // 一覧（全面パネル）。
-                p.fill_rect(rf(0.0, 0.0, cw as f32, ch as f32), color(0.04, 0.04, 0.06, 0.93));
-                p.text(&view.list_header, rf(24.0, 18.0, cw as f32 - 24.0, 54.0), color(1.0, 1.0, 1.0, 1.0));
-                let visible = (((ch - top0 - 16) / row_h).max(1)) as usize;
-                let th = (row_h - 10) as f32;
-                let tw = th * 16.0 / 9.0;
-                let text_left = 20.0 + tw + 12.0;
-                for (i, item) in view.list_items.iter().enumerate().skip(list_first).take(visible) {
-                    let y = top0 + (i - list_first) as i32 * row_h;
+                let g = grid.unwrap_or_else(|| browse_grid(cw, ch, view.list_cards.len(), view.list_sel));
+                let cwf = cw as f32;
+                let chf = ch as f32;
+
+                // 全面の地（動画上の暗幕）。
+                p.fill_rect(rf(0.0, 0.0, cwf, chf), ds::alpha(ds::BG_CANVAS, 0.93));
+
+                // --- タイトルバー（44）: ロゴ＋アプリ名。閉じる✕は controls 側。 ---
+                p.fill_rect(rf(0.0, 0.0, cwf, TITLEBAR_H), ds::alpha(ds::BG_SURFACE, 0.92));
+                p.fill_rect(rf(0.0, TITLEBAR_H - 1.0, cwf, TITLEBAR_H), ds::BORDER_SUBTLE);
+                p.fill_round(rf(12.0, 11.0, 34.0, 33.0), ds::RADIUS_CONTROL_SOFT, ds::ACCENT_BRAND);
+                p.text("▶", rf(17.0, 13.0, 34.0, 33.0), ds::TEXT_ON_ACCENT);
+                p.text("YouTube Super Lite", rf(44.0, 12.0, 320.0, 34.0), ds::TEXT_PRIMARY);
+
+                // --- サイドバー（224）: 右境界＋ナビ 4 行。 ---
+                p.fill_rect(rf(SIDEBAR_W - 1.0, TITLEBAR_H, SIDEBAR_W, chf), ds::BORDER_SUBTLE);
+                let navs = [
+                    ("📺 登録チャンネル", ListTab::Subs),
+                    ("🕘 履歴", ListTab::History),
+                    ("📃 再生リスト", ListTab::Playlist),
+                    ("📋 おすすめ", ListTab::Recommend),
+                ];
+                let mut ny = TITLEBAR_H + ds::SPACE_INSET;
+                for (label, tab) in navs {
+                    let r = RECT {
+                        left: 8,
+                        top: ny as i32,
+                        right: (SIDEBAR_W - 8.0) as i32,
+                        bottom: (ny + NAV_ROW_H) as i32,
+                    };
+                    let active_nav = tab == view.list_tab;
+                    if active_nav {
+                        p.fill_round(
+                            rf(r.left as f32, r.top as f32, r.right as f32, r.bottom as f32),
+                            ds::RADIUS_CONTROL_SOFT,
+                            ds::alpha(ds::BG_ELEVATED, 0.95),
+                        );
+                    }
+                    let tcol = if active_nav { ds::TEXT_PRIMARY } else { ds::TEXT_SECONDARY };
+                    p.text_clip(label, rf(r.left as f32 + 14.0, ny + 9.0, SIDEBAR_W - 12.0, ny + NAV_ROW_H - 6.0), tcol);
+                    nav_hits.push((r, OverlayAction::OpenList(tab)));
+                    ny += NAV_ROW_H + 4.0;
+                }
+
+                // --- コンテンツ: ページ見出し（3xl）。 ---
+                let page_title = view.list_header.split('（').next().unwrap_or("").trim();
+                p.text_font(&self.tf_title, page_title, rf(g.content_x, g.heading_y, cwf - ds::SPACE_SECTION, g.heading_y + ds::SIZE_3XL + 8.0), ds::TEXT_PRIMARY);
+
+                // --- フィルタチップ列（現状は見た目のみ・非機能）。 ---
+                let chips = ["すべて", "ゲーム", "音楽", "ライブ", "ミックス", "視聴済み"];
+                let mut chx = g.content_x;
+                let chip_h = 32.0;
+                for (ci, label) in chips.iter().enumerate() {
+                    let tw = self.measure(label);
+                    let w = tw + ds::SPACE_INSET * 2.0;
+                    if chx + w > cwf - ds::SPACE_SECTION {
+                        break;
+                    }
+                    let selected = ci == 0;
+                    let (bg, fgc) = if selected {
+                        (ds::BG_INVERSE, ds::TEXT_INVERSE)
+                    } else {
+                        (ds::alpha(ds::BG_ELEVATED, 0.95), ds::TEXT_PRIMARY)
+                    };
+                    p.fill_round(rf(chx, g.chips_y, chx + w, g.chips_y + chip_h), ds::RADIUS_CONTROL_SOFT, bg);
+                    p.text_clip(label, rf(chx + ds::SPACE_INSET, g.chips_y + 6.0, chx + w, g.chips_y + chip_h - 4.0), fgc);
+                    chx += w + ds::GAP_TIGHT;
+                }
+
+                // --- 動画グリッド。 ---
+                let gap = ds::GAP_LOOSE;
+                let first_row = g.first / g.cols.max(1);
+                let end = (g.first + g.cols * g.visible_rows).min(view.list_cards.len());
+                // 開いているカードメニューのケバブ位置（(右端, 情報列top)）。可視範囲内の時だけ Some。
+                let mut menu_anchor: Option<(f32, f32)> = None;
+                for i in g.first..end {
+                    let card = &view.list_cards[i];
+                    let col = i % g.cols;
+                    let row = i / g.cols;
+                    let cx = g.content_x + col as f32 * (g.card_w + gap);
+                    let cy = g.grid_y0 + (row - first_row) as f32 * g.row_pitch;
+                    if cy + g.card_h > chf {
+                        break;
+                    }
+                    let cright = cx + g.card_w;
+                    let tb = cy + g.thumb_h; // サムネ下端
+
+                    // 選択カードの下地（キーボード選択のフォーカス）。
                     if i == view.list_sel {
-                        p.fill_round(rf(16.0, y as f32, cw as f32 - 16.0, (y + row_h - 4) as f32), 6.0, color(0.20, 0.40, 0.85, 0.85));
+                        p.fill_round(
+                            rf(cx - 8.0, cy - 8.0, cright + 8.0, cy + g.card_h + 8.0),
+                            ds::RADIUS_CONTAINER,
+                            ds::alpha(ds::BG_SELECTED, 0.6),
+                        );
                     }
-                    // サムネ（デコード済みのみ。16:9）。
-                    if let Some(bmp) = view.list_thumbs.get(i).and_then(|u| self.thumb_cache.get(u)) {
-                        use windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_LINEAR;
-                        let dst = rf(20.0, (y + 3) as f32, 20.0 + tw, (y + 3) as f32 + th);
-                        ctx.DrawBitmap(bmp, Some(&dst), 1.0, D2D1_INTERPOLATION_MODE_LINEAR, None, None);
+                    // サムネ（プレースホルダ地＋デコード済みビットマップ。どちらも角丸クリップ）。
+                    p.fill_round(rf(cx, cy, cright, tb), ds::RADIUS_CONTAINER, ds::alpha(ds::BG_SURFACE, 0.9));
+                    if !card.thumb.is_empty() {
+                        if let Some(bmp) = self.thumb_cache.get(&card.thumb) {
+                            p.fill_round_bitmap(bmp, rf(cx, cy, cright, tb), ds::RADIUS_CONTAINER);
+                        }
                     }
-                    let col = if i == view.list_sel { color(1.0, 1.0, 1.0, 1.0) } else { color(0.70, 0.70, 0.75, 1.0) };
-                    p.text(item, rf(text_left, (y + 6) as f32, cw as f32 - 28.0, (y + row_h) as f32), col);
+                    // 時間バッジ / LIVE バッジ（データがあれば）。
+                    if card.live {
+                        let bw = self.measure("● ライブ") + 10.0;
+                        p.fill_round(rf(cx + 8.0, tb - 26.0, cx + 8.0 + bw, tb - 6.0), ds::RADIUS_OVERLAY, ds::ACCENT_LIVE);
+                        p.text_clip("● ライブ", rf(cx + 13.0, tb - 25.0, cx + 8.0 + bw, tb - 6.0), ds::TEXT_ON_ACCENT);
+                    } else if let Some(d) = card.duration {
+                        let t = fmt_time(d);
+                        let bw = self.measure(&t) + 10.0;
+                        p.fill_round(rf(cright - 8.0 - bw, tb - 26.0, cright - 8.0, tb - 6.0), ds::RADIUS_OVERLAY, ds::BG_SCRIM);
+                        p.text_clip(&t, rf(cright - 3.0 - bw, tb - 25.0, cright - 8.0, tb - 6.0), ds::TEXT_ON_ACCENT);
+                    }
+
+                    // アバター（36px円。配信中は赤リング）＋ 情報列（タイトル2行/チャンネル/メタ）＋ケバブ。
+                    let info_y = tb + ds::GAP_TIGHT;
+                    let avatar_size = ds::SIZE_AVATAR_CHANNEL;
+                    let (avatar_cx, avatar_cy) = (cx + avatar_size / 2.0, info_y + avatar_size / 2.0);
+                    if card.live {
+                        p.fill_ellipse(avatar_cx, avatar_cy, avatar_size / 2.0 + 2.0, ds::ACCENT_BRAND);
+                    }
+                    p.fill_ellipse(avatar_cx, avatar_cy, avatar_size / 2.0, ds::alpha(ds::BG_SURFACE, 0.9));
+                    if !card.avatar.is_empty() {
+                        if let Some(bmp) = self.thumb_cache.get(&card.avatar) {
+                            p.fill_round_bitmap(bmp, rf(cx, info_y, cx + avatar_size, info_y + avatar_size), avatar_size / 2.0);
+                        }
+                    }
+                    let text_x = cx + avatar_size + ds::GAP_TIGHT;
+                    let kebab_w = 16.0;
+                    p.text_clip("⋮", rf(cright - kebab_w, info_y, cright, info_y + 20.0), ds::ICON_MUTED);
+                    let title_col = if i == view.list_sel { ds::TEXT_PRIMARY } else { ds::TEXT_PRIMARY };
+                    // タイトル: 2 行ぶんの高さで自動折返し＋クリップ。
+                    p.text_clip(&card.title, rf(text_x, info_y, cright - kebab_w - 4.0, info_y + 38.0), title_col);
+                    if !card.channel.is_empty() {
+                        let mut chline = card.channel.clone();
+                        if card.verified {
+                            chline.push_str(" ✔");
+                        }
+                        p.text_clip(&chline, rf(text_x, info_y + 40.0, cright, info_y + 58.0), ds::TEXT_SECONDARY);
+                    }
+                    if let Some(meta) = &card.meta {
+                        p.text_clip(meta, rf(text_x, info_y + 58.0, cright, info_y + 76.0), ds::TEXT_SECONDARY);
+                    }
+
+                    // カード内の小領域を、カード本体(=再生)より優先で判定する。
+                    // アバター＋チャンネル行 → チャンネルを開く。
+                    card_extra_hits.push((
+                        RECT { left: cx as i32, top: info_y as i32, right: (cright - kebab_w - 4.0) as i32, bottom: (info_y + avatar_size) as i32 },
+                        OverlayAction::OpenChannelOf(i),
+                    ));
+                    // ケバブ(⋮) → コンテキストメニュー。
+                    card_extra_hits.push((
+                        RECT { left: (cright - kebab_w - 6.0) as i32, top: info_y as i32, right: cright as i32, bottom: (info_y + 24.0) as i32 },
+                        OverlayAction::OpenCardMenu(i),
+                    ));
+                    if view.card_menu_open == Some(i) {
+                        menu_anchor = Some((cright, info_y));
+                    }
+
+                    card_hits.push((
+                        RECT { left: cx as i32, top: cy as i32, right: cright as i32, bottom: (cy + g.card_h) as i32 },
+                        i,
+                    ));
                 }
-                if view.list_items.is_empty() {
-                    p.text("（取得中… ログインが必要です）", rf(28.0, (top0 + 4) as f32, cw as f32 - 28.0, (top0 + 44) as f32), color(0.70, 0.70, 0.75, 1.0));
+
+                if view.list_cards.is_empty() {
+                    p.text("（取得中… ログインが必要です）", rf(g.content_x, g.grid_y0, cwf - ds::SPACE_SECTION, g.grid_y0 + 40.0), ds::TEXT_SECONDARY);
                 }
+
+                // --- カードのケバブメニュー（開いている時のみ。他の全てより上に描く）。 ---
+                if let (Some(mi), Some((anchor_right, anchor_top))) = (view.card_menu_open, menu_anchor) {
+                    if let Some(card) = view.list_cards.get(mi) {
+                        let menu_w = 268.0;
+                        let item_h = 40.0;
+                        let mut items: Vec<(&str, OverlayAction)> = vec![
+                            ("後で見るに保存", OverlayAction::SaveWatchLater(mi)),
+                        ];
+                        if card.menu.not_interested_token.is_some() {
+                            items.push(("興味なし", OverlayAction::NotInterested(mi)));
+                        }
+                        if card.menu.not_channel_token.is_some() {
+                            items.push(("チャンネルをおすすめに表示しない", OverlayAction::NotRecommendChannel(mi)));
+                        }
+                        if card.menu.channel_id.is_some() || !card.channel.is_empty() {
+                            items.push(("チャンネルへ", OverlayAction::OpenChannelOf(mi)));
+                        }
+                        let menu_h = items.len() as f32 * item_h + ds::SPACE_INSET;
+                        let mx = (anchor_right - menu_w).clamp(ds::GAP_TIGHT, cwf - menu_w - ds::GAP_TIGHT);
+                        let my = anchor_top.clamp(ds::GAP_TIGHT, chf - menu_h - ds::GAP_TIGHT);
+                        p.fill_round(rf(mx, my, mx + menu_w, my + menu_h), ds::RADIUS_CONTAINER, ds::alpha(ds::BG_ELEVATED, 0.98));
+                        for (idx, (label, action)) in items.iter().enumerate() {
+                            let iy = my + ds::SPACE_INSET / 2.0 + idx as f32 * item_h;
+                            p.text_clip(label, rf(mx + ds::SPACE_INSET, iy + 11.0, mx + menu_w - ds::SPACE_INSET, iy + item_h - 8.0), ds::TEXT_PRIMARY);
+                            menu_hits.push((
+                                RECT { left: mx as i32, top: iy as i32, right: (mx + menu_w) as i32, bottom: (iy + item_h) as i32 },
+                                *action,
+                            ));
+                        }
+                    }
+                }
+
                 // ✕ 閉じるボタン等（一覧モードの部品）。
                 for c in &controls {
                     c.draw(&p);
                 }
             } else if active {
                 // 下部コントローラ帯の背景。
-                p.fill_rect(rf(panel.left as f32, panel.top as f32, panel.right as f32, panel.bottom as f32), color(0.03, 0.03, 0.05, 0.72));
+                p.fill_rect(rf(panel.left as f32, panel.top as f32, panel.right as f32, panel.bottom as f32), ds::alpha(ds::BG_CANVAS, 0.72));
                 // 上部バーの背景。
-                p.fill_rect(rf(0.0, 0.0, cw as f32, strip_h as f32), color(0.04, 0.04, 0.06, 0.55));
+                p.fill_rect(rf(0.0, 0.0, cw as f32, strip_h as f32), ds::alpha(ds::BG_CANVAS, 0.55));
                 // URL 行（先頭）。空なら入力ガイドをグレーで。
                 let (url_txt, url_col) = if view.url_input.is_empty() {
                     (
                         "URL: YouTube の URL を入力して Enter（英数字キー / Ctrl+V 貼付 / Esc クリア）".to_string(),
-                        color(0.66, 0.66, 0.70, 1.0),
+                        ds::TEXT_SECONDARY,
                     )
                 } else {
-                    (format!("URL: {}", view.url_input), color(1.0, 1.0, 1.0, 1.0))
+                    (format!("URL: {}", view.url_input), ds::TEXT_PRIMARY)
                 };
                 p.text(&url_txt, rf(12.0, 6.0, cw as f32 - 12.0, (6 + ROW_H) as f32), url_col);
                 // 認証ラベル（ログイン済みは右寄せテキスト。未ログインは Button 追加済み）。
@@ -938,12 +1293,12 @@ impl DcompOverlay {
                     p.text(
                         &view.auth_label,
                         rf(cw as f32 - 12.0 - lw, (nav_cy - 9) as f32, cw as f32 - 12.0, (nav_cy + 9) as f32),
-                        color(0.70, 0.88, 1.0, 1.0),
+                        ds::TEXT_SECONDARY,
                     );
                 }
                 // タイトル行（あれば）。
                 if !view.title.is_empty() {
-                    p.text(&view.title, rf(12.0, (6 + ROW_H * 2) as f32, cw as f32 - 12.0, strip_h as f32), color(1.0, 1.0, 1.0, 1.0));
+                    p.text(&view.title, rf(12.0, (6 + ROW_H * 2) as f32, cw as f32 - 12.0, strip_h as f32), ds::TEXT_PRIMARY);
                 }
                 // 各部品（下部コントロール＋ナビタブ＋ログイン＋A-/A+。チャットの上に乗る）。
                 for c in &controls {
@@ -965,10 +1320,12 @@ impl DcompOverlay {
         self.state.top_panel = top_panel;
         self.state.controls = controls;
         self.state.list_open = view.list_open;
-        self.state.list_top = top0;
-        self.state.list_row_h = row_h;
-        self.state.list_first = list_first;
-        self.state.list_count = list_count;
+        self.state.card_hits = card_hits;
+        self.state.card_extra_hits = card_extra_hits;
+        self.state.menu_open = view.card_menu_open.is_some();
+        self.state.menu_hits = menu_hits;
+        self.state.nav_hits = nav_hits;
+        self.state.grid_cols = grid.map(|g| g.cols).unwrap_or(1);
         self.state.chat_panel = chat_panel;
         self.state.chat_resize = chat_resize;
     }
@@ -1080,6 +1437,51 @@ impl<'a> Painter<'a> {
             self.ctx.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r, radiusX: rad, radiusY: rad }, &b);
         }
     }
+    /// ビットマップを角丸矩形にクリップして描く（`DrawBitmap` は矩形のみのため、
+    /// ビットマップブラシ＋`FillRoundedRectangle` でカードサムネを角丸にする）。
+    unsafe fn fill_round_bitmap(&self, bmp: &ID2D1Bitmap1, r: D2D_RECT_F, rad: f32) {
+        use windows::Foundation::Numerics::Matrix3x2;
+        use windows::Win32::Graphics::Direct2D::{
+            D2D1_BITMAP_BRUSH_PROPERTIES1, D2D1_EXTEND_MODE_CLAMP,
+            D2D1_INTERPOLATION_MODE_LINEAR, D2D1_ROUNDED_RECT,
+        };
+        let sz = bmp.GetSize();
+        if sz.width <= 0.0 || sz.height <= 0.0 {
+            return;
+        }
+        // object-fit: cover 相当。縦横同じ倍率（大きい方）で拡大し、はみ出た分は
+        // FillRoundedRectangle の角丸クリップで切り捨てる。サムネの実アスペクト比は
+        // 16:9 とは限らない（旧形式の 4:3 レターボックス/任意アスペクトの投稿サムネがある）ため、
+        // 縦横別倍率の引き伸ばしは元画像の黒帯ごと潰して見せてしまう。cover なら常に枠を実写で
+        // 埋め、黒帯は基本的にクロップアウトされる。
+        let dst_w = r.right - r.left;
+        let dst_h = r.bottom - r.top;
+        let scale = (dst_w / sz.width).max(dst_h / sz.height);
+        let scaled_w = sz.width * scale;
+        let scaled_h = sz.height * scale;
+        let offset_x = r.left + (dst_w - scaled_w) / 2.0;
+        let offset_y = r.top + (dst_h - scaled_h) / 2.0;
+        let props = D2D1_BITMAP_BRUSH_PROPERTIES1 {
+            extendModeX: D2D1_EXTEND_MODE_CLAMP,
+            extendModeY: D2D1_EXTEND_MODE_CLAMP,
+            interpolationMode: D2D1_INTERPOLATION_MODE_LINEAR,
+        };
+        if let Ok(brush) = self.ctx.CreateBitmapBrush(bmp, Some(&props as *const _), None) {
+            brush.SetTransform(&Matrix3x2 {
+                M11: scale,
+                M12: 0.0,
+                M21: 0.0,
+                M22: scale,
+                M31: offset_x,
+                M32: offset_y,
+            });
+            self.ctx.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT { rect: r, radiusX: rad, radiusY: rad },
+                &brush,
+            );
+        }
+    }
+
     unsafe fn fill_ellipse(&self, x: f32, y: f32, rad: f32, c: D2D1_COLOR_F) {
         use windows::Win32::Graphics::Direct2D::Common::D2D_POINT_2F;
         use windows::Win32::Graphics::Direct2D::D2D1_ELLIPSE;
@@ -1097,6 +1499,16 @@ impl<'a> Painter<'a> {
         if let Ok(b) = self.ctx.CreateSolidColorBrush(&c, None) {
             let wt: Vec<u16> = s.encode_utf16().collect();
             self.ctx.DrawText(&wt, self.tf, &r, &b, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+        }
+    }
+
+    /// 指定フォントで描くテキスト（見出し=tf_title 等、既定 tf 以外を使う場合）。
+    unsafe fn text_font(&self, tf: &IDWriteTextFormat, s: &str, r: D2D_RECT_F, c: D2D1_COLOR_F) {
+        use windows::Win32::Graphics::Direct2D::D2D1_DRAW_TEXT_OPTIONS_NONE;
+        use windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE_NATURAL;
+        if let Ok(b) = self.ctx.CreateSolidColorBrush(&c, None) {
+            let wt: Vec<u16> = s.encode_utf16().collect();
+            self.ctx.DrawText(&wt, tf, &r, &b, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
         }
     }
 
@@ -1197,8 +1609,22 @@ unsafe extern "system" fn wndproc(
         WM_LBUTTONDOWN => {
             let mut capture = false;
             if let Some(s) = state_of(hwnd) {
-                if s.list_open {
-                    // 一覧モード: まず部品（✕ 閉じる等）、無ければ行クリック → PlayIndex。余白は吸収。
+                if s.list_open && s.menu_open {
+                    // カードメニュー表示中はメニュー項目のみ判定（モーダル扱い）。
+                    // 当たらなければ閉じてこのクリックを吸収する（下のカード等には落とさない）。
+                    let mut handled = false;
+                    for (r, a) in &s.menu_hits {
+                        if in_rect(r, lo, hi) {
+                            s.actions.push(*a);
+                            handled = true;
+                            break;
+                        }
+                    }
+                    if !handled {
+                        s.actions.push(OverlayAction::CloseCardMenu);
+                    }
+                } else if s.list_open {
+                    // 一覧モード: 部品（✕ 閉じる等）→ サイドバーナビ → カード の順。余白は吸収。
                     let mut handled = false;
                     for c in &s.controls {
                         if let Some(Hit::Act(a)) = c.press(lo, hi) {
@@ -1207,11 +1633,31 @@ unsafe extern "system" fn wndproc(
                             break;
                         }
                     }
-                    if !handled && s.list_row_h > 0 && hi >= s.list_top {
-                        let row = ((hi - s.list_top) / s.list_row_h) as usize;
-                        let idx = s.list_first + row;
-                        if idx < s.list_count {
-                            s.actions.push(OverlayAction::PlayIndex(idx));
+                    if !handled {
+                        for (r, a) in &s.nav_hits {
+                            if in_rect(r, lo, hi) {
+                                s.actions.push(*a);
+                                handled = true;
+                                break;
+                            }
+                        }
+                    }
+                    // カード内の小領域（アバター/チャンネル・ケバブ）を本体より優先。
+                    if !handled {
+                        for (r, a) in &s.card_extra_hits {
+                            if in_rect(r, lo, hi) {
+                                s.actions.push(*a);
+                                handled = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !handled {
+                        for (r, idx) in &s.card_hits {
+                            if in_rect(r, lo, hi) {
+                                s.actions.push(OverlayAction::PlayIndex(*idx));
+                                break;
+                            }
                         }
                     }
                 } else if s.chat_resize.right > s.chat_resize.left && in_rect(&s.chat_resize, lo, hi) {
@@ -1273,8 +1719,9 @@ unsafe extern "system" fn wndproc(
                     // 上スクロール(delta>0)=過去へ(+)、下=最新へ(-)。1 ノッチ 3 メッセージ。
                     s.actions.push(OverlayAction::ChatScroll(if delta > 0 { 3 } else { -3 }));
                 } else if s.list_open {
-                    // 一覧表示中はホイールで選択を上下（3 行/ノッチ）。上=過去方向(-)。
-                    s.actions.push(OverlayAction::ListScroll(if delta > 0 { -3 } else { 3 }));
+                    // 一覧表示中はホイールで選択を 1 行（＝列数ぶん）上下。上=過去方向(-)。
+                    let step = s.grid_cols.max(1) as i32;
+                    s.actions.push(OverlayAction::ListScroll(if delta > 0 { -step } else { step }));
                 } else {
                     s.actions
                         .push(OverlayAction::VolumeStep(if delta > 0 { 5.0 } else { -5.0 }));

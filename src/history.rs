@@ -24,13 +24,20 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 /// 履歴 1 件。recommend / subscription と揃えて owned String のみ。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct HistoryItem {
     pub video_id: String,
     pub title: String,
     pub channel: String,
     /// InnerTube が返すサムネ URL（最大サイズ、16:9クロップ済み）。空なら video_id から組み立て。
     pub thumbnail: String,
+    /// 再生時間（秒）。ライブ中は None。
+    pub duration: Option<f64>,
+    pub live: bool,
+    /// tile 2 行目（視聴回数/経過時間など）。
+    pub meta: Option<String>,
+    /// ケバブメニュー用データ（実データ未確認の surface のため通常は既定値＝全 None）。
+    pub menu: crate::subscriptions::CardMenu,
 }
 
 pub enum HistoryUpdate {
@@ -94,12 +101,19 @@ fn fetch_inner(access_token: &str) -> Result<Vec<HistoryItem>> {
         let thumbnail = crate::subscriptions::pick_largest_thumbnail(
             tile.pointer("/header/tileHeaderRenderer/thumbnail"),
         );
+        let (duration, live) = crate::subscriptions::tile_duration_live(tile);
+        let meta = crate::subscriptions::tile_meta(tile);
+        let menu = crate::subscriptions::tile_menu(tile);
 
         out.push(HistoryItem {
             video_id: video_id.to_string(),
             title,
             channel,
             thumbnail,
+            duration,
+            live,
+            meta,
+            menu,
         });
     }
     Ok(out)

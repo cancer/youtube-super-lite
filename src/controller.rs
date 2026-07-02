@@ -53,6 +53,19 @@ pub struct Controller {
     pub recommend_tx: Sender<recommend::RecommendUpdate>,
     pub recommend_rx: Receiver<recommend::RecommendUpdate>,
     pub recommend_status: String,
+    // --- チャンネルアバター（名前→URL キャッシュ）。TV tile がアバターを持たないので
+    //     無認証 WEB 検索で名前から補完する。一覧カードの丸アイコン用。 ---
+    pub channel_avatars: std::collections::HashMap<String, String>,
+    pub avatar_tx: Sender<(String, String)>,
+    pub avatar_rx: Receiver<(String, String)>,
+    /// 解決を依頼済み（成否問わず）の名前。二重リクエスト防止。
+    pub avatar_requested: std::collections::HashSet<String>,
+    // --- チャンネルビュー（アバター/名前クリックで開くチャンネルの動画一覧）---
+    pub channel_items: Vec<recommend::VideoItem>,
+    pub channel_title: String,
+    pub channel_busy: bool,
+    pub channel_tx: Sender<recommend::RecommendUpdate>,
+    pub channel_rx: Receiver<recommend::RecommendUpdate>,
     // --- 登録チャンネル新着 ---
     pub sub_feed: Vec<subscriptions::SubVideo>,
     pub sub_tx: Sender<subscriptions::SubUpdate>,
@@ -104,6 +117,8 @@ impl Controller {
         let (auth_tx, auth_rx) = std::sync::mpsc::channel();
         let (chat_tx, chat_rx) = std::sync::mpsc::channel();
         let (recommend_tx, recommend_rx) = std::sync::mpsc::channel();
+        let (avatar_tx, avatar_rx) = std::sync::mpsc::channel();
+        let (channel_tx, channel_rx) = std::sync::mpsc::channel();
         let (sub_tx, sub_rx) = std::sync::mpsc::channel();
         let (history_tx, history_rx) = std::sync::mpsc::channel();
         let (playlist_tx, playlist_rx) = std::sync::mpsc::channel();
@@ -136,6 +151,15 @@ impl Controller {
             recommend_tx,
             recommend_rx,
             recommend_status: String::new(),
+            channel_avatars: std::collections::HashMap::new(),
+            avatar_tx,
+            avatar_rx,
+            avatar_requested: std::collections::HashSet::new(),
+            channel_items: Vec::new(),
+            channel_title: String::new(),
+            channel_busy: false,
+            channel_tx,
+            channel_rx,
             sub_feed: Vec::new(),
             sub_tx,
             sub_rx,
@@ -323,6 +347,8 @@ impl Controller {
                     };
                     // CLI 引数経由で既に load() を通った動画がここで履歴に載る。
                     self.start_mark_watched_if_logged_in();
+                    // ログイン確定＝おすすめ（ホームフィード）を先読みしておく（動画非依存）。
+                    self.start_recommend();
                     // ログイン待ちで保留していた動画を、access_token 付きで解決開始する。
                     if let Some(url) = self.pending_resolve.take() {
                         self.start_resolve(url);
@@ -437,7 +463,9 @@ impl Controller {
             match update {
                 recommend::RecommendUpdate::Items(items) => {
                     self.recommend_status = format!("おすすめ ({} 件)", items.len());
+                    let names: Vec<String> = items.iter().map(|v| v.channel.clone()).collect();
                     self.recommend_items = items;
+                    self.request_channel_avatars(names);
                 }
                 recommend::RecommendUpdate::Error(e) => {
                     self.recommend_status = format!("取得エラー: {e}");
@@ -446,14 +474,128 @@ impl Controller {
         }
     }
 
-    /// おすすめ動画を背景スレッドで取得する。
-    pub fn start_recommend(&mut self, video_id: String) {
+    /// チャンネルビュー（開いたチャンネルの動画一覧）の更新を取り込む。
+    pub fn poll_channel(&mut self) {
+        while let Ok(update) = self.channel_rx.try_recv() {
+            self.channel_busy = false;
+            match update {
+                recommend::RecommendUpdate::Items(items) => {
+                    let names: Vec<String> = items.iter().map(|v| v.channel.clone()).collect();
+                    self.channel_items = items;
+                    self.request_channel_avatars(names);
+                }
+                recommend::RecommendUpdate::Error(_) => {}
+            }
+        }
+    }
+
+    /// チャンネル名からそのチャンネルの動画一覧を背景取得する（名前→channelId→browse）。
+    pub fn open_channel(&mut self, name: String) {
+        self.channel_title = name.clone();
+        self.channel_items.clear();
+        self.channel_busy = true;
+        let tx = self.channel_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let result = match subscriptions::fetch_channel_id(&name) {
+                Some(id) => recommend::fetch_channel_videos(&id)
+                    .map_err(|e| e.to_string()),
+                None => Err(format!("チャンネルが見つかりません: {name}")),
+            };
+            let _ = tx.send(match result {
+                Ok(items) => recommend::RecommendUpdate::Items(items),
+                Err(e) => recommend::RecommendUpdate::Error(e),
+            });
+            let _ = proxy.send_event(UserEvent::Background);
+        });
+    }
+
+    /// 実 channelId(UC...) からそのチャンネルの動画一覧を背景取得する（名前検索を経由しない、
+    /// より確実な経路。ケバブメニューの「チャンネルへ」が実IDを持つ場合に使う）。
+    pub fn open_channel_by_id(&mut self, id: String, title: String) {
+        self.channel_title = title;
+        self.channel_items.clear();
+        self.channel_busy = true;
+        let tx = self.channel_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let result = recommend::fetch_channel_videos(&id).map_err(|e| e.to_string());
+            let _ = tx.send(match result {
+                Ok(items) => recommend::RecommendUpdate::Items(items),
+                Err(e) => recommend::RecommendUpdate::Error(e),
+            });
+            let _ = proxy.send_event(UserEvent::Background);
+        });
+    }
+
+    /// 動画を「後で見る」に保存する（ケバブメニュー）。結果は待たない（fire-and-forget、
+    /// 失敗してもオーバーレイをブロックしない。将来的にトースト等で通知してもよい）。
+    pub fn save_watch_later(&self, video_id: String) {
+        let Some(tokens) = &self.tokens else { return };
+        let access_token = tokens.access_token.clone();
+        std::thread::spawn(move || match subscriptions::add_to_watch_later(&access_token, &video_id) {
+            Ok(()) => eprintln!("[menu] 後で見るに保存 ok ({video_id})"),
+            Err(e) => eprintln!("[menu] 後で見る保存に失敗: {e:#}"),
+        });
+    }
+
+    /// feedbackToken を送信する（興味なし／チャンネルをおすすめに表示しない）。fire-and-forget。
+    pub fn send_card_feedback(&self, token: String) {
+        let Some(tokens) = &self.tokens else { return };
+        let access_token = tokens.access_token.clone();
+        std::thread::spawn(move || match subscriptions::send_feedback(&access_token, &token) {
+            Ok(()) => eprintln!("[menu] フィードバック送信 ok"),
+            Err(e) => eprintln!("[menu] フィードバック送信に失敗: {e:#}"),
+        });
+    }
+
+    /// チャンネルアバターの解決結果を取り込む（名前→URL）。
+    pub fn poll_channel_avatars(&mut self) {
+        while let Ok((name, url)) = self.avatar_rx.try_recv() {
+            self.channel_avatars.insert(name, url);
+        }
+    }
+
+    /// 未解決のチャンネル名のアバターを無認証 WEB 検索で背景解決する（1 スレッドで順次）。
+    /// TV tile がアバターを持たないための補完。結果は avatar_tx 経由でメインへ返す。
+    pub fn request_channel_avatars(&mut self, names: Vec<String>) {
+        let mut todo = Vec::new();
+        for name in names {
+            if name.is_empty() || self.avatar_requested.contains(&name) {
+                continue;
+            }
+            self.avatar_requested.insert(name.clone());
+            todo.push(name);
+        }
+        if todo.is_empty() {
+            return;
+        }
+        let tx = self.avatar_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            for name in todo {
+                if let Some(url) = subscriptions::fetch_channel_avatar(&name) {
+                    let _ = tx.send((name, url));
+                    let _ = proxy.send_event(UserEvent::Background);
+                }
+            }
+        });
+    }
+
+    /// おすすめ（ホームフィード FEwhat_to_watch）を背景スレッドで取得する。要ログイン。
+    /// 動画再生とは無関係で、ログイン確定時や一覧を開いた時に呼ぶ。
+    pub fn start_recommend(&mut self) {
+        let Some(tokens) = &self.tokens else {
+            self.recommend_status = "先にログインしてください".to_string();
+            return;
+        };
         self.recommend_items.clear();
         self.recommend_status = "おすすめ取得中…".to_string();
+        let access_token = tokens.access_token.clone();
         let tx = self.recommend_tx.clone();
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
-            recommend::fetch_recommendations(&video_id, &tx);
+            recommend::fetch_home_feed(&access_token, &tx);
             let _ = proxy.send_event(UserEvent::Background);
         });
     }
@@ -465,7 +607,9 @@ impl Controller {
                 subscriptions::SubUpdate::Feed(items) => {
                     self.sub_busy = false;
                     self.sub_status = "新着".to_string();
+                    let names: Vec<String> = items.iter().map(|v| v.channel.clone()).collect();
                     self.sub_feed = items;
+                    self.request_channel_avatars(names);
                 }
                 subscriptions::SubUpdate::Error(e) => {
                     self.sub_busy = false;
@@ -525,7 +669,9 @@ impl Controller {
             match update {
                 history::HistoryUpdate::Items(items) => {
                     self.history_status = format!("再生履歴 ({} 件)", items.len());
+                    let names: Vec<String> = items.iter().map(|v| v.channel.clone()).collect();
                     self.history_items = items;
+                    self.request_channel_avatars(names);
                 }
                 history::HistoryUpdate::Error(e) => {
                     self.history_status = format!("取得エラー: {e}");
