@@ -9,10 +9,19 @@ code → access/refresh token）は別途デプロイした **Cloudflare Worker*
 が代行する。アプリが知っているのは「Worker の URL」だけで、client_secret はアプリのバイナリにも設定ファイルにも
 含まれない。
 
-```
-[アプリ] ─ブラウザで同意→ループバックでcode ─▶ [Worker] ─(id+secret付与)→ Google
-        ◀──────── access / refresh token ───────
-        ── Data API / InnerTube を直接 ──────▶ YouTube
+```mermaid
+sequenceDiagram
+    participant App as アプリ
+    participant Worker as Cloudflare Worker
+    participant Google
+    participant YouTube
+
+    App->>Google: ブラウザで同意（ループバックへ code を受け取る）
+    App->>Worker: authorization code
+    Worker->>Google: code + client_id + client_secret
+    Google-->>Worker: access / refresh token
+    Worker-->>App: access / refresh token
+    App->>YouTube: Data API / InnerTube を直接呼び出し
 ```
 
 ## フロー

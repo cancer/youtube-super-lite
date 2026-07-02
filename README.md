@@ -55,7 +55,8 @@ youtube-super-lite [OPTIONS] [URL]
 ## ログインの設定
 
 高評価・登録チャンネル・再生リスト・履歴・視聴履歴記録を使うには OAuth ログインの設定が必要。
-手順は [docs/features/login-and-rating.md](docs/features/login-and-rating.md) を参照。
+機能の説明は [docs/features/login-and-rating.md](docs/features/login-and-rating.md)、
+セットアップ手順は [docs/setup/oauth-setup.md](docs/setup/oauth-setup.md) を参照。
 
 ## もっと詳しく
 

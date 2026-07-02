@@ -4,18 +4,30 @@
 
 ## モジュールマップ
 
-```
-[main.rs]                  — CLI 解析 → NativeApp 起動。Quality/Codec 等の共有値型を保持
-[native_app::NativeApp]    — winit アプリ本体。HWND→mpv 埋め込み、キーボード/状態、各種 poll、Controller を駆動
-[dcomp_overlay]            — 子窓+DirectComposition オーバーレイ。コントローラ・URL欄・一覧・チャットを描画
-[controller::Controller]   — UI 非依存のアプリ状態とロジック（mpv 制御・認証/API・URL解決・各種 poll）
-[player::Player]           — libmpv ラッパー。mpv を wid に D3D11 埋め込み（render API/OpenGL は使わない）
-[resolve/]                 — ネイティブ InnerTube リゾルバ（常駐ワーカースレッド）＋ sidecar フォールバック
-[image_cache]              — サムネのディスクキャッシュ（cache_dir/cached_path/ensure_cached_async）
-[settings]                 — UI設定（チャット文字サイズ・幅）の永続化
-[gpu_usage]                — GPU使用率監視とHW/SWデコード自動切替
-[devtools]                 — 検証用ローカル HTTP サーバ（--enable-dev-tools）
-[chat / recommend / subscriptions / playlist / history / auth / mark_watched] — 各機能モジュール
+```mermaid
+graph TD
+    main["main.rs<br/>CLI解析 → NativeApp起動<br/>Quality/Codec等の共有値型を保持"]
+    native_app["native_app::NativeApp<br/>winitアプリ本体<br/>HWND→mpv埋め込み・キーボード/状態・各種poll"]
+    overlay["dcomp_overlay<br/>子窓+DirectCompositionオーバーレイ<br/>コントローラ・URL欄・一覧・チャットを描画"]
+    controller["controller::Controller<br/>UI非依存のアプリ状態とロジック<br/>mpv制御・認証/API・URL解決・各種poll"]
+    player["player::Player<br/>libmpvラッパー<br/>mpvをwidにD3D11埋め込み"]
+    resolve["resolve/<br/>ネイティブInnerTubeリゾルバ<br/>常駐ワーカー + sidecarフォールバック"]
+    image_cache["image_cache<br/>サムネのディスクキャッシュ"]
+    settings["settings<br/>UI設定(チャット文字サイズ・幅)の永続化"]
+    gpu_usage["gpu_usage<br/>GPU使用率監視とHW/SWデコード自動切替"]
+    devtools["devtools<br/>検証用ローカルHTTPサーバ(--enable-dev-tools)"]
+    features["chat / recommend / subscriptions / playlist / history / auth / mark_watched<br/>各機能モジュール"]
+
+    main --> native_app
+    native_app --> overlay
+    native_app --> controller
+    native_app --> devtools
+    controller --> player
+    controller --> resolve
+    controller --> image_cache
+    controller --> settings
+    controller --> gpu_usage
+    controller --> features
 ```
 
 機能ごとの詳細は [docs/features/](../features/) を参照。ここでは横断的な設計方針だけを扱う。

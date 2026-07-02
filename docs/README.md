@@ -18,6 +18,12 @@
 | [ui-settings-and-gpu.md](features/ui-settings-and-gpu.md) | UI設定の永続化・画像キャッシュ・GPU負荷監視 |
 | [devtools.md](features/devtools.md) | 検証用ローカル HTTP（`--enable-dev-tools`） |
 
+## セットアップ手順（[setup/](setup/)）
+
+| ドキュメント | 内容 |
+|------|------|
+| [oauth-setup.md](setup/oauth-setup.md) | OAuthログイン機能を使うための Google Cloud Console / Cloudflare Worker のセットアップ手順 |
+
 ## 設計軸（[design/](design/)）— なぜそう作ったか
 
 | ドキュメント | 内容 |
