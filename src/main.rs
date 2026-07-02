@@ -5,6 +5,8 @@
 mod auth;
 mod chat;
 mod controller;
+#[cfg(windows)]
+mod design;
 mod devtools;
 mod gpu_usage;
 mod history;
