@@ -300,14 +300,37 @@ fn resolve_one(
         }
     }
 
-    // 3) 認証経路(TVHTML5+Bearer)は、現行 base.js では署名(s)復号も nsig 変換も適用できず
-    //    （署名復号は未実装、nsig 抽出も VM 難読化の新 base.js で破綻）、解決できても stream が
-    //    403 になる。壊れた URL を Ok で返すと再生不可になるだけなので使わない。
-    //    gated/members 等は worker_loop が rustypipe サイドカー（解決＋ローカル中継）に
-    //    フォールバックして再生する。req.access_token は将来の認証経路用に温存。
-    let _ = &req.access_token;
+    // 3) ログイン中のライブ: TVHTML5 + OAuth Bearer で解錠し hlsManifestUrl を得る。
+    //    YouTube は 2026 以降ライブを全匿名 client で bot ゲート（LOGIN_REQUIRED "Sign in to
+    //    confirm you're not a bot"）にしたため、匿名 ANDROID/ANDROID_VR ではライブが取れない。
+    //    HLS はセグメントを mpv/ffmpeg が取得し nsig 変換が要らないので、下記 4) の VOD 認証経路の
+    //    「403 になるから使わない」制約はライブには当てはまらない（ライブ限定で採用する）。
+    if let Some(token) = req.access_token.as_deref() {
+        if let Ok(tv) = clients::fetch_player(http, &clients::TVHTML5, &video_id, Some(token), visitor) {
+            if tv.status == "OK" && tv.is_live {
+                if let Some(streaming) = &tv.streaming {
+                    if let Some(hls) = clients::hls_manifest(streaming) {
+                        return Ok((
+                            Resolved {
+                                video_url: hls,
+                                audio_url: None,
+                            },
+                            tv.title,
+                            true,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // 4) 認証経路(TVHTML5+Bearer)の VOD adaptive は、現行 base.js では署名(s)復号も nsig 変換も
+    //    適用できず（署名復号は未実装、nsig 抽出も VM 難読化の新 base.js で破綻）、解決できても
+    //    stream が 403 になる。壊れた URL を Ok で返すと再生不可になるだけなので使わない。
+    //    gated/members VOD 等は worker_loop が rustypipe サイドカー（解決＋ローカル中継）に
+    //    フォールバックして再生する。
     bail!(
-        "ネイティブ解決不可: android_vr={} android={}（gated はサイドカーへ）",
+        "ネイティブ解決不可: android_vr={} android={}（gated VOD はサイドカーへ / ライブは要ログイン）",
         vr.status,
         and.status
     )
