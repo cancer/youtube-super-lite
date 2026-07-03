@@ -14,7 +14,7 @@ $mpvSrc = Join-Path $root "tools\mpv-dev"
 if (-not (Test-Path $vcvars))          { Write-Error "vcvars64.bat not found: $vcvars"; exit 1 }
 if (-not (Test-Path "$mpvSrc\mpv.lib")) { Write-Error "mpv.lib not found in $mpvSrc";   exit 1 }
 
-$profileArgs = if ($Release) { @("--release") } else { @() }
+[string[]]$profileArgs = if ($Release) { @("--release") } else { @() }
 $outDir      = if ($Release) { "release" } else { "debug" }
 
 # Import vcvars64 environment into this PowerShell session, then call cargo directly.
