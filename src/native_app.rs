@@ -710,6 +710,10 @@ impl NativeRunning {
                 }
                 Command::Action(name, reply) => {
                     let known = self.devtools_action(&name);
+                    #[cfg(windows)]
+                    if known {
+                        self.last_activity = Instant::now();
+                    }
                     let _ = reply.send(known);
                 }
                 Command::Click { x, y, reply } => {
@@ -772,12 +776,7 @@ impl NativeRunning {
             "list_back" => UiAction::ListBack,
             _ => return false,
         };
-        let known = self.apply_action(action);
-        #[cfg(windows)]
-        if known {
-            self.last_activity = Instant::now();
-        }
-        known
+        self.apply_action(action)
     }
 
     /// 文字サイズ・チャット幅に変更があれば保存する。`force` 時はデバウンスを無視（終了時用）。
@@ -1052,6 +1051,148 @@ impl NativeRunning {
         }
         true
     }
+
+    /// キーボード入力（`WindowEvent::KeyboardInput`）の処理。地雷ではない「普通のコード」
+    /// なので shell から呼ばれるだけの薄いメソッドにしてある。
+    /// 戻り値 = 「ユーザー操作があったか」。last_activity の更新は呼び出し側（shell）だけが行う
+    /// （Issue #11 PR U §9.2: 跨ぎ状態には触らず、戻り値で伝える）。
+    #[cfg(windows)]
+    fn handle_keyboard(&mut self, event: winit::event::KeyEvent) -> bool {
+        if !event.state.is_pressed() {
+            return false;
+        }
+        // Ctrl+修飾キー: L=ログイン, G=高評価, Q=画質切替, C=コーデック切替。
+        // 挙動不変のため、旧実装がここで last_activity を更新していなかった点（他の
+        // キー入力と異なり早期 return していた）もそのまま踏襲する（Ctrl+V のみ例外）。
+        if self.ctrl {
+            if let Key::Character(c) = &event.logical_key {
+                let action = match c.as_str().to_ascii_lowercase().as_str() {
+                    "l" => Some(UiAction::Login),
+                    "g" => Some(UiAction::Like),
+                    "t" => Some(UiAction::ToggleChat),
+                    "q" => Some(UiAction::CycleQuality),
+                    "c" => Some(UiAction::CycleCodec),
+                    // Ctrl + "-" / "+"（"=" も可）: コメント文字サイズ増減。
+                    "-" => Some(UiAction::ChatFontBy(-2.0)),
+                    "+" | "=" => Some(UiAction::ChatFontBy(2.0)),
+                    _ => None,
+                };
+                if let Some(a) = action {
+                    self.apply_action(a);
+                    return false;
+                }
+            }
+        }
+        // Ctrl+V: クリップボードのテキストを URL 欄へ貼り付け（テキスト編集そのものなので
+        // UiAction 化しない）。
+        if self.ctrl {
+            if let Key::Character(c) = &event.logical_key {
+                if c.eq_ignore_ascii_case("v") {
+                    if let Some(t) = crate::dcomp_overlay::clipboard_text() {
+                        for ch in t.chars() {
+                            if !ch.is_control() {
+                                self.url_input.push(ch);
+                            }
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
+        // Tab: 一覧を開閉。
+        if let Key::Named(NamedKey::Tab) = event.logical_key {
+            self.apply_action(UiAction::ToggleList);
+            return true;
+        }
+        // 一覧表示中はキーをナビゲーション／ソース切替に使う。
+        if self.list_open {
+            // グリッドの 1 行移動量＝現在の列数（未描画時は 1）。
+            let cols = self
+                .dcomp_overlay
+                .as_ref()
+                .map(|o| o.grid_cols())
+                .unwrap_or(1)
+                .max(1) as i32;
+            match &event.logical_key {
+                Key::Named(NamedKey::ArrowUp) => {
+                    self.apply_action(UiAction::ListMove { delta: -cols });
+                }
+                Key::Named(NamedKey::ArrowDown) => {
+                    self.apply_action(UiAction::ListMove { delta: cols });
+                }
+                Key::Named(NamedKey::ArrowLeft) => {
+                    self.apply_action(UiAction::ListMove { delta: -1 });
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    self.apply_action(UiAction::ListMove { delta: 1 });
+                }
+                Key::Named(NamedKey::Enter) => {
+                    // devtools の list_select と同じ経路（旧: ここだけ play_list_index を
+                    // 呼ばずインライン再実装していたドリフトを解消。issue #11 PR B）。
+                    self.apply_action(UiAction::ListSelect);
+                }
+                Key::Named(NamedKey::Backspace) => {
+                    self.apply_action(UiAction::ListBack);
+                }
+                Key::Named(NamedKey::Escape) => {
+                    self.apply_action(UiAction::CloseList);
+                }
+                Key::Character(c) => {
+                    self.card_menu_open = None;
+                    let src = match c.as_str() {
+                        "1" => Some(ListSource::Subs),
+                        "2" => Some(ListSource::Recommend),
+                        "3" => Some(ListSource::History),
+                        "4" => Some(ListSource::Playlist),
+                        _ => None,
+                    };
+                    if let Some(src) = src {
+                        self.apply_action(UiAction::OpenList(src));
+                    }
+                }
+                _ => {}
+            }
+            return true;
+        }
+        match event.logical_key {
+            // Space は URL に現れないため再生/一時停止に温存。
+            Key::Named(NamedKey::Space) => {
+                self.apply_action(UiAction::TogglePause);
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                self.apply_action(UiAction::SeekBy(5.0));
+            }
+            Key::Named(NamedKey::ArrowLeft) => {
+                self.apply_action(UiAction::SeekBy(-5.0));
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                self.apply_action(UiAction::VolumeBy(5.0));
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                self.apply_action(UiAction::VolumeBy(-5.0));
+            }
+            // --- URL 入力欄の編集（テキスト編集そのものなので UiAction 化しない）---
+            Key::Named(NamedKey::Backspace) => {
+                self.url_input.pop();
+            }
+            Key::Named(NamedKey::Escape) => self.url_input.clear(),
+            Key::Named(NamedKey::Enter) => {
+                self.apply_action(UiAction::PlayUrl(self.url_input.trim().to_string()));
+            }
+            // 印字可能文字は URL 欄へ追記（IME 不要。URL は英数字記号のみ）。
+            _ => {
+                if let Some(t) = &event.text {
+                    for ch in t.chars() {
+                        if !ch.is_control() {
+                            self.url_input.push(ch);
+                        }
+                    }
+                }
+            }
+        }
+        // キー操作も活動として扱う（戻り値経由で shell に伝える）。
+        true
+    }
 }
 
 impl ApplicationHandler<UserEvent> for NativeApp {
@@ -1300,154 +1441,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 let _ = size;
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if !event.state.is_pressed() {
-                    return;
-                }
-                // Ctrl+修飾キー: L=ログイン, G=高評価, Q=画質切替, C=コーデック切替。
-                // 挙動不変のため、旧実装がここで last_activity を更新していなかった点（他の
-                // キー入力と異なり早期 return していた）もそのまま踏襲する（Ctrl+V のみ例外）。
-                if state.ctrl {
-                    if let Key::Character(c) = &event.logical_key {
-                        let action = match c.as_str().to_ascii_lowercase().as_str() {
-                            "l" => Some(UiAction::Login),
-                            "g" => Some(UiAction::Like),
-                            "t" => Some(UiAction::ToggleChat),
-                            "q" => Some(UiAction::CycleQuality),
-                            "c" => Some(UiAction::CycleCodec),
-                            // Ctrl + "-" / "+"（"=" も可）: コメント文字サイズ増減。
-                            "-" => Some(UiAction::ChatFontBy(-2.0)),
-                            "+" | "=" => Some(UiAction::ChatFontBy(2.0)),
-                            _ => None,
-                        };
-                        if let Some(a) = action {
-                            state.apply_action(a);
-                            return;
-                        }
-                    }
-                }
-                // Ctrl+V: クリップボードのテキストを URL 欄へ貼り付け（テキスト編集そのものなので
-                // UiAction 化しない）。
+                // last_activity の更新はここ（shell）だけが行う。handle_keyboard は
+                // 「操作があったか」を返すだけで、自分では触らない（Issue #11 PR U §9.2）。
+                let acted = state.handle_keyboard(event);
                 #[cfg(windows)]
-                if state.ctrl {
-                    if let Key::Character(c) = &event.logical_key {
-                        if c.eq_ignore_ascii_case("v") {
-                            if let Some(t) = crate::dcomp_overlay::clipboard_text() {
-                                for ch in t.chars() {
-                                    if !ch.is_control() {
-                                        state.url_input.push(ch);
-                                    }
-                                }
-                            }
-                            state.last_activity = Instant::now();
-                            return;
-                        }
-                    }
-                }
-                // Tab: 一覧を開閉。
-                if let Key::Named(NamedKey::Tab) = event.logical_key {
-                    state.apply_action(UiAction::ToggleList);
-                    #[cfg(windows)]
-                    {
-                        state.last_activity = Instant::now();
-                    }
-                    return;
-                }
-                // 一覧表示中はキーをナビゲーション／ソース切替に使う。
-                if state.list_open {
-                    // グリッドの 1 行移動量＝現在の列数（未描画時は 1）。
-                    #[cfg(windows)]
-                    let cols = state
-                        .dcomp_overlay
-                        .as_ref()
-                        .map(|o| o.grid_cols())
-                        .unwrap_or(1)
-                        .max(1) as i32;
-                    #[cfg(not(windows))]
-                    let cols = 1i32;
-                    match &event.logical_key {
-                        Key::Named(NamedKey::ArrowUp) => {
-                            state.apply_action(UiAction::ListMove { delta: -cols });
-                        }
-                        Key::Named(NamedKey::ArrowDown) => {
-                            state.apply_action(UiAction::ListMove { delta: cols });
-                        }
-                        Key::Named(NamedKey::ArrowLeft) => {
-                            state.apply_action(UiAction::ListMove { delta: -1 });
-                        }
-                        Key::Named(NamedKey::ArrowRight) => {
-                            state.apply_action(UiAction::ListMove { delta: 1 });
-                        }
-                        Key::Named(NamedKey::Enter) => {
-                            // devtools の list_select と同じ経路（旧: ここだけ play_list_index を
-                            // 呼ばずインライン再実装していたドリフトを解消。issue #11 PR B）。
-                            state.apply_action(UiAction::ListSelect);
-                        }
-                        Key::Named(NamedKey::Backspace) => {
-                            state.apply_action(UiAction::ListBack);
-                        }
-                        Key::Named(NamedKey::Escape) => {
-                            state.apply_action(UiAction::CloseList);
-                        }
-                        Key::Character(c) => {
-                            state.card_menu_open = None;
-                            let src = match c.as_str() {
-                                "1" => Some(ListSource::Subs),
-                                "2" => Some(ListSource::Recommend),
-                                "3" => Some(ListSource::History),
-                                "4" => Some(ListSource::Playlist),
-                                _ => None,
-                            };
-                            if let Some(src) = src {
-                                state.apply_action(UiAction::OpenList(src));
-                            }
-                        }
-                        _ => {}
-                    }
-                    #[cfg(windows)]
-                    {
-                        state.last_activity = Instant::now();
-                    }
-                    return;
-                }
-                match event.logical_key {
-                    // Space は URL に現れないため再生/一時停止に温存。
-                    Key::Named(NamedKey::Space) => {
-                        state.apply_action(UiAction::TogglePause);
-                    }
-                    Key::Named(NamedKey::ArrowRight) => {
-                        state.apply_action(UiAction::SeekBy(5.0));
-                    }
-                    Key::Named(NamedKey::ArrowLeft) => {
-                        state.apply_action(UiAction::SeekBy(-5.0));
-                    }
-                    Key::Named(NamedKey::ArrowUp) => {
-                        state.apply_action(UiAction::VolumeBy(5.0));
-                    }
-                    Key::Named(NamedKey::ArrowDown) => {
-                        state.apply_action(UiAction::VolumeBy(-5.0));
-                    }
-                    // --- URL 入力欄の編集（テキスト編集そのものなので UiAction 化しない）---
-                    Key::Named(NamedKey::Backspace) => {
-                        state.url_input.pop();
-                    }
-                    Key::Named(NamedKey::Escape) => state.url_input.clear(),
-                    Key::Named(NamedKey::Enter) => {
-                        state.apply_action(UiAction::PlayUrl(state.url_input.trim().to_string()));
-                    }
-                    // 印字可能文字は URL 欄へ追記（IME 不要。URL は英数字記号のみ）。
-                    _ => {
-                        if let Some(t) = &event.text {
-                            for ch in t.chars() {
-                                if !ch.is_control() {
-                                    state.url_input.push(ch);
-                                }
-                            }
-                        }
-                    }
-                }
-                // キー操作も活動として扱い、オーバーレイの自動非表示を遅らせる。
-                #[cfg(windows)]
-                {
+                if acted {
                     state.last_activity = Instant::now();
                 }
             }
