@@ -371,7 +371,7 @@ impl NativeRunning {
                 }
             }
             ListSource::Recommend => {
-                if self.core.recommend_items.is_empty() && self.core.tokens.is_some() {
+                if self.core.recommend_items.is_empty() && self.core.account.token().is_some() {
                     self.core.start_recommend();
                 }
             }
@@ -550,7 +550,7 @@ impl NativeRunning {
             }
             // --- 認証 / 評価 ---
             "login" => {
-                if !self.core.auth_busy {
+                if !self.core.account.is_busy() {
                     self.core.start_login();
                 }
                 true
@@ -668,7 +668,7 @@ impl NativeRunning {
             ListSource::Playlist => "playlist",
             ListSource::Channel => "channel",
         };
-        let logged_in = self.core.channel.as_deref().is_some_and(|c| !c.is_empty());
+        let logged_in = self.core.account.channel_name().is_some_and(|c| !c.is_empty());
         let overlay_visible = {
             #[cfg(windows)]
             {
@@ -717,8 +717,8 @@ impl NativeRunning {
             "card_menu_open": self.card_menu_open,
             "overlay_is_topmost": overlay_is_topmost,
             "logged_in": logged_in,
-            "channel": self.core.channel,
-            "auth_status": self.core.auth_status,
+            "channel": self.core.account.channel_name(),
+            "auth_status": self.core.account.status(),
             "focused": self.focused,
             "overlay_visible": overlay_visible,
         })
@@ -854,7 +854,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                             }
                         }
                         OverlayAction::Login => {
-                            if !_state.core.auth_busy {
+                            if !_state.core.account.is_busy() {
                                 _state.core.start_login();
                             }
                         }
@@ -974,11 +974,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 let active = list_open
                     || _state.chat_open
                     || _state.last_activity.elapsed() < Duration::from_secs(3);
-                let logged_in = _state.core.channel.as_deref().is_some_and(|c| !c.is_empty());
+                let logged_in = _state.core.account.channel_name().is_some_and(|c| !c.is_empty());
                 let auth_label = if logged_in {
-                    format!("👤 {}", _state.core.channel.as_deref().unwrap_or(""))
+                    format!("👤 {}", _state.core.account.channel_name().unwrap_or(""))
                 } else {
-                    format!("🔑 {}", _state.core.auth_status)
+                    format!("🔑 {}", _state.core.account.status())
                 };
                 let list_sel = _state.list_sel;
                 let (list_header, list_cards): (String, Vec<Card>) = if list_open {
@@ -1173,7 +1173,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     if let Key::Character(c) = &event.logical_key {
                         match c.as_str().to_ascii_lowercase().as_str() {
                             "l" => {
-                                if !state.core.auth_busy {
+                                if !state.core.account.is_busy() {
                                     state.core.start_login();
                                 }
                                 return;

@@ -4,16 +4,15 @@
 //! 依存しない状態とロジックをここに集約する。将来 OpenGL 合成をやめてネイティブ 2D UI に
 //! 移行する際も、この Controller をそのまま別フロントエンドから駆動できるようにするのが狙い。
 
-use anyhow::Result;
 use std::sync::atomic::AtomicI64;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::event_loop::EventLoopProxy;
 
-use ysl_core::yt::{auth, history, mark_watched, playlist, recommend, resolve, subscriptions};
-use ysl_core::{chat, gpu_usage, player};
-use crate::{AuthMsg, Codec, Quality, UserEvent};
+use ysl_core::yt::{history, playlist, recommend, resolve, subscriptions};
+use ysl_core::{account, chat, gpu_usage, player};
+use crate::{Codec, Quality, UserEvent};
 
 /// UI 非依存のアプリ状態 + ロジック。
 pub struct Controller {
@@ -31,17 +30,11 @@ pub struct Controller {
     /// リプレイチャット用: メインスレッドが mpv の time-pos (ms) を継続的に store し、
     /// チャットスレッドが get_live_chat_replay リクエストに乗せる。
     pub player_offset_ms: Arc<AtomicI64>,
-    pub backend: String,
     pub load_error: Option<String>,
     /// 現在の再生がライブ配信か（videoDetails.isLive）。時間表示↔ライブボタンの切替に使う。
     pub is_live: bool,
     // --- 認証 / API ---
-    pub tokens: Option<auth::Tokens>,
-    pub channel: Option<String>,
-    pub auth_status: String,
-    pub auth_busy: bool,
-    pub auth_tx: Sender<AuthMsg>,
-    pub auth_rx: Receiver<AuthMsg>,
+    pub account: account::Account,
     // --- ライブチャット ---
     /// 1 動画 : 1 セッション。`None` にする（≠フィールドの手動リセット）ことが「停止」の全て
     /// （`ChatSession::drop` が RAII でポーラーを止める）。
@@ -112,7 +105,6 @@ impl Controller {
     /// 各 API 用のチャンネルは内部で生成する。GL 合成版・wid 埋め込み版どちらの
     /// `Player` でも同じく駆動できる（描画方式に依存しない）。
     pub fn new(player: player::Player, proxy: EventLoopProxy<UserEvent>, backend: String) -> Self {
-        let (auth_tx, auth_rx) = std::sync::mpsc::channel();
         let (recommend_tx, recommend_rx) = std::sync::mpsc::channel();
         let (avatar_tx, avatar_rx) = std::sync::mpsc::channel();
         let (channel_tx, channel_rx) = std::sync::mpsc::channel();
@@ -134,15 +126,9 @@ impl Controller {
             quality: Quality::Auto,
             codec: Codec::Auto,
             player_offset_ms: Arc::new(AtomicI64::new(0)),
-            backend,
             load_error: None,
             is_live: false,
-            tokens: None,
-            channel: None,
-            auth_status: "未ログイン".to_string(),
-            auth_busy: false,
-            auth_tx,
-            auth_rx,
+            account: account::Account::new(backend),
             chat: None,
             recommend_items: Vec::new(),
             recommend_tx,
@@ -217,7 +203,7 @@ impl Controller {
         // 自動ログイン中（tokens 未確定）は解決を保留する。ここで匿名解決すると
         // bot ゲート(LOGIN_REQUIRED)で members/年齢制限はもちろん、多くの通常動画まで
         // 再生不可になる。ログイン確定後に access_token 付きで解決すれば回避できる。
-        if self.tokens.is_none() && self.auth_busy {
+        if self.account.token().is_none() && self.account.is_busy() {
             self.pending_resolve = Some(url);
         } else {
             self.start_resolve(url);
@@ -227,22 +213,7 @@ impl Controller {
     /// 現在の `current_url` の動画を再生履歴に載せる（背景スレッドで投げっぱなし）。
     /// ログインしていない、または URL から video_id を取れなければ何もしない。
     pub fn start_mark_watched_if_logged_in(&self) {
-        let Some(tokens) = self.tokens.as_ref() else {
-            eprintln!("[mark_watched] skip: not logged in (current_url={})", self.current_url);
-            return;
-        };
-        let Some(video_id) = auth::extract_video_id(&self.current_url) else {
-            eprintln!("[mark_watched] skip: no video_id in url={}", self.current_url);
-            return;
-        };
-        eprintln!("[mark_watched] spawn for {video_id}");
-        let access_token = tokens.access_token.clone();
-        std::thread::spawn(move || {
-            match mark_watched::mark_watched(&access_token, &video_id) {
-                Ok(_) => eprintln!("[mark_watched] ok ({video_id})"),
-                Err(e) => eprintln!("[mark_watched] fail ({video_id}): {e}"),
-            }
-        });
+        account::start_mark_watched_if_logged_in(self.account.token(), &self.current_url);
     }
 
     /// 解決を常駐ワーカーに依頼する。ログイン中なら access_token を渡し、
@@ -253,7 +224,7 @@ impl Controller {
             url,
             quality: self.quality,
             codec: self.codec,
-            access_token: self.tokens.as_ref().map(|t| t.access_token.clone()),
+            access_token: self.account.token().map(|t| t.to_string()),
         });
     }
 
@@ -327,21 +298,12 @@ impl Controller {
         }
     }
 
-    /// 背景スレッドからの結果を取り込む。
+    /// 背景スレッドからの結果を取り込み、跨ぎイベントを routing する
+    /// （D4 で `flows::on_logged_in` に昇格する予定の過渡期の配線）。
     pub fn poll_auth(&mut self) {
-        while let Ok(msg) = self.auth_rx.try_recv() {
-            match msg {
-                AuthMsg::LoggedIn { tokens, channel } => {
-                    if let Some(rt) = &tokens.refresh_token {
-                        auth::save_refresh_token(rt);
-                    }
-                    self.tokens = Some(tokens);
-                    self.channel = channel;
-                    self.auth_busy = false;
-                    self.auth_status = match &self.channel {
-                        Some(name) => format!("ログイン中: {name}"),
-                        None => "ログイン済み".to_string(),
-                    };
+        for ev in account::poll(&mut self.account) {
+            match ev {
+                account::AccountEvent::LoggedIn => {
                     // CLI 引数経由で既に load() を通った動画がここで履歴に載る。
                     self.start_mark_watched_if_logged_in();
                     // ログイン確定＝おすすめ（ホームフィード）を先読みしておく（動画非依存）。
@@ -351,17 +313,7 @@ impl Controller {
                         self.start_resolve(url);
                     }
                 }
-                AuthMsg::Like { ok, msg, tokens } => {
-                    if let Some(t) = tokens {
-                        self.tokens = Some(t);
-                    }
-                    self.auth_busy = false;
-                    self.auth_status = msg;
-                    let _ = ok;
-                }
-                AuthMsg::Failed(e) => {
-                    self.auth_busy = false;
-                    self.auth_status = format!("エラー: {e}");
+                account::AccountEvent::LoginFailed => {
                     // ログインに失敗しても、保留中の動画は匿名で解決を試みる（最善努力）。
                     if let Some(url) = self.pending_resolve.take() {
                         self.start_resolve(url);
@@ -373,42 +325,12 @@ impl Controller {
 
     /// ログイン（ブラウザで承認 → バックエンドでトークン取得 → チャンネル名取得）を背景で開始。
     pub fn start_login(&mut self) {
-        self.auth_busy = true;
-        self.auth_status = "ブラウザで承認してください…".to_string();
-        let backend = self.backend.clone();
-        let tx = self.auth_tx.clone();
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            let result = auth::login(&backend).map(|tokens| {
-                let channel = auth::my_channel_title(&tokens.access_token).ok();
-                (tokens, channel)
-            });
-            let _ = match result {
-                Ok((tokens, channel)) => tx.send(AuthMsg::LoggedIn { tokens, channel }),
-                Err(e) => tx.send(AuthMsg::Failed(e.to_string())),
-            };
-            let _ = proxy.send_event(UserEvent::Background);
-        });
+        account::start_login(&mut self.account, &self.waker);
     }
 
     /// 保存済みリフレッシュトークンで自動ログインを背景で開始。
     pub fn start_silent_login(&mut self, refresh_token: String) {
-        self.auth_busy = true;
-        self.auth_status = "ログイン情報を復元中…".to_string();
-        let backend = self.backend.clone();
-        let tx = self.auth_tx.clone();
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            let result = auth::refresh(&backend, &refresh_token).map(|tokens| {
-                let channel = auth::my_channel_title(&tokens.access_token).ok();
-                (tokens, channel)
-            });
-            let _ = match result {
-                Ok((tokens, channel)) => tx.send(AuthMsg::LoggedIn { tokens, channel }),
-                Err(e) => tx.send(AuthMsg::Failed(e.to_string())),
-            };
-            let _ = proxy.send_event(UserEvent::Background);
-        });
+        account::start_silent_login(&mut self.account, refresh_token, &self.waker);
     }
 
     /// チャット更新を取り込む。NotLive を受けたらセッションを破棄する（Drop がポーラーを止める）。
@@ -501,22 +423,14 @@ impl Controller {
     /// 動画を「後で見る」に保存する（ケバブメニュー）。結果は待たない（fire-and-forget、
     /// 失敗してもオーバーレイをブロックしない。将来的にトースト等で通知してもよい）。
     pub fn save_watch_later(&self, video_id: String) {
-        let Some(tokens) = &self.tokens else { return };
-        let access_token = tokens.access_token.clone();
-        std::thread::spawn(move || match subscriptions::add_to_watch_later(&access_token, &video_id) {
-            Ok(()) => eprintln!("[menu] 後で見るに保存 ok ({video_id})"),
-            Err(e) => eprintln!("[menu] 後で見る保存に失敗: {e:#}"),
-        });
+        let Some(token) = self.account.token() else { return };
+        account::save_watch_later(token, video_id);
     }
 
     /// feedbackToken を送信する（興味なし／チャンネルをおすすめに表示しない）。fire-and-forget。
     pub fn send_card_feedback(&self, token: String) {
-        let Some(tokens) = &self.tokens else { return };
-        let access_token = tokens.access_token.clone();
-        std::thread::spawn(move || match subscriptions::send_feedback(&access_token, &token) {
-            Ok(()) => eprintln!("[menu] フィードバック送信 ok"),
-            Err(e) => eprintln!("[menu] フィードバック送信に失敗: {e:#}"),
-        });
+        let Some(access_token) = self.account.token() else { return };
+        account::send_card_feedback(access_token, token);
     }
 
     /// チャンネルアバターの解決結果を取り込む（名前→URL）。
@@ -555,13 +469,13 @@ impl Controller {
     /// おすすめ（ホームフィード FEwhat_to_watch）を背景スレッドで取得する。要ログイン。
     /// 動画再生とは無関係で、ログイン確定時や一覧を開いた時に呼ぶ。
     pub fn start_recommend(&mut self) {
-        let Some(tokens) = &self.tokens else {
+        let Some(token) = self.account.token() else {
             self.recommend_status = "先にログインしてください".to_string();
             return;
         };
         self.recommend_items.clear();
         self.recommend_status = "おすすめ取得中…".to_string();
-        let access_token = tokens.access_token.clone();
+        let access_token = token.to_string();
         let tx = self.recommend_tx.clone();
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
@@ -592,7 +506,7 @@ impl Controller {
     /// 登録チャンネルタブのデータを背景スレッドで取得する。
     /// 新着フィード（右ペイン既定）とチャンネルリスト（左）を並行取得する。
     pub fn start_subs(&mut self) {
-        let Some(tokens) = &self.tokens else {
+        let Some(token) = self.account.token() else {
             self.sub_status = "先にログインしてください".to_string();
             return;
         };
@@ -606,7 +520,7 @@ impl Controller {
         // 新着フィード（InnerTube FEsubscriptions）。
         let tx = self.sub_tx.clone();
         let proxy = self.proxy.clone();
-        let token = tokens.access_token.clone();
+        let token = token.to_string();
         std::thread::spawn(move || {
             subscriptions::fetch_subscription_feed(&token, &tx);
             let _ = proxy.send_event(UserEvent::Background);
@@ -652,7 +566,7 @@ impl Controller {
 
     /// 再生履歴を背景スレッドで取得する。
     pub fn start_history(&mut self) {
-        let Some(tokens) = &self.tokens else {
+        let Some(token) = self.account.token() else {
             self.history_status = "先にログインしてください".to_string();
             return;
         };
@@ -663,7 +577,7 @@ impl Controller {
         self.history_status = "再生履歴を取得中…".to_string();
         self.history_visible = true;
 
-        let access_token = tokens.access_token.clone();
+        let access_token = token.to_string();
         let tx = self.history_tx.clone();
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
@@ -698,7 +612,7 @@ impl Controller {
 
     /// 自分の再生リスト一覧を背景スレッドで取得する。
     pub fn start_playlist_list(&mut self) {
-        let Some(tokens) = &self.tokens else {
+        let Some(token) = self.account.token() else {
             self.playlist_status = "先にログインしてください".to_string();
             return;
         };
@@ -712,7 +626,7 @@ impl Controller {
         self.playlist_status = "再生リスト取得中…".to_string();
         self.playlist_visible = true;
 
-        let access_token = tokens.access_token.clone();
+        let access_token = token.to_string();
         let tx = self.playlist_tx.clone();
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
@@ -723,7 +637,7 @@ impl Controller {
 
     /// 選択した再生リストの動画一覧を背景スレッドで取得する。
     pub fn start_playlist_items(&mut self, playlist_id: String, title: String) {
-        let Some(tokens) = &self.tokens else {
+        let Some(token) = self.account.token() else {
             return;
         };
         if self.playlist_busy {
@@ -732,7 +646,7 @@ impl Controller {
         self.playlist_busy = true;
         self.playlist_status = format!("{title} を読み込み中…");
 
-        let access_token = tokens.access_token.clone();
+        let access_token = token.to_string();
         let tx = self.playlist_tx.clone();
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
@@ -748,40 +662,7 @@ impl Controller {
 
     /// 現在の動画に高評価を付ける（必要ならトークンを更新してから）を背景で開始。
     pub fn start_like(&mut self, video_id: String) {
-        let Some(tokens) = self.tokens.clone() else {
-            self.auth_status = "先にログインしてください".to_string();
-            return;
-        };
-        self.auth_busy = true;
-        self.auth_status = "高評価を送信中…".to_string();
-        let backend = self.backend.clone();
-        let tx = self.auth_tx.clone();
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            let result = (|| -> Result<auth::Tokens> {
-                let mut t = tokens;
-                if t.is_expired() {
-                    if let Some(rt) = t.refresh_token.clone() {
-                        t = auth::refresh(&backend, &rt)?;
-                    }
-                }
-                auth::rate_video(&t.access_token, &video_id, "like")?;
-                Ok(t)
-            })();
-            let _ = match result {
-                Ok(t) => tx.send(AuthMsg::Like {
-                    ok: true,
-                    msg: "👍 高評価しました".to_string(),
-                    tokens: Some(t),
-                }),
-                Err(e) => tx.send(AuthMsg::Like {
-                    ok: false,
-                    msg: format!("高評価に失敗: {e}"),
-                    tokens: None,
-                }),
-            };
-            let _ = proxy.send_event(UserEvent::Background);
-        });
+        account::start_like(&mut self.account, video_id, &self.waker);
     }
 
 }

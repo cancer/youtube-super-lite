@@ -24,20 +24,6 @@ enum UserEvent {
     Background,
 }
 
-/// 背景スレッド（OAuth / API 呼び出し）からの結果。
-enum AuthMsg {
-    LoggedIn {
-        tokens: ysl_core::yt::auth::Tokens,
-        channel: Option<String>,
-    },
-    Like {
-        ok: bool,
-        msg: String,
-        tokens: Option<ysl_core::yt::auth::Tokens>,
-    },
-    Failed(String),
-}
-
 /// CLI 引数のパース結果。
 struct CliArgs {
     url: Option<String>,
