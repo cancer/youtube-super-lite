@@ -2,7 +2,6 @@
 // デバッグビルドはログ確認のためコンソールを残す。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod controller;
 #[cfg(windows)]
 mod design;
 mod devtools;

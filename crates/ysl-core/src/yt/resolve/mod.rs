@@ -45,13 +45,16 @@ pub enum ResolveUpdate {
     Error(String),
 }
 
-/// 解決リクエスト（メイン → ワーカー）。
+/// 解決リクエスト（メイン → ワーカー）。`reply` はリクエストごとに呼び出し側が生成する
+/// （再生セッションごとに rx を作るため。前セッション宛の遅延応答は破棄済み rx と一緒に
+/// 構造的に死ぬ）。
 pub struct ResolveRequest {
     pub url: String,
     pub quality: Quality,
     pub codec: Codec,
     /// ログイン中なら OAuth access_token（認証経路で TVHTML5 に Bearer 付与）。
     pub access_token: Option<String>,
+    pub reply: Sender<ResolveUpdate>,
 }
 
 /// 常駐解決器へのハンドル。リクエストを送るだけ。
@@ -61,10 +64,10 @@ pub struct ResolverHandle {
 
 impl ResolverHandle {
     /// 解決器ワーカーをアプリ起動時に 1 回だけ起動する（M15）。
-    /// 結果は `update_tx` に流し、メインスレッドを起こすため `waker` を呼ぶ。
-    pub fn spawn(update_tx: Sender<ResolveUpdate>, waker: Waker) -> Self {
+    /// 結果は各リクエストに同梱された `reply` に流し、メインスレッドを起こすため `waker` を呼ぶ。
+    pub fn spawn(waker: Waker) -> Self {
         let (req_tx, req_rx) = std::sync::mpsc::channel::<ResolveRequest>();
-        std::thread::spawn(move || worker_loop(req_rx, update_tx, waker));
+        std::thread::spawn(move || worker_loop(req_rx, waker));
         Self { req_tx }
     }
 
@@ -75,11 +78,7 @@ impl ResolverHandle {
 }
 
 /// 常駐ワーカー本体。HTTP クライアントと nsig エンジンを保持し続ける。
-fn worker_loop(
-    req_rx: Receiver<ResolveRequest>,
-    update_tx: Sender<ResolveUpdate>,
-    waker: Waker,
-) {
+fn worker_loop(req_rx: Receiver<ResolveRequest>, waker: Waker) {
     // cookie_store: youtube.com 訪問で得る VISITOR_INFO1_LIVE 等を保持し、以後の player 要求に乗せる。
     let http = match reqwest::blocking::Client::builder()
         .timeout(StdDuration::from_secs(20))
@@ -88,7 +87,7 @@ fn worker_loop(
     {
         Ok(c) => c,
         Err(e) => {
-            let _ = update_tx.send(ResolveUpdate::Error(format!("HTTP クライアント生成失敗: {e}")));
+            eprintln!("[resolve] HTTP クライアント生成失敗: {e}");
             return;
         }
     };
@@ -112,11 +111,11 @@ fn worker_loop(
             // YouTube 以外は素通し（resolve_one が Ok を返す）。
             match resolve_one(&http, &mut nsig, &req, visitor.as_deref()) {
                 Ok((resolved, title, is_live)) => {
-                    let _ = update_tx.send(ResolveUpdate::Ready(resolved));
-                    let _ = update_tx.send(ResolveUpdate::Meta { title, is_live });
+                    let _ = req.reply.send(ResolveUpdate::Ready(resolved));
+                    let _ = req.reply.send(ResolveUpdate::Meta { title, is_live });
                 }
                 Err(e) => {
-                    let _ = update_tx.send(ResolveUpdate::Error(e.to_string()));
+                    let _ = req.reply.send(ResolveUpdate::Error(e.to_string()));
                 }
             }
             waker();
@@ -131,12 +130,12 @@ fn worker_loop(
         match resolve_one(&http, &mut nsig, &req, visitor.as_deref()) {
             Ok((resolved, title, is_live)) => {
                 // native を即再生。サイドカー結果は Fallback として控える（再生失敗時の即切替用）。
-                let _ = update_tx.send(ResolveUpdate::Ready(resolved));
-                let _ = update_tx.send(ResolveUpdate::Meta { title, is_live });
+                let _ = req.reply.send(ResolveUpdate::Ready(resolved));
+                let _ = req.reply.send(ResolveUpdate::Meta { title, is_live });
                 if let Some((child, stdout)) = sc {
                     if let Ok((child, fb, _t, _l)) = read_sidecar_ready(child, stdout) {
                         current_sidecar = Some(child);
-                        let _ = update_tx.send(ResolveUpdate::Fallback(fb));
+                        let _ = req.reply.send(ResolveUpdate::Fallback(fb));
                     }
                 }
             }
@@ -144,16 +143,16 @@ fn worker_loop(
             Err(native_err) => match sc.map(|(c, o)| read_sidecar_ready(c, o)) {
                 Some(Ok((child, resolved, title, is_live))) => {
                     current_sidecar = Some(child);
-                    let _ = update_tx.send(ResolveUpdate::Ready(resolved));
-                    let _ = update_tx.send(ResolveUpdate::Meta { title, is_live });
+                    let _ = req.reply.send(ResolveUpdate::Ready(resolved));
+                    let _ = req.reply.send(ResolveUpdate::Meta { title, is_live });
                 }
                 Some(Err(side_err)) => {
-                    let _ = update_tx.send(ResolveUpdate::Error(format!(
+                    let _ = req.reply.send(ResolveUpdate::Error(format!(
                         "解決失敗（native: {native_err} / sidecar: {side_err}）"
                     )));
                 }
                 None => {
-                    let _ = update_tx.send(ResolveUpdate::Error(format!("解決失敗: {native_err}")));
+                    let _ = req.reply.send(ResolveUpdate::Error(format!("解決失敗: {native_err}")));
                 }
             },
         }

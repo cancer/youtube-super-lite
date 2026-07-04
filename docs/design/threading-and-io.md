@@ -4,17 +4,22 @@
 
 ## 基本方針
 
-このプロジェクトは async ランタイム（tokio 等）を使わず、**OS スレッド + `std::sync::mpsc` + winit の
-`EventLoopProxy`** で非同期処理を組んでいる。
+このプロジェクトは async ランタイム（tokio 等）を使わず、**OS スレッド + `std::sync::mpsc` + `Waker`**
+で非同期処理を組んでいる。`Waker`（`crates/ysl-core::Waker` = `Arc<dyn Fn() + Send + Sync>`）は、
+lib が winit に依存できないことの帰結で、bin 側が winit の `EventLoopProxy` を包んで各ドメインの
+`start_*` に注入する抽象。
 
 パターンは共通で、以下の形を取る:
 
-1. `Controller`（またはその呼び出し元）が `std::thread::spawn` でバックグラウンドスレッドを起動する
+1. 各ドメインの `start_*` system 関数（例: `content::start_recommend`, `account::start_login`）が
+   `std::thread::spawn` でバックグラウンドスレッドを起動する
 2. スレッドは `reqwest::blocking::Client` などブロッキングI/Oで処理を行う
-3. 結果を機能ごとの `mpsc::Sender` で送る（例: `ChatUpdate` / `RecommendUpdate` / `SubUpdate` /
-   `HistoryUpdate` / `PlaylistUpdate` / `ResolveUpdate` / `AuthMsg`）
-4. 送信後、winit の `EventLoopProxy::send_event(UserEvent::Background)` でメインループを起こす
-5. メインループ側（`native_app` / `Controller`）は起床のたびに各チャンネルを `try_recv()` でポーリングし、
+3. 結果を機能ごとの `mpsc::Sender` で送る（例: `chat::ChatUpdate` / `content::FeedUpdate<T>`
+   （旧 `RecommendUpdate`/`SubUpdate`/`HistoryUpdate` を統一）/ `playlist::PlaylistUpdate` /
+   `resolve::ResolveUpdate` / `account::AuthMsg`）
+4. 送信後、注入された `Waker` を呼んでメインループを起こす（bin 側で winit の
+   `EventLoopProxy::send_event(UserEvent::Background)` に変換される）
+5. メインループ側（`native_app::NativeRunning`）は起床のたびに各ドメインの `poll_*` system 関数を呼び、
    結果を状態へ反映する
 
 この設計により、メインスレッド（winit のイベントループ）は一切ブロッキング I/O を行わず、CPU バウンドな
