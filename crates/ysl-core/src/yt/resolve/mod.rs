@@ -20,9 +20,9 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration as StdDuration;
-use winit::event_loop::EventLoopProxy;
 
-use crate::{Codec, Quality, UserEvent};
+use crate::types::{Codec, Quality};
+use crate::Waker;
 
 /// 解決済みのストリーム情報。
 #[derive(Clone, Debug)]
@@ -61,10 +61,10 @@ pub struct ResolverHandle {
 
 impl ResolverHandle {
     /// 解決器ワーカーをアプリ起動時に 1 回だけ起動する（M15）。
-    /// 結果は `update_tx` に流し、メインスレッドを起こすため `proxy` に Background を送る。
-    pub fn spawn(update_tx: Sender<ResolveUpdate>, proxy: EventLoopProxy<UserEvent>) -> Self {
+    /// 結果は `update_tx` に流し、メインスレッドを起こすため `waker` を呼ぶ。
+    pub fn spawn(update_tx: Sender<ResolveUpdate>, waker: Waker) -> Self {
         let (req_tx, req_rx) = std::sync::mpsc::channel::<ResolveRequest>();
-        std::thread::spawn(move || worker_loop(req_rx, update_tx, proxy));
+        std::thread::spawn(move || worker_loop(req_rx, update_tx, waker));
         Self { req_tx }
     }
 
@@ -78,7 +78,7 @@ impl ResolverHandle {
 fn worker_loop(
     req_rx: Receiver<ResolveRequest>,
     update_tx: Sender<ResolveUpdate>,
-    proxy: EventLoopProxy<UserEvent>,
+    waker: Waker,
 ) {
     // cookie_store: youtube.com 訪問で得る VISITOR_INFO1_LIVE 等を保持し、以後の player 要求に乗せる。
     let http = match reqwest::blocking::Client::builder()
@@ -119,7 +119,7 @@ fn worker_loop(
                     let _ = update_tx.send(ResolveUpdate::Error(e.to_string()));
                 }
             }
-            let _ = proxy.send_event(UserEvent::Background);
+            waker();
             continue;
         }
 
@@ -158,7 +158,7 @@ fn worker_loop(
             },
         }
         // メインスレッドの poll_resolve を回すため起床させる。
-        let _ = proxy.send_event(UserEvent::Background);
+        waker();
     }
 }
 

@@ -106,7 +106,7 @@ pub fn login(backend: &str) -> Result<Tokens> {
         urlencode(&state),
     );
 
-    crate::open_in_browser(&auth_url);
+    open_in_browser(&auth_url);
 
     let (mut stream, _) = listener.accept()?;
     let mut request_line = String::new();
@@ -218,7 +218,7 @@ pub fn extract_video_id(url: &str) -> Option<String> {
 
 // --- リフレッシュトークンの保存/読み込み（パッケージ外の設定ディレクトリ）---
 
-pub(crate) fn config_dir() -> PathBuf {
+pub fn config_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
@@ -251,6 +251,29 @@ pub fn load_refresh_token() -> Option<String> {
     let data = std::fs::read_to_string(token_store_path()).ok()?;
     let v: serde_json::Value = serde_json::from_str(&data).ok()?;
     v["refresh_token"].as_str().map(|s| s.to_string())
+}
+
+/// 既定ブラウザで URL を開く（OAuth 承認画面の表示に使う）。
+fn open_in_browser(url: &str) {
+    if url.is_empty() {
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // `cmd /C start "" <url>` は URL 中の `&`（OAuth URL に多数ある）を cmd が
+        // コマンド区切りと解釈して URL が途中で切れてしまう。rundll32 の
+        // FileProtocolHandler は URL を単一引数として受け取るため安全に既定ブラウザで開ける。
+        // CREATE_NO_WINDOW: GUI アプリから起動してもコンソール窓を出さない。
+        let _ = std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
+            .creation_flags(0x0800_0000)
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(url).spawn();
+    }
 }
 
 // --- URL ユーティリティ ---

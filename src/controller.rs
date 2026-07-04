@@ -11,10 +11,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::event_loop::EventLoopProxy;
 
-use crate::{
-    auth, chat, gpu_usage, history, mark_watched, player, playlist, recommend, resolve,
-    subscriptions,
-};
+use ysl_core::yt::{auth, chat, history, mark_watched, playlist, recommend, resolve, subscriptions};
+use ysl_core::{gpu_usage, player};
 use crate::{AuthMsg, Codec, Quality, UserEvent, CHAT_MAX_MESSAGES};
 
 /// UI 非依存のアプリ状態 + ロジック。
@@ -124,7 +122,11 @@ impl Controller {
         let (playlist_tx, playlist_rx) = std::sync::mpsc::channel();
         let (resolve_tx, resolve_rx) = std::sync::mpsc::channel();
         // 解決器ワーカーを起動時に 1 回だけ起動（long-lived = boa/HTTP/base.js を常駐保持）。
-        let resolve_handle = resolve::ResolverHandle::spawn(resolve_tx, proxy.clone());
+        // lib は winit を知らないため、proxy を Waker（Arc<dyn Fn() + Send + Sync>）に包んで渡す。
+        let waker_proxy = proxy.clone();
+        let waker: ysl_core::Waker =
+            Arc::new(move || { let _ = waker_proxy.send_event(UserEvent::Background); });
+        let resolve_handle = resolve::ResolverHandle::spawn(resolve_tx, waker);
         Self {
             player,
             proxy,

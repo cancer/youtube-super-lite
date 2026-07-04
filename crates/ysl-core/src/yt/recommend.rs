@@ -29,7 +29,7 @@ pub struct VideoItem {
     pub verified: bool,
     /// ケバブメニュー用データ（実チャンネルID／興味なし・非表示の feedbackToken）。
     /// 認証済みホームフィードの tile にのみ実在。無ければ既定値（全 None）。
-    pub menu: crate::subscriptions::CardMenu,
+    pub menu: super::subscriptions::CardMenu,
 }
 
 /// 背景スレッドからメインスレッドへの通知。
@@ -156,12 +156,12 @@ fn parse_tile(tile: &Value) -> Option<VideoItem> {
     if title.is_empty() {
         return None;
     }
-    let channel = crate::subscriptions::tile_line(tile, 0);
+    let channel = super::subscriptions::tile_line(tile, 0);
     let thumbnail =
-        crate::subscriptions::pick_largest_thumbnail(tile.pointer("/header/tileHeaderRenderer/thumbnail"));
-    let (duration, live) = crate::subscriptions::tile_duration_live(tile);
-    let meta = crate::subscriptions::tile_meta(tile);
-    let menu = crate::subscriptions::tile_menu(tile);
+        super::subscriptions::pick_largest_thumbnail(tile.pointer("/header/tileHeaderRenderer/thumbnail"));
+    let (duration, live) = super::subscriptions::tile_duration_live(tile);
+    let meta = super::subscriptions::tile_meta(tile);
+    let menu = super::subscriptions::tile_menu(tile);
 
     Some(VideoItem {
         video_id,

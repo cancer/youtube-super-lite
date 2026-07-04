@@ -37,7 +37,7 @@ pub struct HistoryItem {
     /// tile 2 行目（視聴回数/経過時間など）。
     pub meta: Option<String>,
     /// ケバブメニュー用データ（実データ未確認の surface のため通常は既定値＝全 None）。
-    pub menu: crate::subscriptions::CardMenu,
+    pub menu: super::subscriptions::CardMenu,
 }
 
 pub enum HistoryUpdate {
@@ -98,12 +98,12 @@ fn fetch_inner(access_token: &str) -> Result<Vec<HistoryItem>> {
             .to_string();
         // lines[0] がチャンネル名。
         let channel = extract_line(tile, 0);
-        let thumbnail = crate::subscriptions::pick_largest_thumbnail(
+        let thumbnail = super::subscriptions::pick_largest_thumbnail(
             tile.pointer("/header/tileHeaderRenderer/thumbnail"),
         );
-        let (duration, live) = crate::subscriptions::tile_duration_live(tile);
-        let meta = crate::subscriptions::tile_meta(tile);
-        let menu = crate::subscriptions::tile_menu(tile);
+        let (duration, live) = super::subscriptions::tile_duration_live(tile);
+        let meta = super::subscriptions::tile_meta(tile);
+        let menu = super::subscriptions::tile_menu(tile);
 
         out.push(HistoryItem {
             video_id: video_id.to_string(),

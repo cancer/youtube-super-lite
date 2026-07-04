@@ -10,7 +10,7 @@
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 
-use crate::{Codec, Quality};
+use crate::types::{Codec, Quality};
 
 const PLAYER_ENDPOINT: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 
@@ -197,7 +197,7 @@ fn format_url(f: &Value) -> Option<String> {
     if let Some(sc) = f.get("signatureCipher").and_then(Value::as_str) {
         for pair in sc.split('&') {
             if let Some(v) = pair.strip_prefix("url=") {
-                return Some(crate::resolve::urldecode(v));
+                return Some(super::urldecode(v));
             }
         }
     }

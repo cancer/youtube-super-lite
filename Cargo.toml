@@ -8,34 +8,27 @@ description = "A YouTube video player written in Rust (libmpv backend)"
 # - GPL-3.0 / rquickjs(C) を本体バイナリに混ぜない（本体は MIT 系・純Rust のまま）
 # - YouTube 仕様変化への追従は rustypipe 更新＝サイドカーのみ再ビルドで済ませる（将来 CI 自動化）
 [workspace]
-members = ["resolver-sidecar"]
+members = ["resolver-sidecar", "crates/ysl-core"]
 
 [dependencies]
+# UI 非依存コア（ドメイン state・system・InnerTube API 群・player・resolve）。
+# winit に依存しないレイヤー境界はこのクレート分割で強制する（docs/design/design-principles.md）。
+ysl-core = { path = "crates/ysl-core" }
+
 # Windowing / event loop（ウィンドウ生成と HWND 取得。描画は mpv(D3D11)+Direct2D）
 winit = "0.30"
 raw-window-handle = "0.6"
 
-# mpv bindings (maintained fork of libmpv-rs)
-libmpv2 = "6"
-
-# YouTube Data API (OAuth + 高評価など)。native-tls(schannel) で ring/nasm を回避。
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "native-tls", "json", "cookies"] }
+# state_json 等 UI 側のシリアライズで使用。
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# src/bin/ 配下の調査用プローブ（PoC U1/U5/U7）が InnerTube に直接アクセスするために使う。
+# 独立バイナリだが同一パッケージのため root 側にも必要。
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "native-tls", "json", "cookies"] }
+
 # Error handling
 anyhow = "1"
-dash-mpd = { version = "0.20.3", default-features = false }
-
-# ネイティブ YouTube 解決器の nsig(n パラメータ)変換用 純Rust JS エンジン。
-# 認証経路(TVHTML5)でのみ base.js 全体をロードして実行する。NsigEngine トレイト越しに
-# 隔離してあり、必要なら rquickjs 等へ差し替え可能（src/resolve/nsig.rs 参照）。
-boa_engine = "0.20"
-
-# 再生履歴記録 (mark_watched) で使用。url はクエリパラメータの追加・上書き、
-# rand は yt-dlp 互換の CPN（16 文字ランダム）生成のため。
-url = "2"
-rand = "0.8"
 
 # dev-tools (--enable-dev-tools): ローカル HTTP でスクリーンショット取得・UI 操作注入を行い、
 # 外部の screencapture/cliclick に依存せず curl だけで検証フローを回す。
