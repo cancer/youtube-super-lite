@@ -99,8 +99,12 @@ pub fn set_codec(pb: &mut Playback, c: Codec) {
     pb.codec = c;
 }
 
-/// system: ログイン待ちで解決を保留する（auth レース対策）。
+/// system: ログイン待ちで解決を保留する（auth レース対策）。旧 `Controller::load` は保留する
+/// か否かに関わらず先頭で current_url 等の帳簿を取っていたため、ここでも `begin_load` を通す
+/// （さもないと current_url が古いまま残り、ログイン確定時の mark_watched/chat 接続が
+/// 前の動画に誤って向く）。
 pub fn hold(pb: &mut Playback, url: String) {
+    begin_load(pb, url.clone());
     pb.pending_resolve = Some(url);
 }
 
