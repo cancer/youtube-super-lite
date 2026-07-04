@@ -534,7 +534,7 @@ impl NativeRunning {
             }
             "chat_scroll_up" | "chat_scroll_down" => {
                 let d: i32 = if name == "chat_scroll_up" { 3 } else { -3 };
-                let max = self.core.chat_messages.len().saturating_sub(1);
+                let max = self.core.chat.as_ref().map_or(0, |c| c.messages().len()).saturating_sub(1);
                 self.chat_scroll = ((self.chat_scroll as i32 + d).max(0) as usize).min(max);
                 true
             }
@@ -708,8 +708,8 @@ impl NativeRunning {
             "chat_font_px": self.chat_font_px,
             "chat_width_ratio": self.chat_width_ratio,
             "chat_scroll": self.chat_scroll,
-            "chat_available": !self.core.chat_status.is_empty(),
-            "chat_messages": self.core.chat_messages.len(),
+            "chat_available": self.core.chat.as_ref().is_some_and(|c| c.available()),
+            "chat_messages": self.core.chat.as_ref().map_or(0, |c| c.messages().len()),
             "list_open": self.list_open,
             "list_source": source,
             "list_sel": self.list_sel,
@@ -939,7 +939,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                             _state.core.player.set_video_margin_right(m as f64);
                         }
                         OverlayAction::ChatScroll(d) => {
-                            let max = _state.core.chat_messages.len().saturating_sub(1);
+                            let max = _state.core.chat.as_ref().map_or(0, |c| c.messages().len()).saturating_sub(1);
                             _state.chat_scroll =
                                 ((_state.chat_scroll as i32 + d).max(0) as usize).min(max);
                         }
@@ -988,14 +988,17 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 };
                 // チャット行（dcomp 用に整形。連続テキストは 1 セグメントに統合）。
                 let chat_open = _state.chat_open;
-                let chat_available = !_state.core.chat_status.is_empty();
+                let chat_available = _state.core.chat.as_ref().is_some_and(|c| c.available());
                 let chat_scroll = _state.chat_scroll;
                 let chat_width_ratio = _state.chat_width_ratio;
                 let chat_lines: Vec<crate::dcomp_overlay::ChatLine> = if chat_open {
                     use crate::dcomp_overlay::{ChatLine as DLine, ChatSeg as DSeg};
                     _state
                         .core
-                        .chat_messages
+                        .chat
+                        .as_ref()
+                        .map(|c| c.messages())
+                        .unwrap_or(&[])
                         .iter()
                         .map(|m| {
                             let mut segs: Vec<DSeg> = Vec::new();

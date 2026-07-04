@@ -11,15 +11,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::event_loop::EventLoopProxy;
 
-use ysl_core::yt::{auth, chat, history, mark_watched, playlist, recommend, resolve, subscriptions};
-use ysl_core::{gpu_usage, player};
-use crate::{AuthMsg, Codec, Quality, UserEvent, CHAT_MAX_MESSAGES};
+use ysl_core::yt::{auth, history, mark_watched, playlist, recommend, resolve, subscriptions};
+use ysl_core::{chat, gpu_usage, player};
+use crate::{AuthMsg, Codec, Quality, UserEvent};
 
 /// UI 非依存のアプリ状態 + ロジック。
 pub struct Controller {
     /// 動画プレイヤー（mpv + 描画先テクスチャを内包）。
     pub player: player::Player,
     pub proxy: EventLoopProxy<UserEvent>,
+    /// 背景スレッドがメインループを起こすためのコールバック。lib（ysl-core）は winit を
+    /// 知らないため、proxy をこれに包んで各ドメインの `start_*` に渡す。
+    pub waker: ysl_core::Waker,
     /// 現在再生中の URL（ブラウザで YouTube を開くナビゲーション等に使う）。
     pub current_url: String,
     /// 画質・コーデック指定（解決器のフォーマット選択に使う）。
@@ -40,12 +43,9 @@ pub struct Controller {
     pub auth_tx: Sender<AuthMsg>,
     pub auth_rx: Receiver<AuthMsg>,
     // --- ライブチャット ---
-    pub chat_messages: Vec<chat::ChatMessage>,
-    pub chat_tx: Sender<chat::ChatUpdate>,
-    pub chat_rx: Receiver<chat::ChatUpdate>,
-    pub chat_stop: Option<chat::ChatStop>,
-    pub chat_status: String,
-    pub chat_visible: bool,
+    /// 1 動画 : 1 セッション。`None` にする（≠フィールドの手動リセット）ことが「停止」の全て
+    /// （`ChatSession::drop` が RAII でポーラーを止める）。
+    pub chat: Option<chat::ChatSession>,
     // --- おすすめ動画 ---
     pub recommend_items: Vec<recommend::VideoItem>,
     pub recommend_tx: Sender<recommend::RecommendUpdate>,
@@ -113,7 +113,6 @@ impl Controller {
     /// `Player` でも同じく駆動できる（描画方式に依存しない）。
     pub fn new(player: player::Player, proxy: EventLoopProxy<UserEvent>, backend: String) -> Self {
         let (auth_tx, auth_rx) = std::sync::mpsc::channel();
-        let (chat_tx, chat_rx) = std::sync::mpsc::channel();
         let (recommend_tx, recommend_rx) = std::sync::mpsc::channel();
         let (avatar_tx, avatar_rx) = std::sync::mpsc::channel();
         let (channel_tx, channel_rx) = std::sync::mpsc::channel();
@@ -121,15 +120,16 @@ impl Controller {
         let (history_tx, history_rx) = std::sync::mpsc::channel();
         let (playlist_tx, playlist_rx) = std::sync::mpsc::channel();
         let (resolve_tx, resolve_rx) = std::sync::mpsc::channel();
-        // 解決器ワーカーを起動時に 1 回だけ起動（long-lived = boa/HTTP/base.js を常駐保持）。
         // lib は winit を知らないため、proxy を Waker（Arc<dyn Fn() + Send + Sync>）に包んで渡す。
         let waker_proxy = proxy.clone();
         let waker: ysl_core::Waker =
             Arc::new(move || { let _ = waker_proxy.send_event(UserEvent::Background); });
-        let resolve_handle = resolve::ResolverHandle::spawn(resolve_tx, waker);
+        // 解決器ワーカーを起動時に 1 回だけ起動（long-lived = boa/HTTP/base.js を常駐保持）。
+        let resolve_handle = resolve::ResolverHandle::spawn(resolve_tx, waker.clone());
         Self {
             player,
             proxy,
+            waker,
             current_url: String::new(),
             quality: Quality::Auto,
             codec: Codec::Auto,
@@ -143,12 +143,7 @@ impl Controller {
             auth_busy: false,
             auth_tx,
             auth_rx,
-            chat_messages: Vec::new(),
-            chat_tx,
-            chat_rx,
-            chat_stop: None,
-            chat_status: String::new(),
-            chat_visible: false,
+            chat: None,
             recommend_items: Vec::new(),
             recommend_tx,
             recommend_rx,
@@ -416,47 +411,20 @@ impl Controller {
         });
     }
 
-    /// チャット更新を取り込む。
+    /// チャット更新を取り込む。NotLive を受けたらセッションを破棄する（Drop がポーラーを止める）。
     pub fn poll_chat(&mut self) {
-        while let Ok(update) = self.chat_rx.try_recv() {
-            match update {
-                chat::ChatUpdate::Messages(msgs) => {
-                    self.chat_messages.extend(msgs);
-                    // 上限を超えたら古いメッセージを捨てる。
-                    if self.chat_messages.len() > CHAT_MAX_MESSAGES {
-                        let excess = self.chat_messages.len() - CHAT_MAX_MESSAGES;
-                        self.chat_messages.drain(..excess);
-                    }
-                    self.chat_status = format!("チャット ({} 件)", self.chat_messages.len());
-                }
-                chat::ChatUpdate::Error(e) => {
-                    self.chat_status = format!("チャットエラー: {e}");
-                }
-                chat::ChatUpdate::NotLive => {
-                    self.chat_status.clear();
-                    self.stop_chat();
-                }
+        if let Some(session) = self.chat.as_mut() {
+            if !chat::poll(session) {
+                self.chat = None;
             }
         }
     }
 
     /// ライブチャットのポーリングを背景スレッドで開始する。
+    /// 古いセッションを破棄（= 停止）してから新しいセッションに差し替える。
     pub fn start_chat(&mut self, video_id: String) {
-        self.stop_chat();
-        self.chat_messages.clear();
-        self.chat_status = "チャット接続中…".to_string();
-        self.chat_visible = true;
-
-        let (stopper, stop_flag) = chat::ChatStop::new();
-        self.chat_stop = Some(stopper);
-
-        let tx = self.chat_tx.clone();
-        let proxy = self.proxy.clone();
         let offset = Arc::clone(&self.player_offset_ms);
-        std::thread::spawn(move || {
-            chat::run_chat_poll(&video_id, &tx, &stop_flag, &offset);
-            let _ = proxy.send_event(UserEvent::Background);
-        });
+        self.chat = Some(chat::start(video_id, offset, &self.waker));
     }
 
     /// おすすめ動画の更新を取り込む。
@@ -775,9 +743,7 @@ impl Controller {
 
     /// ライブチャットのポーリングを停止する。
     pub fn stop_chat(&mut self) {
-        if let Some(stopper) = self.chat_stop.take() {
-            stopper.stop();
-        }
+        self.chat = None;
     }
 
     /// 現在の動画に高評価を付ける（必要ならトークンを更新してから）を背景で開始。
