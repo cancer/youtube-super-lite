@@ -32,20 +32,14 @@ pub struct VideoItem {
     pub menu: super::subscriptions::CardMenu,
 }
 
-/// 背景スレッドからメインスレッドへの通知。
-pub enum RecommendUpdate {
-    Items(Vec<VideoItem>),
-    Error(String),
-}
-
 /// ホームフィード（おすすめ）を背景スレッドで取得する。要 OAuth access_token。
-pub fn fetch_home_feed(access_token: &str, tx: &Sender<RecommendUpdate>) {
+pub fn fetch_home_feed(access_token: &str, tx: &Sender<crate::content::FeedUpdate<VideoItem>>) {
     match fetch_inner(access_token) {
         Ok(items) => {
-            let _ = tx.send(RecommendUpdate::Items(items));
+            let _ = tx.send(crate::content::FeedUpdate::Items(items));
         }
         Err(e) => {
-            let _ = tx.send(RecommendUpdate::Error(e.to_string()));
+            let _ = tx.send(crate::content::FeedUpdate::Error(e.to_string()));
         }
     }
 }

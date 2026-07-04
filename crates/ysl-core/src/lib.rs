@@ -3,6 +3,7 @@
 
 pub mod account;
 pub mod chat;
+pub mod content;
 pub mod gpu_usage;
 pub mod image_cache;
 pub mod player;

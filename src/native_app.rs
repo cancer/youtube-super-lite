@@ -224,7 +224,7 @@ impl NativeRunning {
     /// パース未対応で既定値のまま。
     /// チャンネル名から解決済みアバター URL を引く（未解決なら空＝プレースホルダ円）。
     fn avatar_for(&self, channel: &str) -> String {
-        self.core.channel_avatars.get(channel).cloned().unwrap_or_default()
+        self.core.avatars.url_for(channel).unwrap_or_default().to_string()
     }
 
     fn list_rows(&self) -> (String, Vec<crate::dcomp_overlay::Card>) {
@@ -241,7 +241,8 @@ impl NativeRunning {
             ListSource::Subs => (
                 "登録チャンネルの新着".to_string(),
                 self.core
-                    .sub_feed
+                    .subs
+                    .items()
                     .iter()
                     .map(|v| Card {
                         id: v.video_id.clone(),
@@ -260,7 +261,8 @@ impl NativeRunning {
             ListSource::Recommend => (
                 "おすすめ".to_string(),
                 self.core
-                    .recommend_items
+                    .recommend
+                    .items()
                     .iter()
                     .map(|v| Card {
                         id: v.video_id.clone(),
@@ -279,7 +281,8 @@ impl NativeRunning {
             ListSource::History => (
                 "再生履歴".to_string(),
                 self.core
-                    .history_items
+                    .history
+                    .items()
                     .iter()
                     .map(|v| Card {
                         id: v.video_id.clone(),
@@ -296,9 +299,10 @@ impl NativeRunning {
                     .collect(),
             ),
             ListSource::Channel => (
-                format!("{} の動画", self.core.channel_title),
+                format!("{} の動画", self.core.channel_view.title()),
                 self.core
-                    .channel_items
+                    .channel_view
+                    .items()
                     .iter()
                     .map(|v| Card {
                         id: v.video_id.clone(),
@@ -315,23 +319,25 @@ impl NativeRunning {
                     .collect(),
             ),
             ListSource::Playlist => {
-                if !self.core.playlist_items.is_empty() {
+                if self.core.playlist.is_items_view() {
                     // 2 階層目: 選択した再生リストの中身（動画）。
                     let rows = self
                         .core
-                        .playlist_items
+                        .playlist
+                        .items()
                         .iter()
                         .map(|v| video_card(&v.title, &v.channel, String::new(), &v.video_id))
                         .collect();
                     (
-                        format!("再生リスト: {}", self.core.playlist_items_title),
+                        format!("再生リスト: {}", self.core.playlist.items_title()),
                         rows,
                     )
                 } else {
                     // 1 階層目: 再生リスト一覧（Enter で中身を開く）。件数を meta/channel に。
                     let rows = self
                         .core
-                        .playlist_lists
+                        .playlist
+                        .lists()
                         .iter()
                         .map(|p| Card {
                             id: p.playlist_id.clone(),
@@ -353,25 +359,25 @@ impl NativeRunning {
     fn ensure_source_fetched(&mut self) {
         match self.list_source {
             ListSource::Subs => {
-                if self.core.sub_feed.is_empty() && !self.core.sub_busy {
+                if self.core.subs.items().is_empty() && !self.core.subs.is_busy() {
                     self.core.start_subs();
                 }
             }
             ListSource::History => {
-                if self.core.history_items.is_empty() && !self.core.history_busy {
+                if self.core.history.items().is_empty() && !self.core.history.is_busy() {
                     self.core.start_history();
                 }
             }
             ListSource::Playlist => {
-                if self.core.playlist_lists.is_empty()
-                    && self.core.playlist_items.is_empty()
-                    && !self.core.playlist_busy
+                if self.core.playlist.lists().is_empty()
+                    && self.core.playlist.items().is_empty()
+                    && !self.core.playlist.is_busy()
                 {
                     self.core.start_playlist_list();
                 }
             }
             ListSource::Recommend => {
-                if self.core.recommend_items.is_empty() && self.core.account.token().is_some() {
+                if self.core.recommend.items().is_empty() && self.core.account.token().is_some() {
                     self.core.start_recommend();
                 }
             }
@@ -622,10 +628,9 @@ impl NativeRunning {
                     self.list_source = ListSource::Recommend;
                     self.list_sel = 0;
                 } else if self.list_source == ListSource::Playlist
-                    && !self.core.playlist_items.is_empty()
+                    && self.core.playlist.is_items_view()
                 {
-                    self.core.playlist_items.clear();
-                    self.core.playlist_items_title.clear();
+                    self.core.playlist_back_to_lists();
                     self.list_sel = 0;
                 }
                 true
@@ -738,9 +743,9 @@ impl NativeRunning {
     /// 一覧の行 index を再生（再生リスト 1 階層目なら中身を開く）。
     #[cfg(windows)]
     fn play_list_index(&mut self, idx: usize) {
-        if self.list_source == ListSource::Playlist && self.core.playlist_items.is_empty() {
+        if self.list_source == ListSource::Playlist && !self.core.playlist.is_items_view() {
             // 再生リスト一覧で選択 → その中身を開く（2 階層目へ）。
-            if let Some(pl) = self.core.playlist_lists.get(idx) {
+            if let Some(pl) = self.core.playlist.lists().get(idx) {
                 let id = pl.playlist_id.clone();
                 let title = pl.title.clone();
                 self.list_sel = 0;
@@ -1298,10 +1303,10 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                         Key::Named(NamedKey::Enter) => {
                             state.card_menu_open = None;
                             if state.list_source == ListSource::Playlist
-                                && state.core.playlist_items.is_empty()
+                                && !state.core.playlist.is_items_view()
                             {
                                 // 再生リスト一覧で Enter → その中身を開く（2 階層目へ）。
-                                if let Some(pl) = state.core.playlist_lists.get(state.list_sel) {
+                                if let Some(pl) = state.core.playlist.lists().get(state.list_sel) {
                                     let id = pl.playlist_id.clone();
                                     let title = pl.title.clone();
                                     state.list_sel = 0;
@@ -1329,11 +1334,10 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                                 state.list_source = ListSource::Recommend;
                                 state.list_sel = 0;
                             } else if state.list_source == ListSource::Playlist
-                                && !state.core.playlist_items.is_empty()
+                                && state.core.playlist.is_items_view()
                             {
                                 // 再生リストの中身表示中なら一覧へ戻る。
-                                state.core.playlist_items.clear();
-                                state.core.playlist_items_title.clear();
+                                state.core.playlist_back_to_lists();
                                 state.list_sel = 0;
                             }
                         }
