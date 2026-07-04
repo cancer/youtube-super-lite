@@ -7,7 +7,7 @@
 ```mermaid
 graph TD
     main["main.rs<br/>CLI解析 → NativeApp起動<br/>Quality/Codec は ysl-core::types から再エクスポート"]
-    native_app["native_app::NativeRunning (shell)<br/>winitアプリ本体・全ドメイン状態を所有<br/>HWND→mpv埋め込み・キーボード/状態・各種poll"]
+    ui_shell["ui::shell::NativeRunning (shell)<br/>winitアプリ本体・全ドメイン状態を所有<br/>HWND→mpv埋め込み・キーボード/状態・各種poll"]
     overlay["dcomp_overlay<br/>子窓+DirectCompositionオーバーレイ<br/>一覧・URL欄・チャットを描画"]
     flows["ysl_core::flows<br/>跨ぎ system 3本(on_logged_in/play/play_with_chat)"]
     account["ysl_core::account<br/>credentials(アプリ寿命) + AuthTask(per-op)"]
@@ -22,15 +22,15 @@ graph TD
     gpu_usage["ysl_core::gpu_usage<br/>GPU使用率監視とHW/SWデコード自動切替"]
     devtools["devtools<br/>検証用ローカルHTTPサーバ(--enable-dev-tools)"]
 
-    main --> native_app
-    native_app --> overlay
-    native_app --> devtools
-    native_app --> flows & account & playback & content & chat
+    main --> ui_shell
+    ui_shell --> overlay
+    ui_shell --> devtools
+    ui_shell --> flows & account & playback & content & chat
     flows --> account & playback & content & chat
     playback --> resolve & player & gpu_usage
     account & content & chat --> yt
     playback --> yt
-    native_app --> image_cache & settings
+    ui_shell --> image_cache & settings
 ```
 
 機能ごとの詳細は [docs/features/](../features/) を参照。ここでは横断的な設計方針だけを扱う。
@@ -42,7 +42,7 @@ graph TD
 状態とロジックはドメイン(`account`/`playback`/`content`/`chat`)+ 跨ぎ処理(`flows`)に分かれ、
 フロントエンド（描画/入力）から分離されている。lib(`crates/ysl-core`)は winit に依存しないため、
 UI フレームワークの型がコアへ漏れることをコンパイラが拒否する。状態の**所有**は shell
-（`native_app::NativeRunning`）が担い、各ドメインの `Feed`/`Account`/`Playback`/`ChatSession` 等を
+（`ui::shell::NativeRunning`）が担い、各ドメインの `Feed`/`Account`/`Playback`/`ChatSession` 等を
 個別フィールドとして保持する（束ねる「God struct」は作らない）。旧 `Controller` はこの再編で消滅した。
 
 各ドメインが持つ主な責務:
@@ -76,7 +76,7 @@ winit の `EventLoopProxy::send_event(UserEvent::Background)` を包んだクロ
 イベント処理に専念できる。
 
 各バックグラウンド系（認証・チャット・おすすめ・登録新着・履歴・再生リスト・URL解決）は独立したチャンネルを持ち、
-`native_app::NativeRunning`（shell）がそれぞれの `poll_*` をイベントループの tick ごとに回す。
+`ui::shell::NativeRunning`（shell）がそれぞれの `poll_*` をイベントループの tick ごとに回す。
 
 ### 4. 撤去済みの旧設計
 
@@ -93,3 +93,4 @@ winit の `EventLoopProxy::send_event(UserEvent::Background)` を包んだクロ
 - [overlay-rendering.md](overlay-rendering.md) — DirectComposition オーバーレイの設計
 - [auth-backend.md](auth-backend.md) — OAuth と Cloudflare Worker バックエンドの設計
 - [threading-and-io.md](threading-and-io.md) — スレッドモデルと mpsc 配線の詳細
+- [shell-checklist.md](shell-checklist.md) — `src/ui/shell.rs` 変更時の手動チェックリスト（地雷3件）

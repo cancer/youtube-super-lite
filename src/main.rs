@@ -5,7 +5,7 @@
 #[cfg(windows)]
 mod design;
 mod devtools;
-mod native_app;
+mod ui;
 #[cfg(windows)]
 mod dcomp_overlay;
 mod settings;
@@ -124,7 +124,7 @@ fn main() -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let proxy = event_loop.create_proxy();
-    let mut app = native_app::NativeApp::new(
+    let mut app = ui::NativeApp::new(
         proxy,
         args.url,
         args.verbose,
