@@ -28,6 +28,7 @@
 
 | ドキュメント | 内容 |
 |------|------|
+| [design-principles.md](design/design-principles.md) | 何を実装するときも従う設計原則(データ/振る舞い分離・情報隠蔽・明示的依存・ID参照) |
 | [architecture-overview.md](design/architecture-overview.md) | 全体のモジュールマップと設計原則 |
 | [url-resolution.md](design/url-resolution.md) | ネイティブ InnerTube リゾルバ・nsig・sidecar フォールバック |
 | [overlay-rendering.md](design/overlay-rendering.md) | 子窓+DirectComposition オーバーレイと旧方式からの移行 |
