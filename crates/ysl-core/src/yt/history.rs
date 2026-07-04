@@ -40,18 +40,13 @@ pub struct HistoryItem {
     pub menu: super::subscriptions::CardMenu,
 }
 
-pub enum HistoryUpdate {
-    Items(Vec<HistoryItem>),
-    Error(String),
-}
-
-pub fn fetch_history(access_token: &str, tx: &Sender<HistoryUpdate>) {
+pub fn fetch_history(access_token: &str, tx: &Sender<crate::content::FeedUpdate<HistoryItem>>) {
     match fetch_inner(access_token) {
         Ok(items) => {
-            let _ = tx.send(HistoryUpdate::Items(items));
+            let _ = tx.send(crate::content::FeedUpdate::Items(items));
         }
         Err(e) => {
-            let _ = tx.send(HistoryUpdate::Error(e.to_string()));
+            let _ = tx.send(crate::content::FeedUpdate::Error(e.to_string()));
         }
     }
 }

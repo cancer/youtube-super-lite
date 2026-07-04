@@ -41,25 +41,18 @@ pub struct SubVideo {
     pub menu: CardMenu,
 }
 
-/// 背景スレッドからメインスレッドへの通知。
-pub enum SubUpdate {
-    /// 新着フィード。
-    Feed(Vec<SubVideo>),
-    Error(String),
-}
-
 // ---------------------------------------------------------------------------
 // 1. 新着フィード（InnerTube FEsubscriptions）
 // ---------------------------------------------------------------------------
 
 /// 全登録チャンネルの新着動画を背景スレッドで取得する。
-pub fn fetch_subscription_feed(access_token: &str, tx: &Sender<SubUpdate>) {
+pub fn fetch_subscription_feed(access_token: &str, tx: &Sender<crate::content::FeedUpdate<SubVideo>>) {
     match fetch_feed_inner(access_token) {
         Ok(items) => {
-            let _ = tx.send(SubUpdate::Feed(items));
+            let _ = tx.send(crate::content::FeedUpdate::Items(items));
         }
         Err(e) => {
-            let _ = tx.send(SubUpdate::Error(e.to_string()));
+            let _ = tx.send(crate::content::FeedUpdate::Error(e.to_string()));
         }
     }
 }

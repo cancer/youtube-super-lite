@@ -5,20 +5,19 @@
 //! 移行する際も、この Controller をそのまま別フロントエンドから駆動できるようにするのが狙い。
 
 use std::sync::atomic::AtomicI64;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::event_loop::EventLoopProxy;
 
-use ysl_core::yt::{history, playlist, recommend, resolve, subscriptions};
-use ysl_core::{account, chat, gpu_usage, player};
+use ysl_core::yt::{history, recommend, resolve, subscriptions};
+use ysl_core::{account, chat, content, gpu_usage, player};
 use crate::{Codec, Quality, UserEvent};
 
 /// UI 非依存のアプリ状態 + ロジック。
 pub struct Controller {
     /// 動画プレイヤー（mpv + 描画先テクスチャを内包）。
     pub player: player::Player,
-    pub proxy: EventLoopProxy<UserEvent>,
     /// 背景スレッドがメインループを起こすためのコールバック。lib（ysl-core）は winit を
     /// 知らないため、proxy をこれに包んで各ドメインの `start_*` に渡す。
     pub waker: ysl_core::Waker,
@@ -39,47 +38,14 @@ pub struct Controller {
     /// 1 動画 : 1 セッション。`None` にする（≠フィールドの手動リセット）ことが「停止」の全て
     /// （`ChatSession::drop` が RAII でポーラーを止める）。
     pub chat: Option<chat::ChatSession>,
-    // --- おすすめ動画 ---
-    pub recommend_items: Vec<recommend::VideoItem>,
-    pub recommend_tx: Sender<recommend::RecommendUpdate>,
-    pub recommend_rx: Receiver<recommend::RecommendUpdate>,
-    pub recommend_status: String,
-    // --- チャンネルアバター（名前→URL キャッシュ）。TV tile がアバターを持たないので
-    //     無認証 WEB 検索で名前から補完する。一覧カードの丸アイコン用。 ---
-    pub channel_avatars: std::collections::HashMap<String, String>,
-    pub avatar_tx: Sender<(String, String)>,
-    pub avatar_rx: Receiver<(String, String)>,
-    /// 解決を依頼済み（成否問わず）の名前。二重リクエスト防止。
-    pub avatar_requested: std::collections::HashSet<String>,
-    // --- チャンネルビュー（アバター/名前クリックで開くチャンネルの動画一覧）---
-    pub channel_items: Vec<recommend::VideoItem>,
-    pub channel_title: String,
-    pub channel_busy: bool,
-    pub channel_tx: Sender<recommend::RecommendUpdate>,
-    pub channel_rx: Receiver<recommend::RecommendUpdate>,
-    // --- 登録チャンネル新着 ---
-    pub sub_feed: Vec<subscriptions::SubVideo>,
-    pub sub_tx: Sender<subscriptions::SubUpdate>,
-    pub sub_rx: Receiver<subscriptions::SubUpdate>,
-    pub sub_visible: bool,
-    pub sub_status: String,
-    pub sub_busy: bool,
-    // --- 再生履歴 ---
-    pub history_items: Vec<history::HistoryItem>,
-    pub history_tx: Sender<history::HistoryUpdate>,
-    pub history_rx: Receiver<history::HistoryUpdate>,
-    pub history_visible: bool,
-    pub history_status: String,
-    pub history_busy: bool,
-    // --- 再生リスト ---
-    pub playlist_lists: Vec<playlist::PlaylistSummary>,
-    pub playlist_items: Vec<playlist::PlaylistItem>,
-    pub playlist_items_title: String,
-    pub playlist_tx: Sender<playlist::PlaylistUpdate>,
-    pub playlist_rx: Receiver<playlist::PlaylistUpdate>,
-    pub playlist_visible: bool,
-    pub playlist_status: String,
-    pub playlist_busy: bool,
+    // --- コンテンツ一覧（おすすめ/チャンネルビュー/登録チャンネル新着/再生履歴/再生リスト/
+    //     アバター）。互いに独立した状態機械の集まりなので束ねる型を作らず個別に持つ。 ---
+    pub recommend: content::Feed<recommend::VideoItem>,
+    pub channel_view: content::ChannelView,
+    pub subs: content::Feed<subscriptions::SubVideo>,
+    pub history: content::Feed<history::HistoryItem>,
+    pub playlist: content::Playlist,
+    pub avatars: content::AvatarCache,
     // --- ストリーム解決（native InnerTube 常駐ワーカー）---
     pub resolve_handle: resolve::ResolverHandle,
     pub resolve_rx: Receiver<resolve::ResolveUpdate>,
@@ -105,12 +71,6 @@ impl Controller {
     /// 各 API 用のチャンネルは内部で生成する。GL 合成版・wid 埋め込み版どちらの
     /// `Player` でも同じく駆動できる（描画方式に依存しない）。
     pub fn new(player: player::Player, proxy: EventLoopProxy<UserEvent>, backend: String) -> Self {
-        let (recommend_tx, recommend_rx) = std::sync::mpsc::channel();
-        let (avatar_tx, avatar_rx) = std::sync::mpsc::channel();
-        let (channel_tx, channel_rx) = std::sync::mpsc::channel();
-        let (sub_tx, sub_rx) = std::sync::mpsc::channel();
-        let (history_tx, history_rx) = std::sync::mpsc::channel();
-        let (playlist_tx, playlist_rx) = std::sync::mpsc::channel();
         let (resolve_tx, resolve_rx) = std::sync::mpsc::channel();
         // lib は winit を知らないため、proxy を Waker（Arc<dyn Fn() + Send + Sync>）に包んで渡す。
         let waker_proxy = proxy.clone();
@@ -120,7 +80,6 @@ impl Controller {
         let resolve_handle = resolve::ResolverHandle::spawn(resolve_tx, waker.clone());
         Self {
             player,
-            proxy,
             waker,
             current_url: String::new(),
             quality: Quality::Auto,
@@ -130,39 +89,12 @@ impl Controller {
             is_live: false,
             account: account::Account::new(backend),
             chat: None,
-            recommend_items: Vec::new(),
-            recommend_tx,
-            recommend_rx,
-            recommend_status: String::new(),
-            channel_avatars: std::collections::HashMap::new(),
-            avatar_tx,
-            avatar_rx,
-            avatar_requested: std::collections::HashSet::new(),
-            channel_items: Vec::new(),
-            channel_title: String::new(),
-            channel_busy: false,
-            channel_tx,
-            channel_rx,
-            sub_feed: Vec::new(),
-            sub_tx,
-            sub_rx,
-            sub_visible: false,
-            sub_status: String::new(),
-            sub_busy: false,
-            history_items: Vec::new(),
-            history_tx,
-            history_rx,
-            history_visible: false,
-            history_status: String::new(),
-            history_busy: false,
-            playlist_lists: Vec::new(),
-            playlist_items: Vec::new(),
-            playlist_items_title: String::new(),
-            playlist_tx,
-            playlist_rx,
-            playlist_visible: false,
-            playlist_status: String::new(),
-            playlist_busy: false,
+            recommend: content::Feed::new("recommend"),
+            channel_view: content::ChannelView::new(),
+            subs: content::Feed::new("subs"),
+            history: content::Feed::new("history"),
+            playlist: content::Playlist::new(),
+            avatars: content::AvatarCache::new(),
             resolve_handle,
             resolve_rx,
             resolve_busy: false,
@@ -351,73 +283,23 @@ impl Controller {
 
     /// おすすめ動画の更新を取り込む。
     pub fn poll_recommend(&mut self) {
-        while let Ok(update) = self.recommend_rx.try_recv() {
-            match update {
-                recommend::RecommendUpdate::Items(items) => {
-                    self.recommend_status = format!("おすすめ ({} 件)", items.len());
-                    let names: Vec<String> = items.iter().map(|v| v.channel.clone()).collect();
-                    self.recommend_items = items;
-                    self.request_channel_avatars(names);
-                }
-                recommend::RecommendUpdate::Error(e) => {
-                    self.recommend_status = format!("取得エラー: {e}");
-                }
-            }
-        }
+        content::poll_feed(&mut self.recommend, &mut self.avatars, &self.waker);
     }
 
     /// チャンネルビュー（開いたチャンネルの動画一覧）の更新を取り込む。
     pub fn poll_channel(&mut self) {
-        while let Ok(update) = self.channel_rx.try_recv() {
-            self.channel_busy = false;
-            match update {
-                recommend::RecommendUpdate::Items(items) => {
-                    let names: Vec<String> = items.iter().map(|v| v.channel.clone()).collect();
-                    self.channel_items = items;
-                    self.request_channel_avatars(names);
-                }
-                recommend::RecommendUpdate::Error(_) => {}
-            }
-        }
+        content::poll_channel_view(&mut self.channel_view, &mut self.avatars, &self.waker);
     }
 
     /// チャンネル名からそのチャンネルの動画一覧を背景取得する（名前→channelId→browse）。
     pub fn open_channel(&mut self, name: String) {
-        self.channel_title = name.clone();
-        self.channel_items.clear();
-        self.channel_busy = true;
-        let tx = self.channel_tx.clone();
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            let result = match subscriptions::fetch_channel_id(&name) {
-                Some(id) => recommend::fetch_channel_videos(&id)
-                    .map_err(|e| e.to_string()),
-                None => Err(format!("チャンネルが見つかりません: {name}")),
-            };
-            let _ = tx.send(match result {
-                Ok(items) => recommend::RecommendUpdate::Items(items),
-                Err(e) => recommend::RecommendUpdate::Error(e),
-            });
-            let _ = proxy.send_event(UserEvent::Background);
-        });
+        content::open_channel(&mut self.channel_view, name, &self.waker);
     }
 
     /// 実 channelId(UC...) からそのチャンネルの動画一覧を背景取得する（名前検索を経由しない、
     /// より確実な経路。ケバブメニューの「チャンネルへ」が実IDを持つ場合に使う）。
     pub fn open_channel_by_id(&mut self, id: String, title: String) {
-        self.channel_title = title;
-        self.channel_items.clear();
-        self.channel_busy = true;
-        let tx = self.channel_tx.clone();
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            let result = recommend::fetch_channel_videos(&id).map_err(|e| e.to_string());
-            let _ = tx.send(match result {
-                Ok(items) => recommend::RecommendUpdate::Items(items),
-                Err(e) => recommend::RecommendUpdate::Error(e),
-            });
-            let _ = proxy.send_event(UserEvent::Background);
-        });
+        content::open_channel_by_id(&mut self.channel_view, id, title, &self.waker);
     }
 
     /// 動画を「後で見る」に保存する（ケバブメニュー）。結果は待たない（fire-and-forget、
@@ -435,96 +317,27 @@ impl Controller {
 
     /// チャンネルアバターの解決結果を取り込む（名前→URL）。
     pub fn poll_channel_avatars(&mut self) {
-        while let Ok((name, url)) = self.avatar_rx.try_recv() {
-            self.channel_avatars.insert(name, url);
-        }
-    }
-
-    /// 未解決のチャンネル名のアバターを無認証 WEB 検索で背景解決する（1 スレッドで順次）。
-    /// TV tile がアバターを持たないための補完。結果は avatar_tx 経由でメインへ返す。
-    pub fn request_channel_avatars(&mut self, names: Vec<String>) {
-        let mut todo = Vec::new();
-        for name in names {
-            if name.is_empty() || self.avatar_requested.contains(&name) {
-                continue;
-            }
-            self.avatar_requested.insert(name.clone());
-            todo.push(name);
-        }
-        if todo.is_empty() {
-            return;
-        }
-        let tx = self.avatar_tx.clone();
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            for name in todo {
-                if let Some(url) = subscriptions::fetch_channel_avatar(&name) {
-                    let _ = tx.send((name, url));
-                    let _ = proxy.send_event(UserEvent::Background);
-                }
-            }
-        });
+        content::poll_avatars(&mut self.avatars);
     }
 
     /// おすすめ（ホームフィード FEwhat_to_watch）を背景スレッドで取得する。要ログイン。
     /// 動画再生とは無関係で、ログイン確定時や一覧を開いた時に呼ぶ。
     pub fn start_recommend(&mut self) {
-        let Some(token) = self.account.token() else {
-            self.recommend_status = "先にログインしてください".to_string();
-            return;
-        };
-        self.recommend_items.clear();
-        self.recommend_status = "おすすめ取得中…".to_string();
-        let access_token = token.to_string();
-        let tx = self.recommend_tx.clone();
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            recommend::fetch_home_feed(&access_token, &tx);
-            let _ = proxy.send_event(UserEvent::Background);
-        });
+        let Some(token) = self.account.token() else { return };
+        let token = token.to_string();
+        content::start_recommend(&mut self.recommend, &token, &self.waker);
     }
 
     /// 登録チャンネルタブの更新を取り込む（新着フィード + チャンネルリスト）。
     pub fn poll_subs(&mut self) {
-        while let Ok(update) = self.sub_rx.try_recv() {
-            match update {
-                subscriptions::SubUpdate::Feed(items) => {
-                    self.sub_busy = false;
-                    self.sub_status = "新着".to_string();
-                    let names: Vec<String> = items.iter().map(|v| v.channel.clone()).collect();
-                    self.sub_feed = items;
-                    self.request_channel_avatars(names);
-                }
-                subscriptions::SubUpdate::Error(e) => {
-                    self.sub_busy = false;
-                    self.sub_status = format!("取得エラー: {e}");
-                }
-            }
-        }
+        content::poll_feed(&mut self.subs, &mut self.avatars, &self.waker);
     }
 
     /// 登録チャンネルタブのデータを背景スレッドで取得する。
-    /// 新着フィード（右ペイン既定）とチャンネルリスト（左）を並行取得する。
     pub fn start_subs(&mut self) {
-        let Some(token) = self.account.token() else {
-            self.sub_status = "先にログインしてください".to_string();
-            return;
-        };
-        if self.sub_busy {
-            return;
-        }
-        self.sub_busy = true;
-        self.sub_status = "新着を取得中…".to_string();
-        self.sub_visible = true;
-
-        // 新着フィード（InnerTube FEsubscriptions）。
-        let tx = self.sub_tx.clone();
-        let proxy = self.proxy.clone();
+        let Some(token) = self.account.token() else { return };
         let token = token.to_string();
-        std::thread::spawn(move || {
-            subscriptions::fetch_subscription_feed(&token, &tx);
-            let _ = proxy.send_event(UserEvent::Background);
-        });
+        content::start_subs(&mut self.subs, &token, &self.waker);
     }
 
     /// GPU 使用率監視スレッドからの hwdec 切替決定を取り込んで mpv に反映する。
@@ -548,111 +361,38 @@ impl Controller {
 
     /// 再生履歴の更新を取り込む。
     pub fn poll_history(&mut self) {
-        while let Ok(update) = self.history_rx.try_recv() {
-            self.history_busy = false;
-            match update {
-                history::HistoryUpdate::Items(items) => {
-                    self.history_status = format!("再生履歴 ({} 件)", items.len());
-                    let names: Vec<String> = items.iter().map(|v| v.channel.clone()).collect();
-                    self.history_items = items;
-                    self.request_channel_avatars(names);
-                }
-                history::HistoryUpdate::Error(e) => {
-                    self.history_status = format!("取得エラー: {e}");
-                }
-            }
-        }
+        content::poll_feed(&mut self.history, &mut self.avatars, &self.waker);
     }
 
     /// 再生履歴を背景スレッドで取得する。
     pub fn start_history(&mut self) {
-        let Some(token) = self.account.token() else {
-            self.history_status = "先にログインしてください".to_string();
-            return;
-        };
-        if self.history_busy {
-            return;
-        }
-        self.history_busy = true;
-        self.history_status = "再生履歴を取得中…".to_string();
-        self.history_visible = true;
-
-        let access_token = token.to_string();
-        let tx = self.history_tx.clone();
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            history::fetch_history(&access_token, &tx);
-            let _ = proxy.send_event(UserEvent::Background);
-        });
+        let Some(token) = self.account.token() else { return };
+        let token = token.to_string();
+        content::start_history(&mut self.history, &token, &self.waker);
     }
 
     /// 再生リストの更新を取り込む。
     pub fn poll_playlist(&mut self) {
-        while let Ok(update) = self.playlist_rx.try_recv() {
-            self.playlist_busy = false;
-            match update {
-                playlist::PlaylistUpdate::Playlists(lists) => {
-                    self.playlist_status = format!("再生リスト ({} 件)", lists.len());
-                    self.playlist_lists = lists;
-                    // リスト一覧に戻ったので動画一覧をクリア。
-                    self.playlist_items.clear();
-                    self.playlist_items_title.clear();
-                }
-                playlist::PlaylistUpdate::Items { title, items } => {
-                    self.playlist_status = format!("{title} ({} 件)", items.len());
-                    self.playlist_items_title = title;
-                    self.playlist_items = items;
-                }
-                playlist::PlaylistUpdate::Error(e) => {
-                    self.playlist_status = format!("取得エラー: {e}");
-                }
-            }
-        }
+        content::poll_playlist(&mut self.playlist);
     }
 
     /// 自分の再生リスト一覧を背景スレッドで取得する。
     pub fn start_playlist_list(&mut self) {
-        let Some(token) = self.account.token() else {
-            self.playlist_status = "先にログインしてください".to_string();
-            return;
-        };
-        if self.playlist_busy {
-            return;
-        }
-        self.playlist_busy = true;
-        self.playlist_lists.clear();
-        self.playlist_items.clear();
-        self.playlist_items_title.clear();
-        self.playlist_status = "再生リスト取得中…".to_string();
-        self.playlist_visible = true;
-
-        let access_token = token.to_string();
-        let tx = self.playlist_tx.clone();
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            playlist::fetch_my_playlists(&access_token, &tx);
-            let _ = proxy.send_event(UserEvent::Background);
-        });
+        let Some(token) = self.account.token() else { return };
+        let token = token.to_string();
+        content::start_playlist_list(&mut self.playlist, &token, &self.waker);
     }
 
     /// 選択した再生リストの動画一覧を背景スレッドで取得する。
     pub fn start_playlist_items(&mut self, playlist_id: String, title: String) {
-        let Some(token) = self.account.token() else {
-            return;
-        };
-        if self.playlist_busy {
-            return;
-        }
-        self.playlist_busy = true;
-        self.playlist_status = format!("{title} を読み込み中…");
+        let Some(token) = self.account.token() else { return };
+        let token = token.to_string();
+        content::start_playlist_items(&mut self.playlist, playlist_id, title, &token, &self.waker);
+    }
 
-        let access_token = token.to_string();
-        let tx = self.playlist_tx.clone();
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            playlist::fetch_playlist_items(&access_token, &playlist_id, &title, &tx);
-            let _ = proxy.send_event(UserEvent::Background);
-        });
+    /// 再生リスト一覧に戻る（動画一覧を閉じる）。
+    pub fn playlist_back_to_lists(&mut self) {
+        content::back_to_lists(&mut self.playlist);
     }
 
     /// ライブチャットのポーリングを停止する。
