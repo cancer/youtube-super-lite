@@ -2,28 +2,21 @@
 // デバッグビルドはログ確認のためコンソールを残す。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod auth;
-mod chat;
 mod controller;
 #[cfg(windows)]
 mod design;
 mod devtools;
-mod gpu_usage;
-mod history;
-mod image_cache;
-mod mark_watched;
 mod native_app;
 #[cfg(windows)]
 mod dcomp_overlay;
-mod player;
-mod playlist;
-mod recommend;
-mod resolve;
 mod settings;
-mod subscriptions;
 
 use anyhow::{anyhow, bail, Result};
 use winit::event_loop::{ControlFlow, EventLoop};
+
+/// UI 非依存コア（crates/ysl-core）から、bin 側が従来どおり `Quality`/`Codec` を
+/// `crate::` 直下で参照できるように再エクスポートする。
+pub use ysl_core::types::{Codec, Quality};
 
 /// イベントループを起こす要求（背景スレッド完了時に送る）。
 #[derive(Debug, Clone, Copy)]
@@ -34,13 +27,13 @@ enum UserEvent {
 /// 背景スレッド（OAuth / API 呼び出し）からの結果。
 enum AuthMsg {
     LoggedIn {
-        tokens: auth::Tokens,
+        tokens: ysl_core::yt::auth::Tokens,
         channel: Option<String>,
     },
     Like {
         ok: bool,
         msg: String,
-        tokens: Option<auth::Tokens>,
+        tokens: Option<ysl_core::yt::auth::Tokens>,
     },
     Failed(String),
 }
@@ -48,98 +41,6 @@ enum AuthMsg {
 
 /// チャットパネルに保持するメッセージの上限。
 const CHAT_MAX_MESSAGES: usize = 200;
-
-
-/// 既定ブラウザで URL を開く。
-fn open_in_browser(url: &str) {
-    if url.is_empty() {
-        return;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        // `cmd /C start "" <url>` は URL 中の `&`（OAuth URL に多数ある）を cmd が
-        // コマンド区切りと解釈して URL が途中で切れてしまう。rundll32 の
-        // FileProtocolHandler は URL を単一引数として受け取るため安全に既定ブラウザで開ける。
-        // CREATE_NO_WINDOW: GUI アプリから起動してもコンソール窓を出さない。
-        let _ = std::process::Command::new("rundll32")
-            .args(["url.dll,FileProtocolHandler", url])
-            .creation_flags(0x0800_0000)
-            .spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("open").arg(url).spawn();
-    }
-}
-
-/// 画質（最大の縦解像度）。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Quality {
-    Auto,
-    P2160,
-    P1440,
-    P1080,
-    P720,
-    P480,
-    P360,
-}
-
-impl Quality {
-    const ALL: [Quality; 7] = [
-        Quality::Auto,
-        Quality::P2160,
-        Quality::P1440,
-        Quality::P1080,
-        Quality::P720,
-        Quality::P480,
-        Quality::P360,
-    ];
-    fn height(self) -> Option<u32> {
-        match self {
-            Quality::Auto => None,
-            Quality::P2160 => Some(2160),
-            Quality::P1440 => Some(1440),
-            Quality::P1080 => Some(1080),
-            Quality::P720 => Some(720),
-            Quality::P480 => Some(480),
-            Quality::P360 => Some(360),
-        }
-    }
-    fn label(self) -> &'static str {
-        match self {
-            Quality::Auto => "自動",
-            Quality::P2160 => "2160p",
-            Quality::P1440 => "1440p",
-            Quality::P1080 => "1080p",
-            Quality::P720 => "720p",
-            Quality::P480 => "480p",
-            Quality::P360 => "360p",
-        }
-    }
-}
-
-/// 映像コーデック。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Codec {
-    Auto,
-    H264,
-    Vp9,
-    Av1,
-}
-
-impl Codec {
-    const ALL: [Codec; 4] = [Codec::Auto, Codec::H264, Codec::Vp9, Codec::Av1];
-    fn label(self) -> &'static str {
-        match self {
-            Codec::Auto => "自動",
-            Codec::H264 => "H.264",
-            Codec::Vp9 => "VP9",
-            Codec::Av1 => "AV1",
-        }
-    }
-}
-
 
 /// CLI 引数のパース結果。
 struct CliArgs {
@@ -152,7 +53,7 @@ struct CliArgs {
 
 fn parse_args() -> Result<CliArgs> {
     let mut verbose = false;
-    let mut backend = auth::DEFAULT_BACKEND.to_string();
+    let mut backend = ysl_core::yt::auth::DEFAULT_BACKEND.to_string();
     let mut url: Option<String> = None;
     let mut volume: Option<f64> = None;
     let mut enable_dev_tools = false;
@@ -225,7 +126,7 @@ fn print_help() {
          \x20\x20    --volume N            初期音量 0-130（デバッグ用。例: --volume 0 で無音）\n\
          \x20\x20    --enable-dev-tools    検証用ローカル HTTP（/screenshot, /click, /action 等）を有効化\n\
          \x20\x20-h, --help                このヘルプを表示",
-        auth::DEFAULT_BACKEND
+        ysl_core::yt::auth::DEFAULT_BACKEND
     );
 }
 

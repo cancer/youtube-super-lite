@@ -4420,19 +4420,31 @@ name = "youtube-super-lite"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "boa_engine",
- "dash-mpd",
- "libmpv2",
  "png",
- "rand 0.8.6",
  "raw-window-handle",
  "reqwest",
  "serde",
  "serde_json",
  "tiny_http",
- "url",
  "windows 0.58.0",
  "winit",
+ "ysl-core",
+]
+
+[[package]]
+name = "ysl-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "boa_engine",
+ "dash-mpd",
+ "libmpv2",
+ "rand 0.8.6",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "url",
+ "windows 0.58.0",
 ]
 
 [[package]]

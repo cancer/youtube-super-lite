@@ -22,7 +22,7 @@ impl Default for Settings {
 }
 
 fn store_path() -> PathBuf {
-    crate::auth::config_dir().join("settings.json")
+    ysl_core::yt::auth::config_dir().join("settings.json")
 }
 
 /// 設定を読み込む（無ければ既定値）。値は妥当な範囲にクランプする。

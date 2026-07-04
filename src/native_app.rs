@@ -16,10 +16,12 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-use crate::chat::ChatRun;
+use ysl_core::yt::chat::ChatRun;
 use crate::controller::Controller;
-use crate::player::Player;
-use crate::{auth, gpu_usage, resolve, Codec, Quality, UserEvent};
+use ysl_core::player::Player;
+use ysl_core::yt::{auth, resolve};
+use ysl_core::gpu_usage;
+use crate::{Codec, Quality, UserEvent};
 
 /// 一覧の表示ソース。1/2/3 キーで切替。
 #[derive(Clone, Copy, PartialEq)]

@@ -89,7 +89,7 @@ pub enum ChatSeg {
 
 /// チャット 1 行（投稿者種別＋投稿者＋本文セグメント列）。
 pub struct ChatLine {
-    pub kind: crate::chat::AuthorKind,
+    pub kind: ysl_core::yt::chat::AuthorKind,
     pub author: String,
     pub segs: Vec<ChatSeg>,
 }
@@ -101,8 +101,8 @@ enum ChatTok {
 }
 
 /// 著者種別ごとの強調色とバッジ記号（Normal は通常色・バッジ無し）。旧 native_overlay と同値。
-fn author_accent(kind: crate::chat::AuthorKind) -> Option<(D2D1_COLOR_F, &'static str)> {
-    use crate::chat::AuthorKind::*;
+fn author_accent(kind: ysl_core::yt::chat::AuthorKind) -> Option<(D2D1_COLOR_F, &'static str)> {
+    use ysl_core::yt::chat::AuthorKind::*;
     match kind {
         Owner => Some((color(1.0, 0.80, 0.25, 1.0), "👑 ")),
         Moderator => Some((color(0.42, 0.70, 1.0, 1.0), "🔧 ")),
@@ -188,7 +188,7 @@ pub enum ListTab {
 /// 一覧の 1 項目（動画カード or 再生リスト行）。
 ///
 /// `title`/`channel`/`thumb`/`id` は現状のデータ源から常に埋まる。`avatar`/`duration`/`live`/
-/// `meta`/`verified` は [`crate::recommend::VideoItem`]（おすすめ）では常に埋まるが、
+/// `meta`/`verified` は [`ysl_core::yt::recommend::VideoItem`]（おすすめ）では常に埋まるが、
 /// `subscriptions`/`history` 側はまだ未対応で既定値のまま（あれば描く）。
 #[derive(Clone, Default)]
 pub struct Card {
@@ -210,7 +210,7 @@ pub struct Card {
     /// 認証チャンネルの✔（任意）。
     pub verified: bool,
     /// ケバブメニュー用データ（実チャンネルID／興味なし・非表示の feedbackToken）。
-    pub menu: crate::subscriptions::CardMenu,
+    pub menu: ysl_core::yt::subscriptions::CardMenu,
 }
 
 /// 描画に必要な再生/UI 状態（コアから毎フレーム渡す）。
@@ -1337,13 +1337,13 @@ impl DcompOverlay {
             if url.is_empty() || self.thumb_cache.contains_key(url) {
                 continue;
             }
-            match crate::image_cache::cached_path(url).and_then(|p| p.to_str().map(String::from)) {
+            match ysl_core::image_cache::cached_path(url).and_then(|p| p.to_str().map(String::from)) {
                 Some(ps) => {
                     if let Some(bmp) = unsafe { self.load_wic(&ps) } {
                         self.thumb_cache.insert(url.clone(), bmp);
                     }
                 }
-                None => crate::image_cache::ensure_cached_async(url),
+                None => ysl_core::image_cache::ensure_cached_async(url),
             }
         }
     }
