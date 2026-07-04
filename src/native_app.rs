@@ -1,10 +1,10 @@
 //! ネイティブ版エントリ（`--native`）。OpenGL を一切作らず、mpv を `wid` 経由で
-//! D3D11 にウィンドウへ直接描画させ、UI 非依存の [`Controller`](crate::controller::Controller)
-//! をそのまま駆動する。egui 版（[`crate::App`]）と並存し、移行検証用の実フロントエンド。
+//! D3D11 にウィンドウへ直接描画させる。`NativeRunning`（shell）が `ysl_core` の各ドメイン
+//! （`account`/`playback`/`content`/`chat`）を個別フィールドとして所有し、`flows` の跨ぎ
+//! system 経由で駆動する（旧 `Controller` は Issue #11 の再編で消滅）。
 //!
-//! 現状（骨組み）: winit ウィンドウ + 埋め込み mpv + Controller + キーボード操作 + 各種 poll。
-//! コントローラ等の 2D UI（Direct2D/DirectWrite/WIC の透過オーバーレイ）は後続フェーズで重ねる
-//! （probe: src/bin/d2d_overlay_probe.rs で実証済み）。
+//! 現状: winit ウィンドウ + 埋め込み mpv + 各ドメイン + キーボード操作 + 各種 poll。
+//! ui/ への分割（地雷コードの隔離、Issue #11 PR U）は未着手。
 
 use anyhow::Result;
 use std::sync::atomic::Ordering;
@@ -17,10 +17,9 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 use ysl_core::yt::chat::ChatRun;
-use crate::controller::Controller;
 use ysl_core::player::Player;
-use ysl_core::yt::{auth, resolve};
-use ysl_core::gpu_usage;
+use ysl_core::yt::{auth, recommend, resolve, subscriptions, history};
+use ysl_core::{account, chat, content, flows, playback};
 use crate::{Codec, Quality, UserEvent};
 
 /// 一覧の表示ソース。1/2/3 キーで切替。
@@ -51,7 +50,18 @@ struct NativeRunning {
     window: Window,
     /// 親ウィンドウの Win32 HWND（i64）。オーバーレイの追従描画に使う。
     parent_wid: i64,
-    core: Controller,
+    /// 背景スレッドがメインループを起こすためのコールバック（proxy を包む。lib は winit を知らない）。
+    waker: ysl_core::Waker,
+    playback: playback::Playback,
+    account: account::Account,
+    /// 1 動画 : 1 セッション。`None` にする（≠フィールドの手動リセット）ことが「停止」の全て。
+    chat: Option<chat::ChatSession>,
+    recommend: content::Feed<recommend::VideoItem>,
+    channel_view: content::ChannelView,
+    subs: content::Feed<subscriptions::SubVideo>,
+    history: content::Feed<history::HistoryItem>,
+    playlist: content::Playlist,
+    avatars: content::AvatarCache,
     /// URL 入力欄の内容（英数字キーで編集、Enter で再生）。URL は空白を含まないため
     /// Space は再生/一時停止に温存できる（フォーカス概念は持たない）。
     url_input: String,
@@ -130,27 +140,30 @@ impl NativeApp {
             player.set_volume(v);
         }
 
-        let mut core = Controller::new(player, self.proxy.clone(), self.backend.clone());
+        // lib は winit を知らないため、proxy を Waker（Arc<dyn Fn() + Send + Sync>）に包んで渡す。
+        let waker_proxy = self.proxy.clone();
+        let waker: ysl_core::Waker =
+            std::sync::Arc::new(move || { let _ = waker_proxy.send_event(UserEvent::Background); });
 
-        // 外部アプリへ GPU を譲るための GPU 使用率監視（egui 版と同じく常時起動）。
-        if let Some(m) = gpu_usage::start_monitoring() {
-            core.gpu_monitor = Some(m);
+        let mut playback_state = playback::Playback::new(player, &waker);
+        // 外部アプリへ GPU を譲るための GPU 使用率監視（Playback::new が内部で起動する）。
+        if playback_state.has_gpu_monitor() {
             eprintln!("[native][auto-hwdec] GPU 使用率の監視を開始");
         }
 
+        let mut account_state = account::Account::new(self.backend.clone());
+        let mut chat_state: Option<chat::ChatSession> = None;
+
         // 保存済みリフレッシュトークンがあれば自動ログイン。
         if let Some(rt) = auth::load_refresh_token() {
-            core.start_silent_login(rt);
+            account::start_silent_login(&mut account_state, rt, &waker);
         }
 
         // CLI で URL 指定があれば再生開始（URL 欄にも反映）。
         let mut url_input = String::new();
         if let Some(url) = self.initial_url.take() {
             url_input = url.clone();
-            core.load(&url);
-            if let Some(vid) = auth::extract_video_id(&core.current_url) {
-                core.start_chat(vid);
-            }
+            flows::play_with_chat(&mut playback_state, &mut chat_state, &account_state, &url, &waker);
         }
 
         // dev-tools HTTP サーバ（--enable-dev-tools）。
@@ -189,7 +202,16 @@ impl NativeApp {
         Ok(NativeRunning {
             window,
             parent_wid: wid,
-            core,
+            waker,
+            playback: playback_state,
+            account: account_state,
+            chat: chat_state,
+            recommend: content::Feed::new("recommend"),
+            channel_view: content::ChannelView::new(),
+            subs: content::Feed::new("subs"),
+            history: content::Feed::new("history"),
+            playlist: content::Playlist::new(),
+            avatars: content::AvatarCache::new(),
             url_input,
             ctrl: false,
             list_open: false,
@@ -217,6 +239,45 @@ impl NativeApp {
 }
 
 impl NativeRunning {
+    /// player への直接操作（pause/seek/volume 等）用。
+    fn player(&self) -> &Player {
+        self.playback.player()
+    }
+
+    fn current_url(&self) -> &str {
+        self.playback.current_url()
+    }
+
+    fn is_live(&self) -> bool {
+        self.playback.is_live()
+    }
+
+    fn quality(&self) -> Quality {
+        self.playback.quality()
+    }
+
+    fn codec(&self) -> Codec {
+        self.playback.codec()
+    }
+
+    /// 画質を変更し、現在の URL が YouTube なら再解決する（挙動不変。判断のクロス集約は PR B）。
+    fn set_quality(&mut self, q: Quality) {
+        playback::set_quality(&mut self.playback, q);
+        if resolve::is_youtube_url(self.playback.current_url()) {
+            let u = self.playback.current_url().to_string();
+            playback::start_resolve(&mut self.playback, u, self.account.token());
+        }
+    }
+
+    /// コーデックを変更し、現在の URL が YouTube なら再解決する。
+    fn set_codec(&mut self, c: Codec) {
+        playback::set_codec(&mut self.playback, c);
+        if resolve::is_youtube_url(self.playback.current_url()) {
+            let u = self.playback.current_url().to_string();
+            playback::start_resolve(&mut self.playback, u, self.account.token());
+        }
+    }
+
     /// 現在の一覧ソースの (ヘッダ, カード配列) を返す。
     ///
     /// カードの title/channel/thumb/id は現行データ源から常に埋まる。avatar/duration/live/meta/
@@ -224,7 +285,7 @@ impl NativeRunning {
     /// パース未対応で既定値のまま。
     /// チャンネル名から解決済みアバター URL を引く（未解決なら空＝プレースホルダ円）。
     fn avatar_for(&self, channel: &str) -> String {
-        self.core.avatars.url_for(channel).unwrap_or_default().to_string()
+        self.avatars.url_for(channel).unwrap_or_default().to_string()
     }
 
     fn list_rows(&self) -> (String, Vec<crate::dcomp_overlay::Card>) {
@@ -240,7 +301,7 @@ impl NativeRunning {
         let (base, items): (String, Vec<Card>) = match self.list_source {
             ListSource::Subs => (
                 "登録チャンネルの新着".to_string(),
-                self.core
+                self
                     .subs
                     .items()
                     .iter()
@@ -260,7 +321,7 @@ impl NativeRunning {
             ),
             ListSource::Recommend => (
                 "おすすめ".to_string(),
-                self.core
+                self
                     .recommend
                     .items()
                     .iter()
@@ -280,7 +341,7 @@ impl NativeRunning {
             ),
             ListSource::History => (
                 "再生履歴".to_string(),
-                self.core
+                self
                     .history
                     .items()
                     .iter()
@@ -299,8 +360,8 @@ impl NativeRunning {
                     .collect(),
             ),
             ListSource::Channel => (
-                format!("{} の動画", self.core.channel_view.title()),
-                self.core
+                format!("{} の動画", self.channel_view.title()),
+                self
                     .channel_view
                     .items()
                     .iter()
@@ -319,23 +380,21 @@ impl NativeRunning {
                     .collect(),
             ),
             ListSource::Playlist => {
-                if self.core.playlist.is_items_view() {
+                if self.playlist.is_items_view() {
                     // 2 階層目: 選択した再生リストの中身（動画）。
                     let rows = self
-                        .core
                         .playlist
                         .items()
                         .iter()
                         .map(|v| video_card(&v.title, &v.channel, String::new(), &v.video_id))
                         .collect();
                     (
-                        format!("再生リスト: {}", self.core.playlist.items_title()),
+                        format!("再生リスト: {}", self.playlist.items_title()),
                         rows,
                     )
                 } else {
                     // 1 階層目: 再生リスト一覧（Enter で中身を開く）。件数を meta/channel に。
                     let rows = self
-                        .core
                         .playlist
                         .lists()
                         .iter()
@@ -359,26 +418,26 @@ impl NativeRunning {
     fn ensure_source_fetched(&mut self) {
         match self.list_source {
             ListSource::Subs => {
-                if self.core.subs.items().is_empty() && !self.core.subs.is_busy() {
-                    self.core.start_subs();
+                if self.subs.items().is_empty() && !self.subs.is_busy() {
+                    self.start_subs();
                 }
             }
             ListSource::History => {
-                if self.core.history.items().is_empty() && !self.core.history.is_busy() {
-                    self.core.start_history();
+                if self.history.items().is_empty() && !self.history.is_busy() {
+                    self.start_history();
                 }
             }
             ListSource::Playlist => {
-                if self.core.playlist.lists().is_empty()
-                    && self.core.playlist.items().is_empty()
-                    && !self.core.playlist.is_busy()
+                if self.playlist.lists().is_empty()
+                    && self.playlist.items().is_empty()
+                    && !self.playlist.is_busy()
                 {
-                    self.core.start_playlist_list();
+                    self.start_playlist_list();
                 }
             }
             ListSource::Recommend => {
-                if self.core.recommend.items().is_empty() && self.core.account.token().is_some() {
-                    self.core.start_recommend();
+                if self.recommend.items().is_empty() && self.account.token().is_some() {
+                    self.start_recommend();
                 }
             }
             // チャンネルビューは open_channel で取得済み。ここでは何もしない。
@@ -389,21 +448,129 @@ impl NativeRunning {
     /// 背景スレッド（認証/API/解決）の結果を取り込む。proxy 起床時に呼ぶ。
     fn poll_all(&mut self) {
         // リプレイチャット用に再生位置を共有。
-        self.core
-            .player_offset_ms
-            .store((self.core.player.time_pos() * 1000.0) as i64, Ordering::Relaxed);
-        self.core.poll_auth();
-        self.core.poll_chat();
-        self.core.poll_recommend();
-        self.core.poll_subs();
-        self.core.poll_history();
-        self.core.poll_channel();
-        self.core.poll_channel_avatars();
-        self.core.poll_playlist();
-        self.core.poll_gpu_usage();
-        self.core.poll_resolve();
+        self.playback
+            .player_offset_ms()
+            .store((self.playback.player().time_pos() * 1000.0) as i64, Ordering::Relaxed);
+        self.poll_auth();
+        self.poll_chat();
+        content::poll_feed(&mut self.recommend, &mut self.avatars, &self.waker);
+        content::poll_feed(&mut self.subs, &mut self.avatars, &self.waker);
+        content::poll_feed(&mut self.history, &mut self.avatars, &self.waker);
+        content::poll_channel_view(&mut self.channel_view, &mut self.avatars, &self.waker);
+        content::poll_avatars(&mut self.avatars);
+        content::poll_playlist(&mut self.playlist);
+        playback::poll_gpu(&mut self.playback);
+        playback::poll_resolve(&mut self.playback);
         // native 直 URL が mpv で再生失敗していれば、並列に用意した中継(サイドカー)へ切替える。
-        self.core.check_playback_fallback();
+        playback::check_fallback(&mut self.playback);
+    }
+
+    /// 背景スレッドからの結果を取り込み、跨ぎイベントを routing する（flows::on_logged_in）。
+    fn poll_auth(&mut self) {
+        for ev in account::poll(&mut self.account) {
+            match ev {
+                account::AccountEvent::LoggedIn => {
+                    flows::on_logged_in(&mut self.playback, &self.account, &mut self.recommend, &self.waker);
+                }
+                account::AccountEvent::LoginFailed => {
+                    // ログインに失敗しても、保留中の動画は匿名で解決を試みる（最善努力）。
+                    if let Some(url) = playback::take_pending(&mut self.playback) {
+                        playback::start_resolve(&mut self.playback, url, None);
+                    }
+                }
+            }
+        }
+    }
+
+    /// チャット更新を取り込む。NotLive を受けたらセッションを破棄する（Drop がポーラーを止める）。
+    fn poll_chat(&mut self) {
+        if let Some(session) = self.chat.as_mut() {
+            if !chat::poll(session) {
+                self.chat = None;
+            }
+        }
+    }
+
+    /// 再生開始 + チャット接続（旧 Controller::load + start_chat のコンボ）。
+    fn play(&mut self, url: &str) {
+        flows::play_with_chat(&mut self.playback, &mut self.chat, &self.account, url, &self.waker);
+    }
+
+    /// 動画を「後で見る」に保存する（ケバブメニュー）。fire-and-forget。
+    fn save_watch_later(&self, video_id: String) {
+        let Some(token) = self.account.token() else { return };
+        account::save_watch_later(token, video_id);
+    }
+
+    /// feedbackToken を送信する（興味なし／チャンネルをおすすめに表示しない）。fire-and-forget。
+    fn send_card_feedback(&self, token: String) {
+        let Some(access_token) = self.account.token() else { return };
+        account::send_card_feedback(access_token, token);
+    }
+
+    /// おすすめ（ホームフィード）を背景スレッドで取得する。要ログイン。
+    fn start_recommend(&mut self) {
+        let Some(token) = self.account.token() else { return };
+        let token = token.to_string();
+        content::start_recommend(&mut self.recommend, &token, &self.waker);
+    }
+
+    /// 登録チャンネルタブのデータを背景スレッドで取得する。
+    fn start_subs(&mut self) {
+        let Some(token) = self.account.token() else { return };
+        let token = token.to_string();
+        content::start_subs(&mut self.subs, &token, &self.waker);
+    }
+
+    /// 再生履歴を背景スレッドで取得する。
+    fn start_history(&mut self) {
+        let Some(token) = self.account.token() else { return };
+        let token = token.to_string();
+        content::start_history(&mut self.history, &token, &self.waker);
+    }
+
+    /// 自分の再生リスト一覧を背景スレッドで取得する。
+    fn start_playlist_list(&mut self) {
+        let Some(token) = self.account.token() else { return };
+        let token = token.to_string();
+        content::start_playlist_list(&mut self.playlist, &token, &self.waker);
+    }
+
+    /// 選択した再生リストの動画一覧を背景スレッドで取得する。
+    fn start_playlist_items(&mut self, playlist_id: String, title: String) {
+        let Some(token) = self.account.token() else { return };
+        let token = token.to_string();
+        content::start_playlist_items(&mut self.playlist, playlist_id, title, &token, &self.waker);
+    }
+
+    /// 再生リスト一覧に戻る（動画一覧を閉じる）。
+    fn playlist_back_to_lists(&mut self) {
+        content::back_to_lists(&mut self.playlist);
+    }
+
+    /// ログイン（ブラウザで承認 → バックエンドでトークン取得 → チャンネル名取得）を背景で開始。
+    fn start_login(&mut self) {
+        account::start_login(&mut self.account, &self.waker);
+    }
+
+    /// 現在の動画に高評価を付ける（必要ならトークンを更新してから）を背景で開始。
+    fn start_like(&mut self, video_id: String) {
+        account::start_like(&mut self.account, video_id, &self.waker);
+    }
+
+    /// ライブチャットのポーリングを停止する。
+    fn stop_chat(&mut self) {
+        self.chat = None;
+    }
+
+    /// チャンネル名からそのチャンネルの動画一覧を背景取得する（名前→channelId→browse）。
+    fn open_channel(&mut self, name: String) {
+        content::open_channel(&mut self.channel_view, name, &self.waker);
+    }
+
+    /// 実 channelId(UC...) からそのチャンネルの動画一覧を背景取得する。
+    fn open_channel_by_id(&mut self, id: String, title: String) {
+        content::open_channel_by_id(&mut self.channel_view, id, title, &self.waker);
     }
 
     /// dev-tools（--enable-dev-tools）からの要求を処理する。毎フレーム呼ぶ。
@@ -451,10 +618,7 @@ impl NativeRunning {
                     if enter {
                         let url = self.url_input.trim().to_string();
                         if !url.is_empty() {
-                            self.core.load(&url);
-                            if let Some(vid) = auth::extract_video_id(&self.core.current_url) {
-                                self.core.start_chat(vid);
-                            }
+                            self.play(&url);
                         }
                     }
                     let _ = reply.send(true);
@@ -469,64 +633,56 @@ impl NativeRunning {
         let known = match name {
             // --- 再生 ---
             "play_pause" => {
-                let p = &self.core.player;
+                let p = self.player();
                 p.set_paused(!p.paused());
                 true
             }
             "seek_fwd" => {
-                self.core.player.seek_relative(5.0);
+                self.player().seek_relative(5.0);
                 true
             }
             "seek_back" => {
-                self.core.player.seek_relative(-5.0);
+                self.player().seek_relative(-5.0);
                 true
             }
             "live_edge" => {
-                self.core.player.seek_to_live();
+                self.player().seek_to_live();
                 true
             }
             // --- 音量 ---
             "vol_up" => {
-                let p = &self.core.player;
+                let p = self.player();
                 p.set_volume((p.volume() + 5.0).min(130.0));
                 true
             }
             "vol_down" => {
-                let p = &self.core.player;
+                let p = self.player();
                 p.set_volume((p.volume() - 5.0).max(0.0));
                 true
             }
             "mute" => {
-                let p = &self.core.player;
+                let p = self.player();
                 p.set_muted(!p.muted());
                 true
             }
             // --- 画質 / コーデック ---
             "quality_next" => {
                 let all = Quality::ALL;
-                let i = all.iter().position(|q| *q == self.core.quality).unwrap_or(0);
-                self.core.quality = all[(i + 1) % all.len()];
-                if resolve::is_youtube_url(&self.core.current_url) {
-                    let u = self.core.current_url.clone();
-                    self.core.start_resolve(u);
-                }
+                let i = all.iter().position(|q| *q == self.quality()).unwrap_or(0);
+                self.set_quality(all[(i + 1) % all.len()]);
                 true
             }
             "codec_next" => {
                 let all = Codec::ALL;
-                let i = all.iter().position(|c| *c == self.core.codec).unwrap_or(0);
-                self.core.codec = all[(i + 1) % all.len()];
-                if resolve::is_youtube_url(&self.core.current_url) {
-                    let u = self.core.current_url.clone();
-                    self.core.start_resolve(u);
-                }
+                let i = all.iter().position(|c| *c == self.codec()).unwrap_or(0);
+                self.set_codec(all[(i + 1) % all.len()]);
                 true
             }
             // --- チャット ---
             "toggle_chat" => {
                 self.chat_open = !self.chat_open;
-                self.core
-                    .player
+                self
+                    .player()
                     .set_video_margin_right(if self.chat_open { 0.28 } else { 0.0 });
                 true
             }
@@ -540,7 +696,7 @@ impl NativeRunning {
             }
             "chat_scroll_up" | "chat_scroll_down" => {
                 let d: i32 = if name == "chat_scroll_up" { 3 } else { -3 };
-                let max = self.core.chat.as_ref().map_or(0, |c| c.messages().len()).saturating_sub(1);
+                let max = self.chat.as_ref().map_or(0, |c| c.messages().len()).saturating_sub(1);
                 self.chat_scroll = ((self.chat_scroll as i32 + d).max(0) as usize).min(max);
                 true
             }
@@ -548,22 +704,22 @@ impl NativeRunning {
                 let d = if name == "chat_wider" { 0.04 } else { -0.04 };
                 self.chat_width_ratio = (self.chat_width_ratio + d).clamp(0.15, 0.6);
                 if self.chat_open {
-                    self.core
-                        .player
+                    self
+                        .player()
                         .set_video_margin_right(self.chat_width_ratio as f64);
                 }
                 true
             }
             // --- 認証 / 評価 ---
             "login" => {
-                if !self.core.account.is_busy() {
-                    self.core.start_login();
+                if !self.account.is_busy() {
+                    self.start_login();
                 }
                 true
             }
             "like" => {
-                if let Some(vid) = auth::extract_video_id(&self.core.current_url) {
-                    self.core.start_like(vid);
+                if let Some(vid) = auth::extract_video_id(&self.current_url()) {
+                    self.start_like(vid);
                 }
                 true
             }
@@ -571,10 +727,7 @@ impl NativeRunning {
             "play_url" => {
                 let url = self.url_input.trim().to_string();
                 if !url.is_empty() {
-                    self.core.load(&url);
-                    if let Some(vid) = auth::extract_video_id(&self.core.current_url) {
-                        self.core.start_chat(vid);
-                    }
+                    self.play(&url);
                 }
                 true
             }
@@ -628,9 +781,9 @@ impl NativeRunning {
                     self.list_source = ListSource::Recommend;
                     self.list_sel = 0;
                 } else if self.list_source == ListSource::Playlist
-                    && self.core.playlist.is_items_view()
+                    && self.playlist.is_items_view()
                 {
-                    self.core.playlist_back_to_lists();
+                    self.playlist_back_to_lists();
                     self.list_sel = 0;
                 }
                 true
@@ -665,7 +818,7 @@ impl NativeRunning {
 
     /// 現在の UI 状態を JSON 文字列で返す（dev-tools の /state 用）。
     fn state_json(&self) -> String {
-        let p = &self.core.player;
+        let p = self.player();
         let source = match self.list_source {
             ListSource::Subs => "subs",
             ListSource::Recommend => "recommend",
@@ -673,7 +826,7 @@ impl NativeRunning {
             ListSource::Playlist => "playlist",
             ListSource::Channel => "channel",
         };
-        let logged_in = self.core.account.channel_name().is_some_and(|c| !c.is_empty());
+        let logged_in = self.account.channel_name().is_some_and(|c| !c.is_empty());
         let overlay_visible = {
             #[cfg(windows)]
             {
@@ -697,24 +850,24 @@ impl NativeRunning {
             }
         };
         serde_json::json!({
-            "current_url": self.core.current_url,
+            "current_url": self.current_url(),
             "url_input": self.url_input,
             "paused": p.paused(),
             "time_pos": p.time_pos(),
             "duration": p.duration(),
             "seekable": p.seekable(),
-            "is_live": self.core.is_live,
+            "is_live": self.is_live(),
             "volume": p.volume(),
             "muted": p.muted(),
             "media_title": p.media_title(),
-            "quality": self.core.quality.label(),
-            "codec": self.core.codec.label(),
+            "quality": self.quality().label(),
+            "codec": self.codec().label(),
             "chat_open": self.chat_open,
             "chat_font_px": self.chat_font_px,
             "chat_width_ratio": self.chat_width_ratio,
             "chat_scroll": self.chat_scroll,
-            "chat_available": self.core.chat.as_ref().is_some_and(|c| c.available()),
-            "chat_messages": self.core.chat.as_ref().map_or(0, |c| c.messages().len()),
+            "chat_available": self.chat.as_ref().is_some_and(|c| c.available()),
+            "chat_messages": self.chat.as_ref().map_or(0, |c| c.messages().len()),
             "list_open": self.list_open,
             "list_source": source,
             "list_sel": self.list_sel,
@@ -722,8 +875,8 @@ impl NativeRunning {
             "card_menu_open": self.card_menu_open,
             "overlay_is_topmost": overlay_is_topmost,
             "logged_in": logged_in,
-            "channel": self.core.account.channel_name(),
-            "auth_status": self.core.account.status(),
+            "channel": self.account.channel_name(),
+            "auth_status": self.account.status(),
             "focused": self.focused,
             "overlay_visible": overlay_visible,
         })
@@ -743,13 +896,13 @@ impl NativeRunning {
     /// 一覧の行 index を再生（再生リスト 1 階層目なら中身を開く）。
     #[cfg(windows)]
     fn play_list_index(&mut self, idx: usize) {
-        if self.list_source == ListSource::Playlist && !self.core.playlist.is_items_view() {
+        if self.list_source == ListSource::Playlist && !self.playlist.is_items_view() {
             // 再生リスト一覧で選択 → その中身を開く（2 階層目へ）。
-            if let Some(pl) = self.core.playlist.lists().get(idx) {
+            if let Some(pl) = self.playlist.lists().get(idx) {
                 let id = pl.playlist_id.clone();
                 let title = pl.title.clone();
                 self.list_sel = 0;
-                self.core.start_playlist_items(id, title);
+                self.start_playlist_items(id, title);
             }
             return;
         }
@@ -758,10 +911,7 @@ impl NativeRunning {
             let url = format!("https://www.youtube.com/watch?v={}", card.id);
             self.list_open = false;
             self.url_input = url.clone();
-            self.core.load(&url);
-            if let Some(v) = auth::extract_video_id(&self.core.current_url) {
-                self.core.start_chat(v);
-            }
+            self.play(&url);
         }
     }
 }
@@ -809,58 +959,46 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 for a in actions {
                     match a {
                         OverlayAction::TogglePause => {
-                            let p = &_state.core.player;
+                            let p = _state.player();
                             p.set_paused(!p.paused());
                         }
                         OverlayAction::Seek(frac) => {
-                            let p = &_state.core.player;
+                            let p = _state.player();
                             let dur = p.duration();
                             if p.seekable() && dur > 0.0 {
                                 p.set_time_pos(frac * dur);
                             }
                         }
                         OverlayAction::SetVolume(v) => {
-                            _state.core.player.set_volume(v.clamp(0.0, 130.0))
+                            _state.player().set_volume(v.clamp(0.0, 130.0))
                         }
                         OverlayAction::VolumeStep(d) => {
-                            let p = &_state.core.player;
+                            let p = _state.player();
                             p.set_volume((p.volume() + d).clamp(0.0, 130.0));
                         }
                         OverlayAction::ToggleMute => {
-                            let p = &_state.core.player;
+                            let p = _state.player();
                             p.set_muted(!p.muted());
                         }
-                        OverlayAction::LiveEdge => _state.core.player.seek_to_live(),
+                        OverlayAction::LiveEdge => _state.player().seek_to_live(),
                         OverlayAction::Like => {
-                            if let Some(vid) = auth::extract_video_id(&_state.core.current_url) {
-                                _state.core.start_like(vid);
+                            if let Some(vid) = auth::extract_video_id(&_state.current_url()) {
+                                _state.start_like(vid);
                             }
                         }
                         OverlayAction::CycleQuality => {
                             let all = Quality::ALL;
-                            let i = all
-                                .iter()
-                                .position(|q| *q == _state.core.quality)
-                                .unwrap_or(0);
-                            _state.core.quality = all[(i + 1) % all.len()];
-                            if resolve::is_youtube_url(&_state.core.current_url) {
-                                let u = _state.core.current_url.clone();
-                                _state.core.start_resolve(u);
-                            }
+                            let i = all.iter().position(|q| *q == _state.quality()).unwrap_or(0);
+                            _state.set_quality(all[(i + 1) % all.len()]);
                         }
                         OverlayAction::CycleCodec => {
                             let all = Codec::ALL;
-                            let i =
-                                all.iter().position(|c| *c == _state.core.codec).unwrap_or(0);
-                            _state.core.codec = all[(i + 1) % all.len()];
-                            if resolve::is_youtube_url(&_state.core.current_url) {
-                                let u = _state.core.current_url.clone();
-                                _state.core.start_resolve(u);
-                            }
+                            let i = all.iter().position(|c| *c == _state.codec()).unwrap_or(0);
+                            _state.set_codec(all[(i + 1) % all.len()]);
                         }
                         OverlayAction::Login => {
-                            if !_state.core.account.is_busy() {
-                                _state.core.start_login();
+                            if !_state.account.is_busy() {
+                                _state.start_login();
                             }
                         }
                         OverlayAction::OpenList(tab) => {
@@ -886,11 +1024,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                             let rows = _state.list_rows().1;
                             if let Some(card) = rows.get(idx) {
                                 if let Some(id) = card.menu.channel_id.clone() {
-                                    _state.core.open_channel_by_id(id, card.channel.clone());
+                                    _state.open_channel_by_id(id, card.channel.clone());
                                     _state.list_source = ListSource::Channel;
                                     _state.list_sel = 0;
                                 } else if !card.channel.is_empty() {
-                                    _state.core.open_channel(card.channel.clone());
+                                    _state.open_channel(card.channel.clone());
                                     _state.list_source = ListSource::Channel;
                                     _state.list_sel = 0;
                                 }
@@ -906,21 +1044,21 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                         OverlayAction::SaveWatchLater(idx) => {
                             let rows = _state.list_rows().1;
                             if let Some(card) = rows.get(idx) {
-                                _state.core.save_watch_later(card.id.clone());
+                                _state.save_watch_later(card.id.clone());
                             }
                             _state.card_menu_open = None;
                         }
                         OverlayAction::NotInterested(idx) => {
                             let rows = _state.list_rows().1;
                             if let Some(token) = rows.get(idx).and_then(|c| c.menu.not_interested_token.clone()) {
-                                _state.core.send_card_feedback(token);
+                                _state.send_card_feedback(token);
                             }
                             _state.card_menu_open = None;
                         }
                         OverlayAction::NotRecommendChannel(idx) => {
                             let rows = _state.list_rows().1;
                             if let Some(token) = rows.get(idx).and_then(|c| c.menu.not_channel_token.clone()) {
-                                _state.core.send_card_feedback(token);
+                                _state.send_card_feedback(token);
                             }
                             _state.card_menu_open = None;
                         }
@@ -941,10 +1079,10 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                                 _state.chat_scroll = 0;
                             }
                             let m = if _state.chat_open { _state.chat_width_ratio } else { 0.0 };
-                            _state.core.player.set_video_margin_right(m as f64);
+                            _state.player().set_video_margin_right(m as f64);
                         }
                         OverlayAction::ChatScroll(d) => {
-                            let max = _state.core.chat.as_ref().map_or(0, |c| c.messages().len()).saturating_sub(1);
+                            let max = _state.chat.as_ref().map_or(0, |c| c.messages().len()).saturating_sub(1);
                             _state.chat_scroll =
                                 ((_state.chat_scroll as i32 + d).max(0) as usize).min(max);
                         }
@@ -952,8 +1090,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                             _state.chat_width_ratio = (r as f32).clamp(0.15, 0.6);
                             if _state.chat_open {
                                 _state
-                                    .core
-                                    .player
+                                    .player()
                                     .set_video_margin_right(_state.chat_width_ratio as f64);
                             }
                         }
@@ -979,11 +1116,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 let active = list_open
                     || _state.chat_open
                     || _state.last_activity.elapsed() < Duration::from_secs(3);
-                let logged_in = _state.core.account.channel_name().is_some_and(|c| !c.is_empty());
+                let logged_in = _state.account.channel_name().is_some_and(|c| !c.is_empty());
                 let auth_label = if logged_in {
-                    format!("👤 {}", _state.core.account.channel_name().unwrap_or(""))
+                    format!("👤 {}", _state.account.channel_name().unwrap_or(""))
                 } else {
-                    format!("🔑 {}", _state.core.account.status())
+                    format!("🔑 {}", _state.account.status())
                 };
                 let list_sel = _state.list_sel;
                 let (list_header, list_cards): (String, Vec<Card>) = if list_open {
@@ -993,13 +1130,12 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 };
                 // チャット行（dcomp 用に整形。連続テキストは 1 セグメントに統合）。
                 let chat_open = _state.chat_open;
-                let chat_available = _state.core.chat.as_ref().is_some_and(|c| c.available());
+                let chat_available = _state.chat.as_ref().is_some_and(|c| c.available());
                 let chat_scroll = _state.chat_scroll;
                 let chat_width_ratio = _state.chat_width_ratio;
                 let chat_lines: Vec<crate::dcomp_overlay::ChatLine> = if chat_open {
                     use crate::dcomp_overlay::{ChatLine as DLine, ChatSeg as DSeg};
                     _state
-                        .core
                         .chat
                         .as_ref()
                         .map(|c| c.messages())
@@ -1027,7 +1163,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 } else {
                     Vec::new()
                 };
-                let p = &_state.core.player;
+                let p = _state.player();
                 let view = PlaybackView {
                     paused: p.paused(),
                     pos: p.time_pos(),
@@ -1035,9 +1171,9 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     seekable: p.seekable(),
                     volume: p.volume(),
                     muted: p.muted(),
-                    is_live: _state.core.is_live,
-                    quality: _state.core.quality.label().to_string(),
-                    codec: _state.core.codec.label().to_string(),
+                    is_live: _state.is_live(),
+                    quality: _state.quality().label().to_string(),
+                    codec: _state.codec().label().to_string(),
                     url_input: _state.url_input.clone(),
                     auth_label,
                     logged_in,
@@ -1097,7 +1233,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
         match event {
             WindowEvent::CloseRequested => {
                 state.maybe_save_settings(true); // 終了前に確実に保存。
-                state.core.stop_chat();
+                state.stop_chat();
                 self.state = None;
                 event_loop.exit();
             }
@@ -1111,7 +1247,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 button: MouseButton::Left,
                 ..
             } => {
-                let p = &state.core.player;
+                let p = state.player();
                 p.set_paused(!p.paused());
                 #[cfg(windows)]
                 {
@@ -1125,7 +1261,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 40.0,
                 };
                 if dy != 0.0 {
-                    let p = &state.core.player;
+                    let p = state.player();
                     let step = if dy > 0.0 { 5.0 } else { -5.0 };
                     p.set_volume((p.volume() + step).clamp(0.0, 130.0));
                     #[cfg(windows)]
@@ -1178,51 +1314,36 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     if let Key::Character(c) = &event.logical_key {
                         match c.as_str().to_ascii_lowercase().as_str() {
                             "l" => {
-                                if !state.core.account.is_busy() {
-                                    state.core.start_login();
+                                if !state.account.is_busy() {
+                                    state.start_login();
                                 }
                                 return;
                             }
                             "g" => {
                                 if let Some(vid) =
-                                    auth::extract_video_id(&state.core.current_url)
+                                    auth::extract_video_id(&state.current_url())
                                 {
-                                    state.core.start_like(vid);
+                                    state.start_like(vid);
                                 }
                                 return;
                             }
                             "t" => {
                                 state.chat_open = !state.chat_open;
                                 state
-                                    .core
-                                    .player
+                                    .player()
                                     .set_video_margin_right(if state.chat_open { 0.28 } else { 0.0 });
                                 return;
                             }
                             "q" => {
                                 let all = Quality::ALL;
-                                let i = all
-                                    .iter()
-                                    .position(|q| *q == state.core.quality)
-                                    .unwrap_or(0);
-                                state.core.quality = all[(i + 1) % all.len()];
-                                if resolve::is_youtube_url(&state.core.current_url) {
-                                    let u = state.core.current_url.clone();
-                                    state.core.start_resolve(u);
-                                }
+                                let i = all.iter().position(|q| *q == state.quality()).unwrap_or(0);
+                                state.set_quality(all[(i + 1) % all.len()]);
                                 return;
                             }
                             "c" => {
                                 let all = Codec::ALL;
-                                let i = all
-                                    .iter()
-                                    .position(|c2| *c2 == state.core.codec)
-                                    .unwrap_or(0);
-                                state.core.codec = all[(i + 1) % all.len()];
-                                if resolve::is_youtube_url(&state.core.current_url) {
-                                    let u = state.core.current_url.clone();
-                                    state.core.start_resolve(u);
-                                }
+                                let i = all.iter().position(|c2| *c2 == state.codec()).unwrap_or(0);
+                                state.set_codec(all[(i + 1) % all.len()]);
                                 return;
                             }
                             // Ctrl + "-" / "+"（"=" も可）: コメント文字サイズ増減。
@@ -1303,14 +1424,14 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                         Key::Named(NamedKey::Enter) => {
                             state.card_menu_open = None;
                             if state.list_source == ListSource::Playlist
-                                && !state.core.playlist.is_items_view()
+                                && !state.playlist.is_items_view()
                             {
                                 // 再生リスト一覧で Enter → その中身を開く（2 階層目へ）。
-                                if let Some(pl) = state.core.playlist.lists().get(state.list_sel) {
+                                if let Some(pl) = state.playlist.lists().get(state.list_sel) {
                                     let id = pl.playlist_id.clone();
                                     let title = pl.title.clone();
                                     state.list_sel = 0;
-                                    state.core.start_playlist_items(id, title);
+                                    state.start_playlist_items(id, title);
                                 }
                             } else {
                                 let rows = state.list_rows().1;
@@ -1318,12 +1439,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                                     let url = format!("https://www.youtube.com/watch?v={}", card.id);
                                     state.list_open = false;
                                     state.url_input = url.clone();
-                                    state.core.load(&url);
-                                    if let Some(v) =
-                                        auth::extract_video_id(&state.core.current_url)
-                                    {
-                                        state.core.start_chat(v);
-                                    }
+                                    state.play(&url);
                                 }
                             }
                         }
@@ -1334,10 +1450,10 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                                 state.list_source = ListSource::Recommend;
                                 state.list_sel = 0;
                             } else if state.list_source == ListSource::Playlist
-                                && state.core.playlist.is_items_view()
+                                && state.playlist.is_items_view()
                             {
                                 // 再生リストの中身表示中なら一覧へ戻る。
-                                state.core.playlist_back_to_lists();
+                                state.playlist_back_to_lists();
                                 state.list_sel = 0;
                             }
                         }
@@ -1371,17 +1487,17 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 match event.logical_key {
                     // Space は URL に現れないため再生/一時停止に温存。
                     Key::Named(NamedKey::Space) => {
-                        let p = &state.core.player;
+                        let p = state.player();
                         p.set_paused(!p.paused());
                     }
-                    Key::Named(NamedKey::ArrowRight) => state.core.player.seek_relative(5.0),
-                    Key::Named(NamedKey::ArrowLeft) => state.core.player.seek_relative(-5.0),
+                    Key::Named(NamedKey::ArrowRight) => state.player().seek_relative(5.0),
+                    Key::Named(NamedKey::ArrowLeft) => state.player().seek_relative(-5.0),
                     Key::Named(NamedKey::ArrowUp) => {
-                        let p = &state.core.player;
+                        let p = state.player();
                         p.set_volume((p.volume() + 5.0).min(130.0));
                     }
                     Key::Named(NamedKey::ArrowDown) => {
-                        let p = &state.core.player;
+                        let p = state.player();
                         p.set_volume((p.volume() - 5.0).max(0.0));
                     }
                     // --- URL 入力欄の編集 ---
@@ -1392,10 +1508,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     Key::Named(NamedKey::Enter) => {
                         let url = state.url_input.trim().to_string();
                         if !url.is_empty() {
-                            state.core.load(&url);
-                            if let Some(vid) = auth::extract_video_id(&state.core.current_url) {
-                                state.core.start_chat(vid);
-                            }
+                            state.play(&url);
                         }
                     }
                     // 印字可能文字は URL 欄へ追記（IME 不要。URL は英数字記号のみ）。

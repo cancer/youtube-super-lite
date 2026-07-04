@@ -4,9 +4,11 @@
 pub mod account;
 pub mod chat;
 pub mod content;
+pub mod flows;
 pub mod gpu_usage;
 pub mod image_cache;
 pub mod player;
+pub mod playback;
 pub mod types;
 pub mod yt;
 
