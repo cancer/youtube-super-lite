@@ -33,6 +33,91 @@ enum ListSource {
     Channel,
 }
 
+/// 全入力系統（オーバーレイ/dev-tools/キーボード）が組み立てて `apply_action` に渡す行動。
+/// 「同一アクションの実装が1箇所ずつ」を実現する唯一のエントリポイント（Issue #11 PR B）。
+enum UiAction {
+    TogglePause,
+    /// シーク（0.0..=1.0 の割合。seekable 時のみ。シークバードラッグ用）。
+    SeekTo(f64),
+    /// シーク（相対、秒。± の量。キーボード/dev-tools の早送り/早戻し用）。
+    SeekBy(f64),
+    SetVolume(f64),
+    VolumeBy(f64),
+    ToggleMute,
+    LiveEdge,
+    CycleQuality,
+    CycleCodec,
+    Login,
+    Like,
+    /// URL 欄の内容を再生する（devtools の play_url・キーボードの Enter で使う）。
+    PlayUrl(String),
+    /// 一覧の行クリック → その video_id を再生する（座席番号(index)ではなく実 ID）。
+    Play { video_id: String },
+    /// カードのアバター/チャンネル名クリック → 実 channelId（無ければ名前検索）でチャンネルを開く。
+    OpenChannel { id: Option<String>, name: String },
+    OpenList(ListSource),
+    CloseList,
+    ToggleList,
+    /// 一覧の選択位置を相対移動する（±1、またはグリッドの列数）。
+    ListMove { delta: i32 },
+    /// 現在の選択行を再生/ドリルする（devtools の list_select・キーボードの Enter）。
+    ListSelect,
+    /// 一覧の階層/ビューを戻る（チャンネルビュー→おすすめ、再生リスト中身→一覧）。
+    ListBack,
+    ToggleChat,
+    ChatScroll(i32),
+    /// チャット文字サイズを相対変更する（± の px）。
+    ChatFontBy(f32),
+    /// チャット欄の幅を絶対設定する（ウィンドウ幅比 0.15..=0.6。左端ドラッグ用）。
+    SetChatWidth(f32),
+    /// チャット欄の幅を相対変更する（± の比率。dev-tools の chat_wider/narrower 用）。
+    ChatWidthBy(f32),
+    SaveWatchLater { video_id: String },
+    /// feedbackToken の送信（興味なし／チャンネルをおすすめに表示しない、いずれも同じ処理）。
+    Feedback { token: String },
+    OpenCardMenu(usize),
+    CloseCardMenu,
+}
+
+impl From<crate::dcomp_overlay::OverlayAction> for UiAction {
+    fn from(a: crate::dcomp_overlay::OverlayAction) -> Self {
+        use crate::dcomp_overlay::{ListTab, OverlayAction};
+        match a {
+            OverlayAction::TogglePause => UiAction::TogglePause,
+            OverlayAction::Seek(frac) => UiAction::SeekTo(frac),
+            OverlayAction::SetVolume(v) => UiAction::SetVolume(v),
+            OverlayAction::VolumeStep(d) => UiAction::VolumeBy(d),
+            OverlayAction::ToggleMute => UiAction::ToggleMute,
+            OverlayAction::LiveEdge => UiAction::LiveEdge,
+            OverlayAction::Like => UiAction::Like,
+            OverlayAction::CycleQuality => UiAction::CycleQuality,
+            OverlayAction::CycleCodec => UiAction::CycleCodec,
+            OverlayAction::Login => UiAction::Login,
+            OverlayAction::OpenList(tab) => UiAction::OpenList(match tab {
+                ListTab::Recommend => ListSource::Recommend,
+                ListTab::Subs => ListSource::Subs,
+                ListTab::Playlist => ListSource::Playlist,
+                ListTab::History => ListSource::History,
+            }),
+            OverlayAction::Play { video_id } => UiAction::Play { video_id },
+            OverlayAction::OpenChannel { id, name } => UiAction::OpenChannel { id, name },
+            OverlayAction::OpenCardMenu(idx) => UiAction::OpenCardMenu(idx),
+            OverlayAction::CloseCardMenu => UiAction::CloseCardMenu,
+            OverlayAction::SaveWatchLater(video_id) => UiAction::SaveWatchLater { video_id },
+            OverlayAction::NotInterested(token) | OverlayAction::NotRecommendChannel(token) => {
+                UiAction::Feedback { token }
+            }
+            OverlayAction::CloseList => UiAction::CloseList,
+            OverlayAction::ListScroll(d) => UiAction::ListMove { delta: d },
+            OverlayAction::ToggleChat => UiAction::ToggleChat,
+            OverlayAction::ChatScroll(d) => UiAction::ChatScroll(d),
+            OverlayAction::SetChatWidth(r) => UiAction::SetChatWidth(r as f32),
+            OverlayAction::ChatFontDec => UiAction::ChatFontBy(-2.0),
+            OverlayAction::ChatFontInc => UiAction::ChatFontBy(2.0),
+        }
+    }
+}
+
 /// `--native` 起動時のアプリケーション。
 pub struct NativeApp {
     proxy: EventLoopProxy<UserEvent>,
@@ -275,6 +360,31 @@ impl NativeRunning {
         if resolve::is_youtube_url(self.playback.current_url()) {
             let u = self.playback.current_url().to_string();
             playback::start_resolve(&mut self.playback, u, self.account.token());
+        }
+    }
+
+    /// チャットパネルの表示トグル（3 入力系統の共通実装。旧ドリフト: devtools/キーボード版は
+    /// 固定 0.28・scroll 未リセットだったが、ユーザーが調整した幅を尊重するオーバーレイ版の
+    /// 挙動に統一する — issue #11 PR B で明示された唯一の挙動変更）。
+    fn toggle_chat(&mut self) {
+        self.chat_open = !self.chat_open;
+        if self.chat_open {
+            self.chat_scroll = 0;
+        }
+        let m = if self.chat_open { self.chat_width_ratio } else { 0.0 };
+        self.player().set_video_margin_right(m as f64);
+    }
+
+    /// 相対シーク（秒）。dev-tools の seek_fwd/seek_back・キーボードの ←→ で使う。
+    fn seek_by(&mut self, secs: f64) {
+        self.player().seek_relative(secs);
+    }
+
+    /// チャット欄の幅を相対変更する。dev-tools の chat_wider/chat_narrower で使う。
+    fn chat_width_by(&mut self, delta: f32) {
+        self.chat_width_ratio = (self.chat_width_ratio + delta).clamp(0.15, 0.6);
+        if self.chat_open {
+            self.player().set_video_margin_right(self.chat_width_ratio as f64);
         }
     }
 
@@ -627,169 +737,42 @@ impl NativeRunning {
         }
     }
 
-    /// dev-tools のアクション名を UI 状態に反映する（キーボード/オーバーレイの全操作を網羅）。
-    /// 既知なら true。
+    /// dev-tools のアクション名を `UiAction` に変換して `apply_action` へ渡す
+    /// （キーボード/オーバーレイの全操作を網羅）。既知なら true。
     fn devtools_action(&mut self, name: &str) -> bool {
-        let known = match name {
-            // --- 再生 ---
-            "play_pause" => {
-                let p = self.player();
-                p.set_paused(!p.paused());
-                true
-            }
-            "seek_fwd" => {
-                self.player().seek_relative(5.0);
-                true
-            }
-            "seek_back" => {
-                self.player().seek_relative(-5.0);
-                true
-            }
-            "live_edge" => {
-                self.player().seek_to_live();
-                true
-            }
-            // --- 音量 ---
-            "vol_up" => {
-                let p = self.player();
-                p.set_volume((p.volume() + 5.0).min(130.0));
-                true
-            }
-            "vol_down" => {
-                let p = self.player();
-                p.set_volume((p.volume() - 5.0).max(0.0));
-                true
-            }
-            "mute" => {
-                let p = self.player();
-                p.set_muted(!p.muted());
-                true
-            }
-            // --- 画質 / コーデック ---
-            "quality_next" => {
-                let all = Quality::ALL;
-                let i = all.iter().position(|q| *q == self.quality()).unwrap_or(0);
-                self.set_quality(all[(i + 1) % all.len()]);
-                true
-            }
-            "codec_next" => {
-                let all = Codec::ALL;
-                let i = all.iter().position(|c| *c == self.codec()).unwrap_or(0);
-                self.set_codec(all[(i + 1) % all.len()]);
-                true
-            }
-            // --- チャット ---
-            "toggle_chat" => {
-                self.chat_open = !self.chat_open;
-                self
-                    .player()
-                    .set_video_margin_right(if self.chat_open { 0.28 } else { 0.0 });
-                true
-            }
-            "chat_font_inc" => {
-                self.chat_font_px = (self.chat_font_px + 2.0).clamp(10.0, 28.0);
-                true
-            }
-            "chat_font_dec" => {
-                self.chat_font_px = (self.chat_font_px - 2.0).clamp(10.0, 28.0);
-                true
-            }
-            "chat_scroll_up" | "chat_scroll_down" => {
-                let d: i32 = if name == "chat_scroll_up" { 3 } else { -3 };
-                let max = self.chat.as_ref().map_or(0, |c| c.messages().len()).saturating_sub(1);
-                self.chat_scroll = ((self.chat_scroll as i32 + d).max(0) as usize).min(max);
-                true
-            }
-            "chat_wider" | "chat_narrower" => {
-                let d = if name == "chat_wider" { 0.04 } else { -0.04 };
-                self.chat_width_ratio = (self.chat_width_ratio + d).clamp(0.15, 0.6);
-                if self.chat_open {
-                    self
-                        .player()
-                        .set_video_margin_right(self.chat_width_ratio as f64);
-                }
-                true
-            }
-            // --- 認証 / 評価 ---
-            "login" => {
-                if !self.account.is_busy() {
-                    self.start_login();
-                }
-                true
-            }
-            "like" => {
-                if let Some(vid) = auth::extract_video_id(&self.current_url()) {
-                    self.start_like(vid);
-                }
-                true
-            }
-            // --- URL 再生 ---
-            "play_url" => {
-                let url = self.url_input.trim().to_string();
-                if !url.is_empty() {
-                    self.play(&url);
-                }
-                true
-            }
-            // --- 一覧 ---
-            "toggle_list" => {
-                self.list_open = !self.list_open;
-                self.card_menu_open = None;
-                if self.list_open {
-                    self.list_sel = 0;
-                    self.ensure_source_fetched();
-                }
-                true
-            }
-            "close_overlay" => {
-                self.list_open = false;
-                self.card_menu_open = None;
-                true
-            }
-            "open_recommend" | "open_subs" | "open_playlist" | "open_history" => {
-                self.list_source = match name {
-                    "open_recommend" => ListSource::Recommend,
-                    "open_subs" => ListSource::Subs,
-                    "open_playlist" => ListSource::Playlist,
-                    _ => ListSource::History,
-                };
-                self.list_open = true;
-                self.list_sel = 0;
-                self.card_menu_open = None;
-                self.ensure_source_fetched();
-                true
-            }
-            "list_up" => {
-                self.list_sel = self.list_sel.saturating_sub(1);
-                true
-            }
-            "list_down" => {
-                let n = self.list_rows().1.len();
-                if n > 0 {
-                    self.list_sel = (self.list_sel + 1).min(n - 1);
-                }
-                true
-            }
-            "list_select" => {
-                self.card_menu_open = None;
-                self.play_list_index(self.list_sel);
-                true
-            }
-            "list_back" => {
-                if self.list_source == ListSource::Channel {
-                    // チャンネルビューから おすすめ へ戻る。
-                    self.list_source = ListSource::Recommend;
-                    self.list_sel = 0;
-                } else if self.list_source == ListSource::Playlist
-                    && self.playlist.is_items_view()
-                {
-                    self.playlist_back_to_lists();
-                    self.list_sel = 0;
-                }
-                true
-            }
-            _ => false,
+        let action = match name {
+            "play_pause" => UiAction::TogglePause,
+            "seek_fwd" => UiAction::SeekBy(5.0),
+            "seek_back" => UiAction::SeekBy(-5.0),
+            "live_edge" => UiAction::LiveEdge,
+            "vol_up" => UiAction::VolumeBy(5.0),
+            "vol_down" => UiAction::VolumeBy(-5.0),
+            "mute" => UiAction::ToggleMute,
+            "quality_next" => UiAction::CycleQuality,
+            "codec_next" => UiAction::CycleCodec,
+            "toggle_chat" => UiAction::ToggleChat,
+            "chat_font_inc" => UiAction::ChatFontBy(2.0),
+            "chat_font_dec" => UiAction::ChatFontBy(-2.0),
+            "chat_scroll_up" => UiAction::ChatScroll(3),
+            "chat_scroll_down" => UiAction::ChatScroll(-3),
+            "chat_wider" => UiAction::ChatWidthBy(0.04),
+            "chat_narrower" => UiAction::ChatWidthBy(-0.04),
+            "login" => UiAction::Login,
+            "like" => UiAction::Like,
+            "play_url" => UiAction::PlayUrl(self.url_input.trim().to_string()),
+            "toggle_list" => UiAction::ToggleList,
+            "close_overlay" => UiAction::CloseList,
+            "open_recommend" => UiAction::OpenList(ListSource::Recommend),
+            "open_subs" => UiAction::OpenList(ListSource::Subs),
+            "open_playlist" => UiAction::OpenList(ListSource::Playlist),
+            "open_history" => UiAction::OpenList(ListSource::History),
+            "list_up" => UiAction::ListMove { delta: -1 },
+            "list_down" => UiAction::ListMove { delta: 1 },
+            "list_select" => UiAction::ListSelect,
+            "list_back" => UiAction::ListBack,
+            _ => return false,
         };
+        let known = self.apply_action(action);
         #[cfg(windows)]
         if known {
             self.last_activity = Instant::now();
@@ -893,26 +876,181 @@ impl NativeRunning {
         Vec::new()
     }
 
-    /// 一覧の行 index を再生（再生リスト 1 階層目なら中身を開く）。
+    /// 一覧の行 index から ID を引いて再生する（devtools/キーボードが使う index ベースの入口）。
+    /// 描画順の座席番号(index)をここで一度だけ ID に変換し、以降は [`Self::play_by_id`] という
+    /// ID ベースの経路に合流させる（オーバーレイの直接クリックと処理を共有する）。
     #[cfg(windows)]
     fn play_list_index(&mut self, idx: usize) {
         if self.list_source == ListSource::Playlist && !self.playlist.is_items_view() {
-            // 再生リスト一覧で選択 → その中身を開く（2 階層目へ）。
             if let Some(pl) = self.playlist.lists().get(idx) {
-                let id = pl.playlist_id.clone();
-                let title = pl.title.clone();
-                self.list_sel = 0;
-                self.start_playlist_items(id, title);
+                self.play_by_id(pl.playlist_id.clone());
             }
             return;
         }
         let rows = self.list_rows().1;
         if let Some(card) = rows.get(idx) {
-            let url = format!("https://www.youtube.com/watch?v={}", card.id);
-            self.list_open = false;
-            self.url_input = url.clone();
-            self.play(&url);
+            self.play_by_id(card.id.clone());
         }
+    }
+
+    /// 一覧の行の実 ID を再生する（再生リスト 1 階層目なら ID は playlist_id で、中身を開く）。
+    /// オーバーレイの直接クリック（`OverlayAction::Play`）と `play_list_index` の共通処理。
+    #[cfg(windows)]
+    fn play_by_id(&mut self, video_id: String) {
+        self.card_menu_open = None;
+        if self.list_source == ListSource::Playlist && !self.playlist.is_items_view() {
+            // 再生リスト一覧で選択 → その中身を開く（2 階層目へ）。ここでの ID は playlist_id。
+            if let Some(pl) = self.playlist.lists().iter().find(|p| p.playlist_id == video_id) {
+                let title = pl.title.clone();
+                self.list_sel = 0;
+                self.start_playlist_items(video_id.clone(), title);
+            }
+            return;
+        }
+        let url = format!("https://www.youtube.com/watch?v={video_id}");
+        self.list_open = false;
+        self.url_input = url.clone();
+        self.play(&url);
+    }
+
+    /// 3 入力系統（オーバーレイ/dev-tools/キーボード）の合流点。全員がここへ `UiAction` を
+    /// 組み立てて渡すだけにする（Issue #11 PR B）。
+    /// 戻り値 = 「ユーザー操作があったか」（呼び出し側が last_activity 更新に使う）。
+    #[cfg(windows)]
+    fn apply_action(&mut self, a: UiAction) -> bool {
+        match a {
+            UiAction::TogglePause => {
+                let p = self.player();
+                p.set_paused(!p.paused());
+            }
+            UiAction::SeekTo(frac) => {
+                let p = self.player();
+                let dur = p.duration();
+                if p.seekable() && dur > 0.0 {
+                    p.set_time_pos(frac * dur);
+                }
+            }
+            UiAction::SeekBy(secs) => self.seek_by(secs),
+            UiAction::SetVolume(v) => self.player().set_volume(v.clamp(0.0, 130.0)),
+            UiAction::VolumeBy(d) => {
+                let p = self.player();
+                p.set_volume((p.volume() + d).clamp(0.0, 130.0));
+            }
+            UiAction::ToggleMute => {
+                let p = self.player();
+                p.set_muted(!p.muted());
+            }
+            UiAction::LiveEdge => self.player().seek_to_live(),
+            UiAction::Like => {
+                if let Some(vid) = auth::extract_video_id(&self.current_url()) {
+                    self.start_like(vid);
+                }
+            }
+            UiAction::CycleQuality => {
+                let all = Quality::ALL;
+                let i = all.iter().position(|q| *q == self.quality()).unwrap_or(0);
+                self.set_quality(all[(i + 1) % all.len()]);
+            }
+            UiAction::CycleCodec => {
+                let all = Codec::ALL;
+                let i = all.iter().position(|c| *c == self.codec()).unwrap_or(0);
+                self.set_codec(all[(i + 1) % all.len()]);
+            }
+            UiAction::Login => {
+                if !self.account.is_busy() {
+                    self.start_login();
+                }
+            }
+            UiAction::PlayUrl(url) => {
+                if !url.is_empty() {
+                    self.play(&url);
+                }
+            }
+            UiAction::OpenList(src) => {
+                self.list_source = src;
+                self.list_open = true;
+                self.list_sel = 0;
+                self.card_menu_open = None;
+                self.ensure_source_fetched();
+            }
+            UiAction::Play { video_id } => self.play_by_id(video_id),
+            UiAction::OpenChannel { id, name } => {
+                // 実 channelId があればそれを使い（確実）、無ければ名前検索にフォールバックする。
+                if let Some(id) = id {
+                    self.open_channel_by_id(id, name);
+                    self.list_source = ListSource::Channel;
+                    self.list_sel = 0;
+                } else if !name.is_empty() {
+                    self.open_channel(name);
+                    self.list_source = ListSource::Channel;
+                    self.list_sel = 0;
+                }
+                self.card_menu_open = None;
+            }
+            UiAction::OpenCardMenu(idx) => {
+                self.card_menu_open = Some(idx);
+            }
+            UiAction::CloseCardMenu => {
+                self.card_menu_open = None;
+            }
+            UiAction::SaveWatchLater { video_id } => {
+                self.save_watch_later(video_id);
+                self.card_menu_open = None;
+            }
+            UiAction::Feedback { token } => {
+                self.send_card_feedback(token);
+                self.card_menu_open = None;
+            }
+            UiAction::CloseList => {
+                self.list_open = false;
+                self.card_menu_open = None;
+            }
+            UiAction::ToggleList => {
+                self.list_open = !self.list_open;
+                self.card_menu_open = None;
+                if self.list_open {
+                    self.list_sel = 0;
+                    self.ensure_source_fetched();
+                }
+            }
+            UiAction::ListMove { delta } => {
+                let n = self.list_rows().1.len();
+                if n > 0 {
+                    let sel = (self.list_sel as i32 + delta).clamp(0, n as i32 - 1);
+                    self.list_sel = sel as usize;
+                }
+            }
+            UiAction::ListSelect => {
+                self.card_menu_open = None;
+                self.play_list_index(self.list_sel);
+            }
+            UiAction::ListBack => {
+                if self.list_source == ListSource::Channel {
+                    // チャンネルビューから おすすめ へ戻る。
+                    self.list_source = ListSource::Recommend;
+                    self.list_sel = 0;
+                } else if self.list_source == ListSource::Playlist && self.playlist.is_items_view() {
+                    self.playlist_back_to_lists();
+                    self.list_sel = 0;
+                }
+            }
+            UiAction::ToggleChat => self.toggle_chat(),
+            UiAction::ChatScroll(d) => {
+                let max = self.chat.as_ref().map_or(0, |c| c.messages().len()).saturating_sub(1);
+                self.chat_scroll = ((self.chat_scroll as i32 + d).max(0) as usize).min(max);
+            }
+            UiAction::ChatFontBy(d) => {
+                self.chat_font_px = (self.chat_font_px + d).clamp(10.0, 28.0);
+            }
+            UiAction::SetChatWidth(r) => {
+                self.chat_width_ratio = r.clamp(0.15, 0.6);
+                if self.chat_open {
+                    self.player().set_video_margin_right(self.chat_width_ratio as f64);
+                }
+            }
+            UiAction::ChatWidthBy(d) => self.chat_width_by(d),
+        }
+        true
     }
 }
 
@@ -950,158 +1088,16 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             #[cfg(windows)]
             if _state.dcomp_overlay.is_some() {
                 // 新ホスト（子窓+DComp）: クリック適用＋活動記録＋自動非表示＋描画。
-                use crate::dcomp_overlay::{Card, ListTab, OverlayAction, PlaybackView};
+                use crate::dcomp_overlay::{Card, ListTab, PlaybackView};
                 let actions = _state
                     .dcomp_overlay
                     .as_mut()
                     .map(|o| o.take_actions())
                     .unwrap_or_default();
                 for a in actions {
-                    match a {
-                        OverlayAction::TogglePause => {
-                            let p = _state.player();
-                            p.set_paused(!p.paused());
-                        }
-                        OverlayAction::Seek(frac) => {
-                            let p = _state.player();
-                            let dur = p.duration();
-                            if p.seekable() && dur > 0.0 {
-                                p.set_time_pos(frac * dur);
-                            }
-                        }
-                        OverlayAction::SetVolume(v) => {
-                            _state.player().set_volume(v.clamp(0.0, 130.0))
-                        }
-                        OverlayAction::VolumeStep(d) => {
-                            let p = _state.player();
-                            p.set_volume((p.volume() + d).clamp(0.0, 130.0));
-                        }
-                        OverlayAction::ToggleMute => {
-                            let p = _state.player();
-                            p.set_muted(!p.muted());
-                        }
-                        OverlayAction::LiveEdge => _state.player().seek_to_live(),
-                        OverlayAction::Like => {
-                            if let Some(vid) = auth::extract_video_id(&_state.current_url()) {
-                                _state.start_like(vid);
-                            }
-                        }
-                        OverlayAction::CycleQuality => {
-                            let all = Quality::ALL;
-                            let i = all.iter().position(|q| *q == _state.quality()).unwrap_or(0);
-                            _state.set_quality(all[(i + 1) % all.len()]);
-                        }
-                        OverlayAction::CycleCodec => {
-                            let all = Codec::ALL;
-                            let i = all.iter().position(|c| *c == _state.codec()).unwrap_or(0);
-                            _state.set_codec(all[(i + 1) % all.len()]);
-                        }
-                        OverlayAction::Login => {
-                            if !_state.account.is_busy() {
-                                _state.start_login();
-                            }
-                        }
-                        OverlayAction::OpenList(tab) => {
-                            use crate::dcomp_overlay::ListTab;
-                            _state.list_source = match tab {
-                                ListTab::Recommend => ListSource::Recommend,
-                                ListTab::Subs => ListSource::Subs,
-                                ListTab::Playlist => ListSource::Playlist,
-                                ListTab::History => ListSource::History,
-                            };
-                            _state.list_open = true;
-                            _state.list_sel = 0;
-                            _state.card_menu_open = None;
-                            _state.ensure_source_fetched();
-                        }
-                        OverlayAction::PlayIndex(idx) => {
-                            _state.card_menu_open = None;
-                            _state.play_list_index(idx);
-                        }
-                        OverlayAction::OpenChannelOf(idx) => {
-                            // 現在の一覧の idx 番のチャンネルを開く。実 channelId があれば
-                            // それを使い（確実）、無ければ名前検索にフォールバックする。
-                            let rows = _state.list_rows().1;
-                            if let Some(card) = rows.get(idx) {
-                                if let Some(id) = card.menu.channel_id.clone() {
-                                    _state.open_channel_by_id(id, card.channel.clone());
-                                    _state.list_source = ListSource::Channel;
-                                    _state.list_sel = 0;
-                                } else if !card.channel.is_empty() {
-                                    _state.open_channel(card.channel.clone());
-                                    _state.list_source = ListSource::Channel;
-                                    _state.list_sel = 0;
-                                }
-                            }
-                            _state.card_menu_open = None;
-                        }
-                        OverlayAction::OpenCardMenu(idx) => {
-                            _state.card_menu_open = Some(idx);
-                        }
-                        OverlayAction::CloseCardMenu => {
-                            _state.card_menu_open = None;
-                        }
-                        OverlayAction::SaveWatchLater(idx) => {
-                            let rows = _state.list_rows().1;
-                            if let Some(card) = rows.get(idx) {
-                                _state.save_watch_later(card.id.clone());
-                            }
-                            _state.card_menu_open = None;
-                        }
-                        OverlayAction::NotInterested(idx) => {
-                            let rows = _state.list_rows().1;
-                            if let Some(token) = rows.get(idx).and_then(|c| c.menu.not_interested_token.clone()) {
-                                _state.send_card_feedback(token);
-                            }
-                            _state.card_menu_open = None;
-                        }
-                        OverlayAction::NotRecommendChannel(idx) => {
-                            let rows = _state.list_rows().1;
-                            if let Some(token) = rows.get(idx).and_then(|c| c.menu.not_channel_token.clone()) {
-                                _state.send_card_feedback(token);
-                            }
-                            _state.card_menu_open = None;
-                        }
-                        OverlayAction::CloseList => {
-                            _state.list_open = false;
-                            _state.card_menu_open = None;
-                        }
-                        OverlayAction::ListScroll(d) => {
-                            let n = _state.list_rows().1.len();
-                            if n > 0 {
-                                let sel = (_state.list_sel as i32 + d).clamp(0, n as i32 - 1);
-                                _state.list_sel = sel as usize;
-                            }
-                        }
-                        OverlayAction::ToggleChat => {
-                            _state.chat_open = !_state.chat_open;
-                            if _state.chat_open {
-                                _state.chat_scroll = 0;
-                            }
-                            let m = if _state.chat_open { _state.chat_width_ratio } else { 0.0 };
-                            _state.player().set_video_margin_right(m as f64);
-                        }
-                        OverlayAction::ChatScroll(d) => {
-                            let max = _state.chat.as_ref().map_or(0, |c| c.messages().len()).saturating_sub(1);
-                            _state.chat_scroll =
-                                ((_state.chat_scroll as i32 + d).max(0) as usize).min(max);
-                        }
-                        OverlayAction::SetChatWidth(r) => {
-                            _state.chat_width_ratio = (r as f32).clamp(0.15, 0.6);
-                            if _state.chat_open {
-                                _state
-                                    .player()
-                                    .set_video_margin_right(_state.chat_width_ratio as f64);
-                            }
-                        }
-                        OverlayAction::ChatFontDec => {
-                            _state.chat_font_px = (_state.chat_font_px - 2.0).clamp(10.0, 28.0);
-                        }
-                        OverlayAction::ChatFontInc => {
-                            _state.chat_font_px = (_state.chat_font_px + 2.0).clamp(10.0, 28.0);
-                        }
+                    if _state.apply_action(a.into()) {
+                        _state.last_activity = Instant::now();
                     }
-                    _state.last_activity = Instant::now();
                 }
                 if _state
                     .dcomp_overlay
@@ -1247,8 +1243,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 button: MouseButton::Left,
                 ..
             } => {
-                let p = state.player();
-                p.set_paused(!p.paused());
+                state.apply_action(UiAction::TogglePause);
                 #[cfg(windows)]
                 {
                     state.last_activity = Instant::now();
@@ -1261,9 +1256,8 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 40.0,
                 };
                 if dy != 0.0 {
-                    let p = state.player();
                     let step = if dy > 0.0 { 5.0 } else { -5.0 };
-                    p.set_volume((p.volume() + step).clamp(0.0, 130.0));
+                    state.apply_action(UiAction::VolumeBy(step));
                     #[cfg(windows)]
                     {
                         state.last_activity = Instant::now();
@@ -1310,56 +1304,29 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     return;
                 }
                 // Ctrl+修飾キー: L=ログイン, G=高評価, Q=画質切替, C=コーデック切替。
+                // 挙動不変のため、旧実装がここで last_activity を更新していなかった点（他の
+                // キー入力と異なり早期 return していた）もそのまま踏襲する（Ctrl+V のみ例外）。
                 if state.ctrl {
                     if let Key::Character(c) = &event.logical_key {
-                        match c.as_str().to_ascii_lowercase().as_str() {
-                            "l" => {
-                                if !state.account.is_busy() {
-                                    state.start_login();
-                                }
-                                return;
-                            }
-                            "g" => {
-                                if let Some(vid) =
-                                    auth::extract_video_id(&state.current_url())
-                                {
-                                    state.start_like(vid);
-                                }
-                                return;
-                            }
-                            "t" => {
-                                state.chat_open = !state.chat_open;
-                                state
-                                    .player()
-                                    .set_video_margin_right(if state.chat_open { 0.28 } else { 0.0 });
-                                return;
-                            }
-                            "q" => {
-                                let all = Quality::ALL;
-                                let i = all.iter().position(|q| *q == state.quality()).unwrap_or(0);
-                                state.set_quality(all[(i + 1) % all.len()]);
-                                return;
-                            }
-                            "c" => {
-                                let all = Codec::ALL;
-                                let i = all.iter().position(|c2| *c2 == state.codec()).unwrap_or(0);
-                                state.set_codec(all[(i + 1) % all.len()]);
-                                return;
-                            }
+                        let action = match c.as_str().to_ascii_lowercase().as_str() {
+                            "l" => Some(UiAction::Login),
+                            "g" => Some(UiAction::Like),
+                            "t" => Some(UiAction::ToggleChat),
+                            "q" => Some(UiAction::CycleQuality),
+                            "c" => Some(UiAction::CycleCodec),
                             // Ctrl + "-" / "+"（"=" も可）: コメント文字サイズ増減。
-                            "-" => {
-                                state.chat_font_px = (state.chat_font_px - 2.0).clamp(10.0, 28.0);
-                                return;
-                            }
-                            "+" | "=" => {
-                                state.chat_font_px = (state.chat_font_px + 2.0).clamp(10.0, 28.0);
-                                return;
-                            }
-                            _ => {}
+                            "-" => Some(UiAction::ChatFontBy(-2.0)),
+                            "+" | "=" => Some(UiAction::ChatFontBy(2.0)),
+                            _ => None,
+                        };
+                        if let Some(a) = action {
+                            state.apply_action(a);
+                            return;
                         }
                     }
                 }
-                // Ctrl+V: クリップボードのテキストを URL 欄へ貼り付け。
+                // Ctrl+V: クリップボードのテキストを URL 欄へ貼り付け（テキスト編集そのものなので
+                // UiAction 化しない）。
                 #[cfg(windows)]
                 if state.ctrl {
                     if let Key::Character(c) = &event.logical_key {
@@ -1378,12 +1345,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 }
                 // Tab: 一覧を開閉。
                 if let Key::Named(NamedKey::Tab) = event.logical_key {
-                    state.list_open = !state.list_open;
-                    state.card_menu_open = None;
-                    if state.list_open {
-                        state.list_sel = 0;
-                        state.ensure_source_fetched();
-                    }
+                    state.apply_action(UiAction::ToggleList);
                     #[cfg(windows)]
                     {
                         state.last_activity = Instant::now();
@@ -1399,81 +1361,44 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                         .as_ref()
                         .map(|o| o.grid_cols())
                         .unwrap_or(1)
-                        .max(1);
+                        .max(1) as i32;
                     #[cfg(not(windows))]
-                    let cols = 1usize;
+                    let cols = 1i32;
                     match &event.logical_key {
                         Key::Named(NamedKey::ArrowUp) => {
-                            state.list_sel = state.list_sel.saturating_sub(cols);
+                            state.apply_action(UiAction::ListMove { delta: -cols });
                         }
                         Key::Named(NamedKey::ArrowDown) => {
-                            let n = state.list_rows().1.len();
-                            if n > 0 {
-                                state.list_sel = (state.list_sel + cols).min(n - 1);
-                            }
+                            state.apply_action(UiAction::ListMove { delta: cols });
                         }
                         Key::Named(NamedKey::ArrowLeft) => {
-                            state.list_sel = state.list_sel.saturating_sub(1);
+                            state.apply_action(UiAction::ListMove { delta: -1 });
                         }
                         Key::Named(NamedKey::ArrowRight) => {
-                            let n = state.list_rows().1.len();
-                            if n > 0 {
-                                state.list_sel = (state.list_sel + 1).min(n - 1);
-                            }
+                            state.apply_action(UiAction::ListMove { delta: 1 });
                         }
                         Key::Named(NamedKey::Enter) => {
-                            state.card_menu_open = None;
-                            if state.list_source == ListSource::Playlist
-                                && !state.playlist.is_items_view()
-                            {
-                                // 再生リスト一覧で Enter → その中身を開く（2 階層目へ）。
-                                if let Some(pl) = state.playlist.lists().get(state.list_sel) {
-                                    let id = pl.playlist_id.clone();
-                                    let title = pl.title.clone();
-                                    state.list_sel = 0;
-                                    state.start_playlist_items(id, title);
-                                }
-                            } else {
-                                let rows = state.list_rows().1;
-                                if let Some(card) = rows.get(state.list_sel) {
-                                    let url = format!("https://www.youtube.com/watch?v={}", card.id);
-                                    state.list_open = false;
-                                    state.url_input = url.clone();
-                                    state.play(&url);
-                                }
-                            }
+                            // devtools の list_select と同じ経路（旧: ここだけ play_list_index を
+                            // 呼ばずインライン再実装していたドリフトを解消。issue #11 PR B）。
+                            state.apply_action(UiAction::ListSelect);
                         }
                         Key::Named(NamedKey::Backspace) => {
-                            state.card_menu_open = None;
-                            if state.list_source == ListSource::Channel {
-                                // チャンネルビューから おすすめ へ戻る。
-                                state.list_source = ListSource::Recommend;
-                                state.list_sel = 0;
-                            } else if state.list_source == ListSource::Playlist
-                                && state.playlist.is_items_view()
-                            {
-                                // 再生リストの中身表示中なら一覧へ戻る。
-                                state.playlist_back_to_lists();
-                                state.list_sel = 0;
-                            }
+                            state.apply_action(UiAction::ListBack);
                         }
                         Key::Named(NamedKey::Escape) => {
-                            state.list_open = false;
-                            state.card_menu_open = None;
+                            state.apply_action(UiAction::CloseList);
                         }
                         Key::Character(c) => {
                             state.card_menu_open = None;
-                            let next = match c.as_str() {
+                            let src = match c.as_str() {
                                 "1" => Some(ListSource::Subs),
                                 "2" => Some(ListSource::Recommend),
                                 "3" => Some(ListSource::History),
                                 "4" => Some(ListSource::Playlist),
                                 _ => None,
                             };
-                            if let Some(src) = next {
-                                state.list_source = src;
-                                state.list_sel = 0;
-                                state.ensure_source_fetched();
+                            if let Some(src) = src {
+                                state.apply_action(UiAction::OpenList(src));
                             }
                         }
                         _ => {}
@@ -1487,29 +1412,27 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 match event.logical_key {
                     // Space は URL に現れないため再生/一時停止に温存。
                     Key::Named(NamedKey::Space) => {
-                        let p = state.player();
-                        p.set_paused(!p.paused());
+                        state.apply_action(UiAction::TogglePause);
                     }
-                    Key::Named(NamedKey::ArrowRight) => state.player().seek_relative(5.0),
-                    Key::Named(NamedKey::ArrowLeft) => state.player().seek_relative(-5.0),
+                    Key::Named(NamedKey::ArrowRight) => {
+                        state.apply_action(UiAction::SeekBy(5.0));
+                    }
+                    Key::Named(NamedKey::ArrowLeft) => {
+                        state.apply_action(UiAction::SeekBy(-5.0));
+                    }
                     Key::Named(NamedKey::ArrowUp) => {
-                        let p = state.player();
-                        p.set_volume((p.volume() + 5.0).min(130.0));
+                        state.apply_action(UiAction::VolumeBy(5.0));
                     }
                     Key::Named(NamedKey::ArrowDown) => {
-                        let p = state.player();
-                        p.set_volume((p.volume() - 5.0).max(0.0));
+                        state.apply_action(UiAction::VolumeBy(-5.0));
                     }
-                    // --- URL 入力欄の編集 ---
+                    // --- URL 入力欄の編集（テキスト編集そのものなので UiAction 化しない）---
                     Key::Named(NamedKey::Backspace) => {
                         state.url_input.pop();
                     }
                     Key::Named(NamedKey::Escape) => state.url_input.clear(),
                     Key::Named(NamedKey::Enter) => {
-                        let url = state.url_input.trim().to_string();
-                        if !url.is_empty() {
-                            state.play(&url);
-                        }
+                        state.apply_action(UiAction::PlayUrl(state.url_input.trim().to_string()));
                     }
                     // 印字可能文字は URL 欄へ追記（IME 不要。URL は英数字記号のみ）。
                     _ => {

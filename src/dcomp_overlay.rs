@@ -28,11 +28,12 @@ use windows::Win32::Graphics::DirectComposition::{
 use windows::Win32::Graphics::DirectWrite::{IDWriteFactory, IDWriteTextFormat};
 
 /// 子窓への入力で積まれる行動（コアへ渡す）。UI 移植に合わせて拡張する。
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// `String` を持つ variant があるため `Copy` は導出しない。
+#[derive(Debug, Clone, PartialEq)]
 pub enum OverlayAction {
     /// 再生/一時停止トグル（再生ボタン or 動画域クリック）。
     TogglePause,
-    /// シーク（0.0..=1.0 の割合。seekable 時のみ）。
+    /// シーク（0.0..=1.0 の割合。seekable 時のみ。シークバードラッグ用）。
     Seek(f64),
     /// 音量設定（0.0..=130.0）。
     SetVolume(f64),
@@ -52,20 +53,22 @@ pub enum OverlayAction {
     Login,
     /// 一覧（指定タブ）を開く。
     OpenList(ListTab),
-    /// 一覧の行クリック → その index を再生/ドリル。
-    PlayIndex(usize),
-    /// カードのアバター/チャンネル名クリック → その index のチャンネルを開く。
-    OpenChannelOf(usize),
-    /// カードのケバブ(⋮)クリック → その index のコンテキストメニューを開く。
+    /// 一覧の行クリック → その video_id を再生する（描画順の座席番号ではなく実 ID。
+    /// クリックと適用の間に一覧が更新されても別の動画を指さない）。
+    Play { video_id: String },
+    /// カードのアバター/チャンネル名クリック → 実 channelId（無ければ名前検索）でチャンネルを開く。
+    OpenChannel { id: Option<String>, name: String },
+    /// カードのケバブ(⋮)クリック → その index のコンテキストメニューを開く（表示位置の話なので
+    /// index のままでよい）。
     OpenCardMenu(usize),
     /// 開いているカードメニューを閉じる（メニュー外クリック / ✕ 相当）。
     CloseCardMenu,
-    /// メニュー項目「後で見るに保存」。
-    SaveWatchLater(usize),
-    /// メニュー項目「興味なし」。
-    NotInterested(usize),
-    /// メニュー項目「チャンネルをおすすめに表示しない」。
-    NotRecommendChannel(usize),
+    /// メニュー項目「後で見るに保存」（対象の video_id）。
+    SaveWatchLater(String),
+    /// メニュー項目「興味なし」（feedbackToken）。
+    NotInterested(String),
+    /// メニュー項目「チャンネルをおすすめに表示しない」（feedbackToken）。
+    NotRecommendChannel(String),
     /// 一覧を閉じる（✕ ボタン）。
     CloseList,
     /// 一覧をスクロール（選択を ± 行動かす。ホイール）。
@@ -380,7 +383,7 @@ impl Control {
                 Hit::Drag(Drag::Vol, OverlayAction::SetVolume(frac_x(rect, x) * 130.0))
             }
             Control::Time { .. } => Hit::Absorb,
-            Control::Button { action, .. } => Hit::Act(*action),
+            Control::Button { action, .. } => Hit::Act(action.clone()),
         })
     }
 
@@ -443,9 +446,10 @@ struct WndState {
     top_panel: RECT,
     /// 一覧（おすすめグリッド）表示中か。
     list_open: bool,
-    /// おすすめグリッドのカード矩形→カード index（クリック→PlayIndex）。
-    card_hits: Vec<(RECT, usize)>,
-    /// カード内の小領域（アバター/チャンネル→OpenChannelOf, ケバブ→OpenCardMenu）。card_hits より優先。
+    /// おすすめグリッドのカード矩形→video_id（クリック→Play）。位置(index)ではなく実 ID を持つ
+    /// ため、描画とクリックの間に一覧が更新されても別の動画を指さない。
+    card_hits: Vec<(RECT, String)>,
+    /// カード内の小領域（アバター/チャンネル→OpenChannel, ケバブ→OpenCardMenu）。card_hits より優先。
     card_extra_hits: Vec<(RECT, OverlayAction)>,
     /// カードメニューが開いているか、と各項目の矩形→アクション。開いている間はこれを最優先で
     /// 判定し、当たらなければ CloseCardMenu を発火してそのクリックを消費する（吸収）。
@@ -844,7 +848,7 @@ impl DcompOverlay {
         let mut panel = RECT::default();
         let mut top_panel = RECT::default();
         let mut grid: Option<BrowseGrid> = None;
-        let mut card_hits: Vec<(RECT, usize)> = Vec::new();
+        let mut card_hits: Vec<(RECT, String)> = Vec::new();
         let mut nav_hits: Vec<(RECT, OverlayAction)> = Vec::new();
         // カード内の小領域（アバター/チャンネル名→OpenChannelOf, ケバブ→OpenCardMenu）。
         // カード本体(card_hits=再生)より優先して判定する。
@@ -1215,7 +1219,7 @@ impl DcompOverlay {
                     // アバター＋チャンネル行 → チャンネルを開く。
                     card_extra_hits.push((
                         RECT { left: cx as i32, top: info_y as i32, right: (cright - kebab_w - 4.0) as i32, bottom: (info_y + avatar_size) as i32 },
-                        OverlayAction::OpenChannelOf(i),
+                        OverlayAction::OpenChannel { id: card.menu.channel_id.clone(), name: card.channel.clone() },
                     ));
                     // ケバブ(⋮) → コンテキストメニュー。
                     card_extra_hits.push((
@@ -1228,7 +1232,7 @@ impl DcompOverlay {
 
                     card_hits.push((
                         RECT { left: cx as i32, top: cy as i32, right: cright as i32, bottom: (cy + g.card_h) as i32 },
-                        i,
+                        card.id.clone(),
                     ));
                 }
 
@@ -1242,16 +1246,16 @@ impl DcompOverlay {
                         let menu_w = 268.0;
                         let item_h = 40.0;
                         let mut items: Vec<(&str, OverlayAction)> = vec![
-                            ("後で見るに保存", OverlayAction::SaveWatchLater(mi)),
+                            ("後で見るに保存", OverlayAction::SaveWatchLater(card.id.clone())),
                         ];
-                        if card.menu.not_interested_token.is_some() {
-                            items.push(("興味なし", OverlayAction::NotInterested(mi)));
+                        if let Some(token) = card.menu.not_interested_token.clone() {
+                            items.push(("興味なし", OverlayAction::NotInterested(token)));
                         }
-                        if card.menu.not_channel_token.is_some() {
-                            items.push(("チャンネルをおすすめに表示しない", OverlayAction::NotRecommendChannel(mi)));
+                        if let Some(token) = card.menu.not_channel_token.clone() {
+                            items.push(("チャンネルをおすすめに表示しない", OverlayAction::NotRecommendChannel(token)));
                         }
                         if card.menu.channel_id.is_some() || !card.channel.is_empty() {
-                            items.push(("チャンネルへ", OverlayAction::OpenChannelOf(mi)));
+                            items.push(("チャンネルへ", OverlayAction::OpenChannel { id: card.menu.channel_id.clone(), name: card.channel.clone() }));
                         }
                         let menu_h = items.len() as f32 * item_h + ds::SPACE_INSET;
                         let mx = (anchor_right - menu_w).clamp(ds::GAP_TIGHT, cwf - menu_w - ds::GAP_TIGHT);
@@ -1262,7 +1266,7 @@ impl DcompOverlay {
                             p.text_clip(label, rf(mx + ds::SPACE_INSET, iy + 11.0, mx + menu_w - ds::SPACE_INSET, iy + item_h - 8.0), ds::TEXT_PRIMARY);
                             menu_hits.push((
                                 RECT { left: mx as i32, top: iy as i32, right: (mx + menu_w) as i32, bottom: (iy + item_h) as i32 },
-                                *action,
+                                action.clone(),
                             ));
                         }
                     }
@@ -1615,7 +1619,7 @@ unsafe extern "system" fn wndproc(
                     let mut handled = false;
                     for (r, a) in &s.menu_hits {
                         if in_rect(r, lo, hi) {
-                            s.actions.push(*a);
+                            s.actions.push(a.clone());
                             handled = true;
                             break;
                         }
@@ -1636,7 +1640,7 @@ unsafe extern "system" fn wndproc(
                     if !handled {
                         for (r, a) in &s.nav_hits {
                             if in_rect(r, lo, hi) {
-                                s.actions.push(*a);
+                                s.actions.push(a.clone());
                                 handled = true;
                                 break;
                             }
@@ -1646,16 +1650,16 @@ unsafe extern "system" fn wndproc(
                     if !handled {
                         for (r, a) in &s.card_extra_hits {
                             if in_rect(r, lo, hi) {
-                                s.actions.push(*a);
+                                s.actions.push(a.clone());
                                 handled = true;
                                 break;
                             }
                         }
                     }
                     if !handled {
-                        for (r, idx) in &s.card_hits {
+                        for (r, video_id) in &s.card_hits {
                             if in_rect(r, lo, hi) {
-                                s.actions.push(OverlayAction::PlayIndex(*idx));
+                                s.actions.push(OverlayAction::Play { video_id: video_id.clone() });
                                 break;
                             }
                         }
