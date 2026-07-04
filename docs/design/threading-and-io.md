@@ -19,7 +19,7 @@ lib が winit に依存できないことの帰結で、bin 側が winit の `Ev
    `resolve::ResolveUpdate` / `account::AuthMsg`）
 4. 送信後、注入された `Waker` を呼んでメインループを起こす（bin 側で winit の
    `EventLoopProxy::send_event(UserEvent::Background)` に変換される）
-5. メインループ側（`native_app::NativeRunning`）は起床のたびに各ドメインの `poll_*` system 関数を呼び、
+5. メインループ側（`ui::shell::NativeRunning`）は起床のたびに各ドメインの `poll_*` system 関数を呼び、
    結果を状態へ反映する
 
 この設計により、メインスレッド（winit のイベントループ）は一切ブロッキング I/O を行わず、CPU バウンドな
