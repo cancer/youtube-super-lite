@@ -38,10 +38,6 @@ enum AuthMsg {
     Failed(String),
 }
 
-
-/// チャットパネルに保持するメッセージの上限。
-const CHAT_MAX_MESSAGES: usize = 200;
-
 /// CLI 引数のパース結果。
 struct CliArgs {
     url: Option<String>,
