@@ -141,33 +141,20 @@ impl NativeRunning {
         }
     }
 
-    /// 現在の一覧ソースが未取得なら取得を開始する。
-    /// おすすめ（ホームフィード）はログイン時に先読みするが、未取得なら開いた時にも取得する。
-    pub(super) fn ensure_source_fetched(&mut self) {
+    /// 現在の一覧ソースを再取得する（一覧を開くたびに呼ぶ）。
+    /// 旧データは表示したまま裏で取得し、到着時に差し替える（stale-while-revalidate）。
+    /// 多重リクエスト防止の busy ガードは content 側の各 start_* が持つ。
+    pub(super) fn refresh_source(&mut self) {
         match self.list_source {
-            ListSource::Subs => {
-                if self.subs.items().is_empty() && !self.subs.is_busy() {
-                    self.start_subs();
-                }
-            }
-            ListSource::History => {
-                if self.history.items().is_empty() && !self.history.is_busy() {
-                    self.start_history();
-                }
-            }
+            ListSource::Subs => self.start_subs(),
+            ListSource::History => self.start_history(),
             ListSource::Playlist => {
-                if self.playlist.lists().is_empty()
-                    && self.playlist.items().is_empty()
-                    && !self.playlist.is_busy()
-                {
+                // 動画一覧を開いている間は再取得しない（一覧取得はリスト一覧へ戻す操作のため）。
+                if !self.playlist.is_items_view() {
                     self.start_playlist_list();
                 }
             }
-            ListSource::Recommend => {
-                if self.recommend.items().is_empty() && self.account.token().is_some() {
-                    self.start_recommend();
-                }
-            }
+            ListSource::Recommend => self.start_recommend(),
             // チャンネルビューは open_channel で取得済み。ここでは何もしない。
             ListSource::Channel => {}
         }
@@ -411,7 +398,7 @@ impl NativeRunning {
                 self.list_open = true;
                 self.list_sel = 0;
                 self.card_menu_open = None;
-                self.ensure_source_fetched();
+                self.refresh_source();
             }
             UiAction::Play { video_id } => self.play_by_id(video_id),
             UiAction::OpenChannel { id, name } => {
@@ -450,7 +437,7 @@ impl NativeRunning {
                 self.card_menu_open = None;
                 if self.list_open {
                     self.list_sel = 0;
-                    self.ensure_source_fetched();
+                    self.refresh_source();
                 }
             }
             UiAction::ListMove { delta } => {
