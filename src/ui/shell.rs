@@ -267,6 +267,8 @@ impl NativeRunning {
         self.playback
             .player_offset_ms()
             .store((self.playback.player().time_pos() * 1000.0) as i64, std::sync::atomic::Ordering::Relaxed);
+        // アクセストークンが失効していたら自動更新（ログインセッションの継続）。
+        account::ensure_fresh_token(&mut self.account, &self.waker);
         self.poll_auth();
         self.poll_chat();
         content::poll_feed(&mut self.recommend, &mut self.avatars, &self.waker);
