@@ -200,6 +200,7 @@ impl NativeRunning {
             "quality": self.quality().label(),
             "codec": self.codec().label(),
             "chat_open": self.chat_open,
+            "eq_open": self.eq_open,
             "chat_font_px": self.chat_font_px,
             "chat_width_ratio": self.chat_width_ratio,
             "chat_scroll": self.chat_scroll,

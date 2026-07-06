@@ -82,6 +82,24 @@ pub enum OverlayAction {
     /// チャット文字サイズを小さく / 大きく。
     ChatFontDec,
     ChatFontInc,
+    /// EQ パネルの表示トグル（コントローラ帯の EQ ボタン）。
+    ToggleEq,
+    /// EQ: ボイス帯域ゲインを dB で絶対設定（スライダードラッグ用）。
+    SetEqVoice(f64),
+    /// EQ: ローパスカットオフを絶対設定（スライダードラッグ用。None=オフ）。
+    SetEqLowpass(Option<f64>),
+    /// EQ: ハイパスカットオフを絶対設定（スライダードラッグ用。None=オフ）。
+    SetEqHighpass(Option<f64>),
+    /// EQ: 全ニュートラル（リセットボタン）。
+    EqReset,
+}
+
+/// EQ パネルのスライダー3本を識別する。
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum EqBand {
+    Voice,
+    Low,
+    High,
 }
 
 /// チャット行のセグメント（テキスト or インライン絵文字画像）。
@@ -250,6 +268,9 @@ pub struct PlaybackView {
     pub chat_scroll: usize,
     pub chat_width_ratio: f32,
     pub chat_font_px: f32,
+    // --- EQ パネル ---
+    pub eq_open: bool,
+    pub eq: ysl_core::types::EqParams,
 }
 
 /// 上部バー・下部コントローラ帯の高さ・行高（旧 native_overlay と同値）。
@@ -330,6 +351,8 @@ enum Drag {
     Vol,
     /// チャット欄の左端をドラッグして幅変更中。
     ChatW,
+    /// EQ パネルのスライダーをドラッグ中（対象バンド）。
+    Eq(EqBand),
 }
 
 /// クリックを当てた部品が返す挙動。
@@ -354,6 +377,8 @@ enum Control {
     Time { rect: RECT, text: String },
     /// フラットなテキストボタン（ミュート/Like/画質/コーデック/ライブ最新など）。
     Button { rect: RECT, label: String, col: D2D1_COLOR_F, action: OverlayAction },
+    /// EQ スライダー（ラベル付き。Volume と同じトラック＋つまみ描画・ドラッグ挙動）。
+    EqSlider { rect: RECT, frac: f32, band: EqBand, label: String },
 }
 
 impl Control {
@@ -363,7 +388,8 @@ impl Control {
             | Control::Seek { rect, .. }
             | Control::Volume { rect, .. }
             | Control::Time { rect, .. }
-            | Control::Button { rect, .. } => *rect,
+            | Control::Button { rect, .. }
+            | Control::EqSlider { rect, .. } => *rect,
         }
     }
 
@@ -386,6 +412,9 @@ impl Control {
             }
             Control::Time { .. } => Hit::Absorb,
             Control::Button { action, .. } => Hit::Act(action.clone()),
+            Control::EqSlider { rect, band, .. } => {
+                Hit::Drag(Drag::Eq(*band), eq_action_from_frac(*band, frac_x(rect, x)))
+            }
         })
     }
 
@@ -419,19 +448,33 @@ impl Control {
             }
             Control::Volume { rect, frac } => {
                 let cy = ((rect.top + rect.bottom) / 2) as f32;
-                let (x0, x1) = (rect.left as f32, rect.right as f32);
-                p.fill_round(rf(x0, cy - 2.0, x1, cy + 2.0), 2.0, ds::alpha(ds::TEXT_PRIMARY, 0.25));
-                let vx = x0 + (x1 - x0) * *frac;
-                p.fill_round(rf(x0, cy - 2.0, vx.max(x0), cy + 2.0), 2.0, ds::TEXT_PRIMARY);
-                p.fill_ellipse(vx, cy, 5.0, ds::TEXT_ON_ACCENT);
+                draw_slider_track(p, rect.left as f32, rect.right as f32, cy, *frac);
             }
             Control::Button { rect, label, col, .. } => {
                 let cy = (rect.top + rect.bottom) / 2;
                 p.text(label, rf((rect.left + 4) as f32, (cy - 9) as f32, (rect.right - 4) as f32, (cy + 9) as f32), *col);
             }
+            Control::EqSlider { rect, frac, label, .. } => {
+                let cy = ((rect.top + rect.bottom) / 2) as f32;
+                // ラベルはトラック左に固定幅で確保し、Control::Time と同じ縦センタリングで描く。
+                let label_w = EQ_SLIDER_LABEL_W;
+                p.text(label, rf(rect.left as f32, cy - 9.0, rect.left as f32 + label_w - 8.0, cy + 9.0), fg);
+                draw_slider_track(p, rect.left as f32 + label_w, rect.right as f32, cy, *frac);
+            }
         }
     }
 }
+
+/// スライダーのトラック＋つまみを描く（Volume と EqSlider で共通の見た目）。
+unsafe fn draw_slider_track(p: &Painter, x0: f32, x1: f32, cy: f32, frac: f32) {
+    p.fill_round(rf(x0, cy - 2.0, x1, cy + 2.0), 2.0, ds::alpha(ds::TEXT_PRIMARY, 0.25));
+    let vx = x0 + (x1 - x0) * frac;
+    p.fill_round(rf(x0, cy - 2.0, vx.max(x0), cy + 2.0), 2.0, ds::TEXT_PRIMARY);
+    p.fill_ellipse(vx, cy, 5.0, ds::TEXT_ON_ACCENT);
+}
+
+/// EQ スライダーのラベル領域幅（px。トラックはこの右側から始まる）。
+const EQ_SLIDER_LABEL_W: f32 = 132.0;
 
 /// wndproc から触る窓ごとの状態。`GWLP_USERDATA` に *mut で置く（グローバル不使用）。
 #[derive(Default)]
@@ -464,6 +507,8 @@ struct WndState {
     /// チャットパネル矩形（ホイールでのスクロール判定用）と左端リサイズハンドル。
     chat_panel: RECT,
     chat_resize: RECT,
+    /// EQ パネル矩形（ヒットテスト用。余白クリックで pause させないための除外領域）。
+    eq_panel: RECT,
     /// 帯のクリッカブル/表示部品。クリックはここを探索する。
     controls: Vec<Control>,
     drag: Drag,
@@ -804,6 +849,17 @@ impl DcompOverlay {
             frac: (v.volume / 130.0).clamp(0.0, 1.0) as f32,
         });
         xr -= VOL_W + 10;
+        // EQ トグル（有効時 or パネル開時はアクセント色）。
+        let eq_active = v.eq_open || !v.eq.is_neutral();
+        let eq_col = if eq_active { ds::ACCENT_BRAND } else { fg };
+        let eq_label_w = unsafe { self.measure("EQ") }.ceil() as i32;
+        controls.push(Control::Button {
+            rect: row(xr - eq_label_w - 8, xr),
+            label: "EQ".to_string(),
+            col: eq_col,
+            action: OverlayAction::ToggleEq,
+        });
+        xr -= eq_label_w + 8 + 10;
         // 🔊/🔇 ミュート。
         let mute = if v.muted { "🔇" } else { "🔊" }.to_string();
         let mw = unsafe { self.measure(&mute) }.ceil() as i32;
@@ -849,6 +905,7 @@ impl DcompOverlay {
         let mut controls: Vec<Control> = Vec::new();
         let mut panel = RECT::default();
         let mut top_panel = RECT::default();
+        let mut eq_panel = RECT::default();
         let mut grid: Option<BrowseGrid> = None;
         let mut card_hits: Vec<(RECT, String)> = Vec::new();
         let mut nav_hits: Vec<(RECT, OverlayAction)> = Vec::new();
@@ -950,6 +1007,28 @@ impl DcompOverlay {
                 let ap = unsafe { self.measure("A-") }.ceil() as i32;
                 let adec = RECT { left: ainc.left - 6 - ap - 8, top: hcy - ROW_H / 2, right: ainc.left - 6, bottom: hcy + ROW_H / 2 };
                 controls.push(Control::Button { rect: adec, label: "A-".to_string(), col: acc, action: OverlayAction::ChatFontDec });
+            }
+            // EQ パネル（下帯直上・右寄せ）: スライダー3本＋リセット。list_open 中は出さない
+            // （呼び出し元の active && !list_open が保証済みだが、ここでは view.eq_open だけ見る）。
+            if view.eq_open {
+                let eq = view.eq;
+                let panel_w = 360;
+                let slider_h = ROW_H;
+                let reset_h = ROW_H;
+                let pad = 12;
+                let panel_h = slider_h * 3 + reset_h + pad * 2;
+                let right = cw - 14;
+                let bottom = ch - BOTTOM_H - 8;
+                eq_panel = RECT { left: right - panel_w, top: bottom - panel_h, right, bottom };
+                let mut sy = eq_panel.top + pad;
+                for band in [EqBand::Voice, EqBand::Low, EqBand::High] {
+                    let r = RECT { left: eq_panel.left + pad, top: sy, right: eq_panel.right - pad, bottom: sy + slider_h };
+                    controls.push(Control::EqSlider { rect: r, frac: eq_frac(band, eq), band, label: eq_label(band, eq) });
+                    sy += slider_h;
+                }
+                let reset_w = unsafe { self.measure("リセット") }.ceil() as i32 + 16;
+                let reset_r = RECT { left: eq_panel.right - pad - reset_w, top: sy, right: eq_panel.right - pad, bottom: sy + reset_h };
+                controls.push(Control::Button { rect: reset_r, label: "リセット".to_string(), col: ds::TEXT_PRIMARY, action: OverlayAction::EqReset });
             }
         }
 
@@ -1314,7 +1393,14 @@ impl DcompOverlay {
                 if !view.title.is_empty() {
                     p.text(&view.title, rf(12.0, (6 + ROW_H * 2) as f32, cw as f32 - 12.0, strip_h as f32), ds::TEXT_PRIMARY);
                 }
-                // 各部品（下部コントロール＋ナビタブ＋ログイン＋A-/A+。チャットの上に乗る）。
+                // EQ パネルの背景（下帯と同じ地。部品より先に描いてスライダーを上に乗せる）。
+                if eq_panel.right > eq_panel.left {
+                    p.fill_rect(
+                        rf(eq_panel.left as f32, eq_panel.top as f32, eq_panel.right as f32, eq_panel.bottom as f32),
+                        ds::alpha(ds::BG_CANVAS, 0.72),
+                    );
+                }
+                // 各部品（下部コントロール＋ナビタブ＋ログイン＋A-/A+・EQ パネル。チャットの上に乗る）。
                 for c in &controls {
                     c.draw(&p);
                 }
@@ -1342,6 +1428,7 @@ impl DcompOverlay {
         self.state.grid_cols = grid.map(|g| g.cols).unwrap_or(1);
         self.state.chat_panel = chat_panel;
         self.state.chat_resize = chat_resize;
+        self.state.eq_panel = eq_panel;
     }
 
     /// 表示中サムネ URL のうち未キャッシュのものを、ディスクキャッシュ済みなら WIC デコードして
@@ -1573,6 +1660,96 @@ fn frac_x(r: &RECT, x: i32) -> f64 {
     ((x - r.left) as f64 / w).clamp(0.0, 1.0)
 }
 
+/// ローパス/ハイパスのラダー刻み（オフの1区分込みで段数+1）。
+const EQ_LADDER_BUCKETS: usize = ysl_core::types::LOWPASS_STEPS.len() + 1;
+const _: () = assert!(ysl_core::types::LOWPASS_STEPS.len() == ysl_core::types::HIGHPASS_STEPS.len());
+
+/// frac(0.0..=1.0) を 0..=buckets-1 の区分 index に量子化する。
+fn frac_bucket(frac: f64, buckets: usize) -> usize {
+    ((frac * buckets as f64) as usize).min(buckets - 1)
+}
+
+/// 区分 index を区分中央の frac に戻す（表示用の逆変換で使う）。
+fn bucket_frac(idx: usize, buckets: usize) -> f32 {
+    ((idx as f64 + 0.5) / buckets as f64) as f32
+}
+
+/// EQ スライダーのドラッグ/クリック位置(frac)を `OverlayAction` に直す純関数。
+/// ラダー定数は devtools のステップ操作と同じ離散値（`ysl_core::types` 参照）に量子化する。
+fn eq_action_from_frac(band: EqBand, frac: f64) -> OverlayAction {
+    use ysl_core::types::{HIGHPASS_STEPS, LOWPASS_STEPS, VOICE_GAIN_MAX_DB};
+    match band {
+        EqBand::Voice => {
+            // クランプは set_eq(EqParams::clamped) に委譲する（値域の定義を二重化しない）。
+            let db = (frac * VOICE_GAIN_MAX_DB * 2.0 - VOICE_GAIN_MAX_DB).round();
+            OverlayAction::SetEqVoice(db)
+        }
+        EqBand::Low => {
+            let b = frac_bucket(frac, EQ_LADDER_BUCKETS);
+            let hz = if b >= LOWPASS_STEPS.len() { None } else { Some(LOWPASS_STEPS[b]) };
+            OverlayAction::SetEqLowpass(hz)
+        }
+        EqBand::High => {
+            let b = frac_bucket(frac, EQ_LADDER_BUCKETS);
+            // 最左区分(0)＝オフ、区分1..=9 が HIGHPASS_STEPS[0..=8]（左右逆）。
+            let hz = if b == 0 { None } else { Some(HIGHPASS_STEPS[b - 1]) };
+            OverlayAction::SetEqHighpass(hz)
+        }
+    }
+}
+
+/// 現在の EQ 値からスライダーのつまみ位置(frac)を出す純関数（`eq_action_from_frac` の逆変換）。
+fn eq_frac(band: EqBand, eq: ysl_core::types::EqParams) -> f32 {
+    use ysl_core::types::{ladder_idx, HIGHPASS_STEPS, LOWPASS_STEPS, VOICE_GAIN_MAX_DB};
+    match band {
+        EqBand::Voice => ((eq.voice_gain_db + VOICE_GAIN_MAX_DB) / (VOICE_GAIN_MAX_DB * 2.0)) as f32,
+        EqBand::Low => match eq.lowpass_hz {
+            None => bucket_frac(EQ_LADDER_BUCKETS - 1, EQ_LADDER_BUCKETS),
+            Some(hz) => {
+                let idx = ladder_idx(&LOWPASS_STEPS, hz);
+                bucket_frac(idx, EQ_LADDER_BUCKETS)
+            }
+        },
+        EqBand::High => match eq.highpass_hz {
+            None => bucket_frac(0, EQ_LADDER_BUCKETS),
+            Some(hz) => {
+                let idx = ladder_idx(&HIGHPASS_STEPS, hz);
+                bucket_frac(idx + 1, EQ_LADDER_BUCKETS)
+            }
+        },
+    }
+}
+
+/// EQ スライダーのラベル文言（有効/オフで書式を変える）。
+fn eq_label(band: EqBand, eq: ysl_core::types::EqParams) -> String {
+    match band {
+        EqBand::Voice if eq.voice_gain_db == 0.0 => "声 0dB".to_string(),
+        EqBand::Voice => format!("声 {:+.0}dB", eq.voice_gain_db),
+        EqBand::Low => match eq.lowpass_hz {
+            Some(hz) => format!("低域カット {}", fmt_hz(hz)),
+            None => "低域カット オフ".to_string(),
+        },
+        EqBand::High => match eq.highpass_hz {
+            Some(hz) => format!("高域カット {}", fmt_hz(hz)),
+            None => "高域カット オフ".to_string(),
+        },
+    }
+}
+
+/// Hz をラベル用に整形する（1000 以上は k 単位。例: 8000 → "8kHz"、100 → "100Hz"）。
+fn fmt_hz(hz: f64) -> String {
+    if hz >= 1000.0 {
+        let k = hz / 1000.0;
+        if k.fract() == 0.0 {
+            format!("{k:.0}kHz")
+        } else {
+            format!("{k:.1}kHz")
+        }
+    } else {
+        format!("{hz:.0}Hz")
+    }
+}
+
 /// 窓ごとの状態（GWLP_USERDATA）。null の間は触らない。
 unsafe fn state_of<'a>(hwnd: HWND) -> Option<&'a mut WndState> {
     use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_USERDATA};
@@ -1614,6 +1791,9 @@ unsafe extern "system" fn wndproc(
                         // 左端を x に動かす → 幅比率 = (cw - x) / cw。
                         let ratio = ((s.cw - lo) as f64 / s.cw.max(1) as f64).clamp(0.15, 0.6);
                         s.actions.push(OverlayAction::SetChatWidth(ratio));
+                    }
+                    Drag::Eq(band) => {
+                        s.actions.push(eq_action_from_frac(band, frac_x(&s.drag_rect, lo)));
                     }
                     Drag::None => {}
                 }
@@ -1700,8 +1880,13 @@ unsafe extern "system" fn wndproc(
                             break;
                         }
                     }
-                    if !handled && !in_rect(&s.panel, lo, hi) && !in_rect(&s.top_panel, lo, hi) {
-                        // どの部品にも当たらず上下バーの外＝動画域 → pause。バー余白は吸収（無反応）。
+                    if !handled
+                        && !in_rect(&s.panel, lo, hi)
+                        && !in_rect(&s.top_panel, lo, hi)
+                        && !in_rect(&s.eq_panel, lo, hi)
+                    {
+                        // どの部品にも当たらず上下バー・EQ パネルの外＝動画域 → pause。
+                        // バー/パネル余白は吸収（無反応）。
                         s.actions.push(OverlayAction::TogglePause);
                     }
                 }
