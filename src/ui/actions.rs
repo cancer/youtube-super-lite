@@ -141,8 +141,9 @@ impl NativeRunning {
         }
     }
 
-    /// 現在の一覧ソースを再取得する（一覧を開くたびに呼ぶ）。
-    /// 旧データは表示したまま裏で取得し、到着時に差し替える（stale-while-revalidate）。
+    /// 現在の一覧ソースを取得し直す（一覧を開くたびに 0 から組み立てる）。
+    /// 手元の旧データはキャッシュではない — いつ取得したか不明な内容を見せないため
+    /// 取得開始時に消える（content 側 begin_fetch）。取得中は busy を見て「取得中…」を表示。
     /// 多重リクエスト防止の busy ガードは content 側の各 start_* が持つ。
     pub(super) fn refresh_source(&mut self) {
         // トークンが失効していたら更新を先に開始する。その間の start_* は token=None で

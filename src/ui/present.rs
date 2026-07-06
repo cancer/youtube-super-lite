@@ -9,6 +9,17 @@ impl NativeRunning {
         self.avatars.url_for(channel).unwrap_or_default().to_string()
     }
 
+    /// 現在の一覧ソースの取得が進行中か（空一覧の「取得中…」表示と /state 用）。
+    pub(super) fn list_busy(&self) -> bool {
+        match self.list_source {
+            ListSource::Recommend => self.recommend.is_busy(),
+            ListSource::Subs => self.subs.is_busy(),
+            ListSource::History => self.history.is_busy(),
+            ListSource::Playlist => self.playlist.is_busy(),
+            ListSource::Channel => self.channel_view.is_busy(),
+        }
+    }
+
     /// 現在の一覧ソースの (ヘッダ, カード配列) を返す。
     ///
     /// カードの title/channel/thumb/id は現行データ源から常に埋まる。avatar/duration/live/meta/
@@ -195,6 +206,7 @@ impl NativeRunning {
             "list_source": source,
             "list_sel": self.list_sel,
             "list_count": self.list_rows().1.len(),
+            "list_busy": self.list_busy(),
             "card_menu_open": self.card_menu_open,
             "overlay_is_topmost": overlay_is_topmost,
             "logged_in": logged_in,

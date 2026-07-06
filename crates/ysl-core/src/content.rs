@@ -85,12 +85,13 @@ pub fn poll_feed<T: HasChannel>(f: &mut Feed<T>, avatars: &mut AvatarCache, wake
     updated
 }
 
-/// system: 取得開始の帳簿（busy=true）をして、spawn 用に tx の clone を返す。
-/// 旧 items は消さない — 再取得中も旧データを表示し続け、到着時に `poll_feed` が
-/// 丸ごと差し替える（stale-while-revalidate）。旧データが誤りになる場面
-/// （別チャンネルを開く等）では呼び出し側が明示的に clear する。
+/// system: 取得開始の帳簿（busy=true, items.clear()）をして、spawn 用に tx の clone を返す。
+/// 旧 items は消す — 一覧は開くたびに 0 から組み立てる方針で、手元の旧データはキャッシュ
+/// ではない（いつ取得したか不明な内容を取得中に一瞬見せない）。取得中の空一覧は UI 側が
+/// busy を見て「取得中…」を表示する。
 pub fn begin_fetch<T>(f: &mut Feed<T>) -> Sender<FeedUpdate<T>> {
     f.busy = true;
+    f.items.clear();
     f.tx.clone()
 }
 
@@ -111,6 +112,10 @@ impl ChannelView {
 
     pub fn title(&self) -> &str {
         &self.title
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.feed.is_busy()
     }
 }
 
@@ -271,8 +276,6 @@ pub fn start_history(f: &mut Feed<history::HistoryItem>, token: &str, waker: &Wa
 /// system: チャンネル名からそのチャンネルの動画一覧を背景取得する（名前→channelId→browse）。
 pub fn open_channel(cv: &mut ChannelView, name: String, waker: &Waker) {
     cv.title = name.clone();
-    // 別チャンネルの旧データを新タイトルの下に見せない（SWR の例外）。
-    cv.feed.items.clear();
     let tx = begin_fetch(&mut cv.feed);
     let waker = Arc::clone(waker);
     std::thread::spawn(move || {
@@ -292,8 +295,6 @@ pub fn open_channel(cv: &mut ChannelView, name: String, waker: &Waker) {
 /// より確実な経路。ケバブメニューの「チャンネルへ」が実IDを持つ場合に使う）。
 pub fn open_channel_by_id(cv: &mut ChannelView, id: String, title: String, waker: &Waker) {
     cv.title = title;
-    // 別チャンネルの旧データを新タイトルの下に見せない（SWR の例外）。
-    cv.feed.items.clear();
     let tx = begin_fetch(&mut cv.feed);
     let waker = Arc::clone(waker);
     std::thread::spawn(move || {
@@ -334,14 +335,13 @@ pub fn poll_playlist(p: &mut Playlist) {
     }
 }
 
-/// system: 自分の再生リスト一覧を背景スレッドで取得する。
-/// 旧一覧は表示したまま取得し、到着時に `poll_playlist` が差し替える（stale-while-revalidate）。
-/// 動画一覧は「リスト一覧に戻る」操作なのでここで閉じる。
+/// system: 自分の再生リスト一覧を背景スレッドで取得する（0 から組み立てる。begin_fetch と同方針）。
 pub fn start_playlist_list(p: &mut Playlist, token: &str, waker: &Waker) {
     if p.busy {
         return;
     }
     p.busy = true;
+    p.lists.clear();
     p.items.clear();
     p.items_title.clear();
     let access_token = token.to_string();
