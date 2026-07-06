@@ -107,8 +107,15 @@ pub fn set_codec(pb: &mut Playback, c: Codec) {
 
 /// system: EQ 設定を変更し、再生バックエンドへ即時反映する（クランプ込み）。
 /// バックエンド分岐（#16: mpv / webview）を将来足すのはこの関数の中だけ。
+/// 同値なら af の再設定をスキップする（ドラッグ中の連続 MOUSEMOVE で毎回 mpv の
+/// lavfi フィルタグラフを再構築させない。初回の neutral→neutral も、Playback::new の
+/// 既定値が af 未設定の mpv と一致しているため正しく弾かれる）。
 pub fn set_eq(pb: &mut Playback, eq: EqParams) {
-    pb.eq = eq.clamped();
+    let eq = eq.clamped();
+    if pb.eq == eq {
+        return;
+    }
+    pb.eq = eq;
     pb.player.set_af(&pb.eq.mpv_af());
 }
 

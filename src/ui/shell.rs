@@ -201,7 +201,7 @@ impl NativeApp {
         let settings = crate::settings::load();
 
         // 前回の EQ 設定を mpv に反映（af はグローバルプロパティなので再生開始前でも有効）。
-        playback::set_eq(&mut playback_state, settings.eq_params());
+        playback::set_eq(&mut playback_state, settings.eq);
 
         Ok(NativeRunning {
             window,
@@ -350,20 +350,12 @@ impl NativeRunning {
 
     /// 文字サイズ・チャット幅・EQ に変更があれば保存する。`force` 時はデバウンスを無視（終了時用）。
     pub(super) fn maybe_save_settings(&mut self, force: bool) {
-        let eq = self.playback.eq();
         let cur = crate::settings::Settings {
             chat_font_px: self.chat_font_px,
             chat_width_ratio: self.chat_width_ratio,
-            eq_voice_gain_db: eq.voice_gain_db,
-            eq_lowpass_hz: eq.lowpass_hz,
-            eq_highpass_hz: eq.highpass_hz,
+            eq: self.playback.eq(),
         };
-        let changed = cur.chat_font_px != self.saved_settings.chat_font_px
-            || cur.chat_width_ratio != self.saved_settings.chat_width_ratio
-            || cur.eq_voice_gain_db != self.saved_settings.eq_voice_gain_db
-            || cur.eq_lowpass_hz != self.saved_settings.eq_lowpass_hz
-            || cur.eq_highpass_hz != self.saved_settings.eq_highpass_hz;
-        if !changed {
+        if cur == self.saved_settings {
             return;
         }
         if !force && self.last_settings_save.elapsed() < Duration::from_millis(800) {
