@@ -584,8 +584,9 @@ cargo check              # 警告0
    - 背景は下帯と同じ `p.fill_rect(..., ds::alpha(ds::BG_CANVAS, 0.72))`
    - `EqSlider`×3 と `Button { label: "リセット", action: OverlayAction::EqReset }` を
      `controls` に push（既存のヒットテストループがそのまま拾う）
-   - ラベル表示例: `声 +6dB` / `声 0dB`、`低域カット 8kHz` / `低域カット オフ`、
-     `高域カット 100Hz` / `高域カット オフ`
+   - ラベル表示例: `声 +6dB` / `声 0dB`、ローパス行は `高域カット 8kHz` / `高域カット オフ`、
+     ハイパス行は `低域カット 100Hz` / `低域カット オフ`
+     （ローパス＝高域を削る、ハイパス＝低域を削る。ラベルは「何を削るか」で表記する）
    - `self.state.eq_panel = eq_panel;` を state 反映箇所に追加
 10. wndproc:
     - `WM_MOUSEMOVE` のドラッグ match に
