@@ -235,6 +235,8 @@ pub struct PlaybackView {
     // --- 一覧（list_open 時のみ有効）---
     pub list_open: bool,
     pub list_cards: Vec<Card>,
+    /// 現在の一覧ソースの取得が進行中か（空一覧の「取得中…」表示用）。
+    pub list_busy: bool,
     pub list_sel: usize,
     pub list_header: String,
     /// 現在の一覧ソース（サイドバーのアクティブ表示用）。
@@ -1237,7 +1239,15 @@ impl DcompOverlay {
                 }
 
                 if view.list_cards.is_empty() {
-                    p.text("（取得中… ログインが必要です）", rf(g.content_x, g.grid_y0, cwf - ds::SPACE_SECTION, g.grid_y0 + 40.0), ds::TEXT_SECONDARY);
+                    // 空一覧の理由を区別して表示する（取得中 / 未ログイン / 本当に空）。
+                    let msg = if view.list_busy {
+                        "取得中…"
+                    } else if !view.logged_in {
+                        "ログインが必要です"
+                    } else {
+                        "表示できる動画がありません"
+                    };
+                    p.text(msg, rf(g.content_x, g.grid_y0, cwf - ds::SPACE_SECTION, g.grid_y0 + 40.0), ds::TEXT_SECONDARY);
                 }
 
                 // --- カードのケバブメニュー（開いている時のみ。他の全てより上に描く）。 ---

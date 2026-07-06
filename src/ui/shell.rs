@@ -438,6 +438,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     format!("🔑 {}", _state.account.status())
                 };
                 let list_sel = _state.list_sel;
+                let list_busy = list_open && _state.list_busy();
                 let (list_header, list_cards): (String, Vec<Card>) = if list_open {
                     _state.list_rows()
                 } else {
@@ -496,6 +497,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     title: p.media_title(),
                     list_open,
                     list_cards,
+                    list_busy,
                     list_sel,
                     list_tab: match _state.list_source {
                         ListSource::Recommend => ListTab::Recommend,
