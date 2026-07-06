@@ -4,23 +4,18 @@
 
 use crate::account::{self, Account};
 use crate::chat::{self, ChatSession};
-use crate::content::{self, Feed};
 use crate::playback::{self, Playback};
 use crate::yt::auth;
-use crate::yt::recommend::VideoItem;
 use crate::yt::resolve;
 use crate::Waker;
 use std::sync::Arc;
 
-/// ①ログイン確定: 再生履歴への記録・おすすめ先読み・保留していた再生の解決
+/// ①ログイン確定: 再生履歴への記録・保留していた再生の解決
 /// （旧 poll_auth の `AccountEvent::LoggedIn` 処理）。
-pub fn on_logged_in(pb: &mut Playback, acc: &Account, recommend: &mut Feed<VideoItem>, waker: &Waker) {
+/// 一覧の取得はここではやらない — 開くたびに取得する（SWR）ので先読みは不要。
+pub fn on_logged_in(pb: &mut Playback, acc: &Account) {
     // CLI 引数経由で既に play() を通った動画がここで履歴に載る。
     account::start_mark_watched_if_logged_in(acc.token(), pb.current_url());
-    // ログイン確定＝おすすめ（ホームフィード）を先読みしておく（動画非依存）。
-    if let Some(token) = acc.token() {
-        content::start_recommend(recommend, token, waker);
-    }
     // ログイン待ちで保留していた動画を、access_token 付きで解決開始する。
     if let Some(url) = playback::take_pending(pb) {
         playback::start_resolve(pb, url, acc.token());

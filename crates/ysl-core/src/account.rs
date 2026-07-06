@@ -4,6 +4,7 @@
 use crate::yt::auth;
 use crate::Waker;
 use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
 /// 背景スレッド（OAuth / API 呼び出し）からの結果。
 pub enum AuthMsg {
@@ -11,6 +12,8 @@ pub enum AuthMsg {
         tokens: auth::Tokens,
         channel: Option<String>,
     },
+    /// 失効したアクセストークンの自動更新が完了した（セッション継続。channel は変わらない）。
+    Refreshed(auth::Tokens),
     Like {
         ok: bool,
         msg: String,
@@ -32,12 +35,18 @@ pub struct Account {
     status: String,
     backend: String,
     task: Option<AuthTask>,
+    /// トークン自動更新の再試行抑制（失敗直後に毎フレーム更新を撃たないため）。
+    refresh_backoff_until: Option<Instant>,
 }
 
 /// 呼び出し側（flows の先行形）が反応すべき出来事。auth 内で閉じる処理（トークン保存・
 /// status 更新等）は `poll` の中で完結し、ここには現れない。
 pub enum AccountEvent {
     LoggedIn,
+    /// 失効したアクセストークンの自動更新が完了した。ログインし直しではないので
+    /// `LoggedIn` の跨ぎ処理（履歴再送・おすすめ先読み）は不要。保留中の再生の解決と、
+    /// 失効中に失敗した取得のやり直しだけを呼び出し側が routing する。
+    TokenRefreshed,
     /// ログイン試行が失敗した（`start_like` の失敗は `AuthMsg::Like{ok:false}` で完結するため
     /// 対象外。ログイン待ちで保留していた再生を、匿名のまま解決させる旧 poll_auth の挙動を
     /// 維持するためのイベント）。
@@ -52,11 +61,17 @@ impl Account {
             status: "未ログイン".to_string(),
             backend,
             task: None,
+            refresh_backoff_until: None,
         }
     }
 
+    /// 有効なアクセストークン。失効していたら None（失効トークンで叩いても 401 になる
+    /// だけなので、未ログインと同じ扱いにする）。自動更新は `ensure_fresh_token` の仕事。
     pub fn token(&self) -> Option<&str> {
-        self.tokens.as_ref().map(|t| t.access_token.as_str())
+        self.tokens
+            .as_ref()
+            .filter(|t| !t.is_expired())
+            .map(|t| t.access_token.as_str())
     }
 
     pub fn is_busy(&self) -> bool {
@@ -97,6 +112,15 @@ pub fn poll(a: &mut Account) -> Vec<AccountEvent> {
                 };
                 events.push(AccountEvent::LoggedIn);
             }
+            AuthMsg::Refreshed(tokens) => {
+                a.tokens = Some(tokens);
+                a.task = None;
+                a.status = match &a.channel {
+                    Some(name) => format!("ログイン中: {name}"),
+                    None => "ログイン済み".to_string(),
+                };
+                events.push(AccountEvent::TokenRefreshed);
+            }
             AuthMsg::Like { ok, msg, tokens } => {
                 if let Some(t) = tokens {
                     a.tokens = Some(t);
@@ -129,6 +153,34 @@ pub fn start_login(a: &mut Account, waker: &Waker) {
         });
         let _ = match result {
             Ok((tokens, channel)) => tx.send(AuthMsg::LoggedIn { tokens, channel }),
+            Err(e) => tx.send(AuthMsg::Failed(e.to_string())),
+        };
+        waker();
+    });
+}
+
+/// system: アクセストークンが失効していたら、リフレッシュトークンで背景更新を開始する
+/// （ログインセッションの自動継続）。毎ポーリングで呼んでよい冪等な入口 —
+/// 有効なうちは何もせず、更新中（is_busy）と失敗直後（バックオフ 30 秒）は再突入しない。
+/// 完了は `AccountEvent::TokenRefreshed`、失敗は `AccountEvent::LoginFailed` として届く。
+pub fn ensure_fresh_token(a: &mut Account, waker: &Waker) {
+    let Some(t) = &a.tokens else { return };
+    if !t.is_expired() || a.is_busy() {
+        return;
+    }
+    if a.refresh_backoff_until.is_some_and(|until| Instant::now() < until) {
+        return;
+    }
+    let Some(rt) = t.refresh_token.clone() else { return };
+    a.refresh_backoff_until = Some(Instant::now() + Duration::from_secs(30));
+    a.status = "セッション更新中…".to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    a.task = Some(AuthTask { rx });
+    let backend = a.backend.clone();
+    let waker = std::sync::Arc::clone(waker);
+    std::thread::spawn(move || {
+        let _ = match auth::refresh(&backend, &rt) {
+            Ok(tokens) => tx.send(AuthMsg::Refreshed(tokens)),
             Err(e) => tx.send(AuthMsg::Failed(e.to_string())),
         };
         waker();

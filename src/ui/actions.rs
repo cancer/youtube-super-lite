@@ -145,6 +145,9 @@ impl NativeRunning {
     /// 旧データは表示したまま裏で取得し、到着時に差し替える（stale-while-revalidate）。
     /// 多重リクエスト防止の busy ガードは content 側の各 start_* が持つ。
     pub(super) fn refresh_source(&mut self) {
+        // トークンが失効していたら更新を先に開始する。その間の start_* は token=None で
+        // 何もしないが、更新完了時の TokenRefreshed がこの refresh_source をやり直す。
+        account::ensure_fresh_token(&mut self.account, &self.waker);
         match self.list_source {
             ListSource::Subs => self.start_subs(),
             ListSource::History => self.start_history(),
@@ -165,12 +168,29 @@ impl NativeRunning {
         for ev in account::poll(&mut self.account) {
             match ev {
                 account::AccountEvent::LoggedIn => {
-                    flows::on_logged_in(&mut self.playback, &self.account, &mut self.recommend, &self.waker);
+                    flows::on_logged_in(&mut self.playback, &self.account);
+                    // ログイン前に開かれた一覧は取得できていないので、開いたままなら取得し直す
+                    // （TokenRefreshed と同じ routing。先読みはしない — 開くたび取得で十分）。
+                    if self.list_open {
+                        self.refresh_source();
+                    }
                 }
                 account::AccountEvent::LoginFailed => {
                     // ログインに失敗しても、保留中の動画は匿名で解決を試みる（最善努力）。
                     if let Some(url) = playback::take_pending(&mut self.playback) {
                         playback::start_resolve(&mut self.playback, url, None);
+                    }
+                }
+                account::AccountEvent::TokenRefreshed => {
+                    // 更新待ちで保留していた再生を新しいトークンで解決する。
+                    // 保留中に飛ばした履歴マークもここで送る（flows::on_logged_in と同じ理由）。
+                    if let Some(url) = playback::take_pending(&mut self.playback) {
+                        account::start_mark_watched_if_logged_in(self.account.token(), &url);
+                        playback::start_resolve(&mut self.playback, url, self.account.token());
+                    }
+                    // 失効中に開かれた一覧は取得できていないので、開いたままならやり直す。
+                    if self.list_open {
+                        self.refresh_source();
                     }
                 }
             }
@@ -188,6 +208,9 @@ impl NativeRunning {
 
     /// 再生開始 + チャット接続（旧 Controller::load + start_chat のコンボ）。
     pub(super) fn play(&mut self, url: &str) {
+        // トークンが失効していたら更新を先に開始する。flows::play は更新中（token=None かつ
+        // busy）なら解決を保留し、TokenRefreshed が新トークンで解決し直す。
+        account::ensure_fresh_token(&mut self.account, &self.waker);
         flows::play_with_chat(&mut self.playback, &mut self.chat, &self.account, url, &self.waker);
     }
 
