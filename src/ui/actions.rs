@@ -6,6 +6,7 @@
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, NamedKey};
 
+use ysl_core::types::EqParams;
 use ysl_core::yt::{auth, resolve};
 use ysl_core::{account, chat, content, flows, playback};
 use crate::{Codec, Quality};
@@ -56,6 +57,14 @@ pub(super) enum UiAction {
     Feedback { token: String },
     OpenCardMenu(usize),
     CloseCardMenu,
+    /// EQ: ボイス帯域ゲインを dB で相対変更。
+    EqVoiceBy(f64),
+    /// EQ: ローパスカットオフをラダー±1段（+1=カットオフを上げる→最上段の先でオフ）。
+    EqLowpassStep(i32),
+    /// EQ: ハイパスカットオフをラダー±1段（+1=カットオフを上げる。-1 で最下段の先はオフ）。
+    EqHighpassStep(i32),
+    /// EQ: 全ニュートラル（フィルタ解除）。
+    EqOff,
 }
 
 impl From<crate::dcomp_overlay::OverlayAction> for UiAction {
@@ -303,6 +312,13 @@ impl NativeRunning {
             "vol_up" => UiAction::VolumeBy(5.0),
             "vol_down" => UiAction::VolumeBy(-5.0),
             "mute" => UiAction::ToggleMute,
+            "eq_voice_up" => UiAction::EqVoiceBy(1.0),
+            "eq_voice_down" => UiAction::EqVoiceBy(-1.0),
+            "eq_lowpass_up" => UiAction::EqLowpassStep(1),
+            "eq_lowpass_down" => UiAction::EqLowpassStep(-1),
+            "eq_highpass_up" => UiAction::EqHighpassStep(1),
+            "eq_highpass_down" => UiAction::EqHighpassStep(-1),
+            "eq_off" => UiAction::EqOff,
             "quality_next" => UiAction::CycleQuality,
             "codec_next" => UiAction::CycleCodec,
             "toggle_chat" => UiAction::ToggleChat,
@@ -500,6 +516,24 @@ impl NativeRunning {
                 }
             }
             UiAction::ChatWidthBy(d) => self.chat_width_by(d),
+            UiAction::EqVoiceBy(d) => {
+                let mut eq = self.playback.eq();
+                eq.voice_gain_db += d;
+                playback::set_eq(&mut self.playback, eq);
+            }
+            UiAction::EqLowpassStep(dir) => {
+                let mut eq = self.playback.eq();
+                eq.lowpass_hz = EqParams::lowpass_step(eq.lowpass_hz, dir);
+                playback::set_eq(&mut self.playback, eq);
+            }
+            UiAction::EqHighpassStep(dir) => {
+                let mut eq = self.playback.eq();
+                eq.highpass_hz = EqParams::highpass_step(eq.highpass_hz, dir);
+                playback::set_eq(&mut self.playback, eq);
+            }
+            UiAction::EqOff => {
+                playback::set_eq(&mut self.playback, EqParams::default());
+            }
         }
         true
     }

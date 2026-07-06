@@ -200,6 +200,9 @@ impl NativeApp {
         // 前回保存した UI 設定（文字サイズ・チャット幅）を引き継ぐ。
         let settings = crate::settings::load();
 
+        // 前回の EQ 設定を mpv に反映（af はグローバルプロパティなので再生開始前でも有効）。
+        playback::set_eq(&mut playback_state, settings.eq);
+
         Ok(NativeRunning {
             window,
             parent_wid: wid,
@@ -259,6 +262,10 @@ impl NativeRunning {
 
     pub(super) fn codec(&self) -> Codec {
         self.playback.codec()
+    }
+
+    pub(super) fn eq(&self) -> ysl_core::types::EqParams {
+        self.playback.eq()
     }
 
     /// 背景スレッド（認証/API/解決）の結果を取り込む。proxy 起床時に呼ぶ。
@@ -343,15 +350,14 @@ impl NativeRunning {
         }
     }
 
-    /// 文字サイズ・チャット幅に変更があれば保存する。`force` 時はデバウンスを無視（終了時用）。
+    /// 文字サイズ・チャット幅・EQ に変更があれば保存する。`force` 時はデバウンスを無視（終了時用）。
     pub(super) fn maybe_save_settings(&mut self, force: bool) {
         let cur = crate::settings::Settings {
             chat_font_px: self.chat_font_px,
             chat_width_ratio: self.chat_width_ratio,
+            eq: self.playback.eq(),
         };
-        let changed = cur.chat_font_px != self.saved_settings.chat_font_px
-            || cur.chat_width_ratio != self.saved_settings.chat_width_ratio;
-        if !changed {
+        if cur == self.saved_settings {
             return;
         }
         if !force && self.last_settings_save.elapsed() < Duration::from_millis(800) {

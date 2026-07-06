@@ -2,7 +2,7 @@
 //! （作り直したら設計意図が消える）。再生セッションは 1 URL : 1 インスタンスで丸ごと差し替える
 //! （design-principles.md「寿命は現実の寿命に合わせる」）。
 
-use crate::types::{Codec, Quality};
+use crate::types::{Codec, EqParams, Quality};
 use crate::yt::resolve;
 use crate::{gpu_usage, player};
 use crate::Waker;
@@ -18,6 +18,7 @@ pub struct Playback {
     resolve_handle: resolve::ResolverHandle,
     quality: Quality,
     codec: Codec,
+    eq: EqParams,
     player_offset_ms: Arc<AtomicI64>,
     gpu_monitor: Option<gpu_usage::Monitor>,
     // --- 現在の再生（丸ごと差し替え）---
@@ -48,6 +49,7 @@ impl Playback {
             player,
             quality: Quality::Auto,
             codec: Codec::Auto,
+            eq: EqParams::default(),
             player_offset_ms: Arc::new(AtomicI64::new(0)),
             gpu_monitor: gpu_usage::start_monitoring(),
             current_url: String::new(),
@@ -79,6 +81,10 @@ impl Playback {
         self.codec
     }
 
+    pub fn eq(&self) -> EqParams {
+        self.eq
+    }
+
     pub fn player_offset_ms(&self) -> &Arc<AtomicI64> {
         &self.player_offset_ms
     }
@@ -97,6 +103,20 @@ pub fn set_quality(pb: &mut Playback, q: Quality) {
 /// system: コーデック設定を変更する。
 pub fn set_codec(pb: &mut Playback, c: Codec) {
     pb.codec = c;
+}
+
+/// system: EQ 設定を変更し、再生バックエンドへ即時反映する（クランプ込み）。
+/// バックエンド分岐（#16: mpv / webview）を将来足すのはこの関数の中だけ。
+/// 同値なら af の再設定をスキップする（ドラッグ中の連続 MOUSEMOVE で毎回 mpv の
+/// lavfi フィルタグラフを再構築させない。初回の neutral→neutral も、Playback::new の
+/// 既定値が af 未設定の mpv と一致しているため正しく弾かれる）。
+pub fn set_eq(pb: &mut Playback, eq: EqParams) {
+    let eq = eq.clamped();
+    if pb.eq == eq {
+        return;
+    }
+    pb.eq = eq;
+    pb.player.set_af(&pb.eq.mpv_af());
 }
 
 /// system: ログイン待ちで解決を保留する（auth レース対策）。旧 `Controller::load` は保留する

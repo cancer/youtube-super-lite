@@ -14,6 +14,8 @@
 //! `/action/<name>` の `<name>`（キーボード/オーバーレイの全操作に対応）:
 //! - 再生: `play_pause`, `seek_fwd`, `seek_back`, `live_edge`
 //! - 音量: `vol_up`, `vol_down`, `mute`
+//! - EQ: `eq_voice_up`, `eq_voice_down`, `eq_lowpass_up`, `eq_lowpass_down`,
+//!   `eq_highpass_up`, `eq_highpass_down`, `eq_off`
 //! - 画質/コーデック: `quality_next`, `codec_next`
 //! - チャット: `toggle_chat`, `chat_font_inc`, `chat_font_dec`, `chat_wider`, `chat_narrower`
 //! - 認証/評価: `login`, `like`
