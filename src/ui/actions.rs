@@ -168,7 +168,12 @@ impl NativeRunning {
         for ev in account::poll(&mut self.account) {
             match ev {
                 account::AccountEvent::LoggedIn => {
-                    flows::on_logged_in(&mut self.playback, &self.account, &mut self.recommend, &self.waker);
+                    flows::on_logged_in(&mut self.playback, &self.account);
+                    // ログイン前に開かれた一覧は取得できていないので、開いたままなら取得し直す
+                    // （TokenRefreshed と同じ routing。先読みはしない — 開くたび取得で十分）。
+                    if self.list_open {
+                        self.refresh_source();
+                    }
                 }
                 account::AccountEvent::LoginFailed => {
                     // ログインに失敗しても、保留中の動画は匿名で解決を試みる（最善努力）。
