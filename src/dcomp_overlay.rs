@@ -1725,13 +1725,15 @@ fn eq_label(band: EqBand, eq: ysl_core::types::EqParams) -> String {
     match band {
         EqBand::Voice if eq.voice_gain_db == 0.0 => "声 0dB".to_string(),
         EqBand::Voice => format!("声 {:+.0}dB", eq.voice_gain_db),
+        // ローパス＝高域を削る、ハイパス＝低域を削る。ラベルは「何を削るか」で表記する
+        // （フィルタ名のままだと直感と逆に読める）。
         EqBand::Low => match eq.lowpass_hz {
-            Some(hz) => format!("低域カット {}", fmt_hz(hz)),
-            None => "低域カット オフ".to_string(),
-        },
-        EqBand::High => match eq.highpass_hz {
             Some(hz) => format!("高域カット {}", fmt_hz(hz)),
             None => "高域カット オフ".to_string(),
+        },
+        EqBand::High => match eq.highpass_hz {
+            Some(hz) => format!("低域カット {}", fmt_hz(hz)),
+            None => "低域カット オフ".to_string(),
         },
     }
 }
