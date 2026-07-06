@@ -84,6 +84,8 @@ pub struct EqParams {
 pub const VOICE_FREQ_HZ: f64 = 1800.0;
 /// ボイス帯域 peaking EQ の Q。1.2 ≒ 1〜3kHz を緩やかに持ち上げる幅。
 pub const VOICE_Q: f64 = 1.2;
+/// ボイス帯域ゲインの値域（±dB）。UI 側のスライダー変換も含め、この値を唯一の定義とする。
+pub const VOICE_GAIN_MAX_DB: f64 = 12.0;
 /// ローパスカットオフの段階。devtools のステップ操作と UI スライダーの量子化が
 /// 共有する唯一の定義（最上段 16k の1つ先＝オフ）。
 pub const LOWPASS_STEPS: [f64; 9] = [
@@ -126,7 +128,7 @@ impl EqParams {
     /// 値域に収める。voice は ±12dB、カットオフはラダーの端にクランプ
     /// （settings.json の手編集など、外から来た値の防波堤）。
     pub fn clamped(mut self) -> Self {
-        self.voice_gain_db = self.voice_gain_db.clamp(-12.0, 12.0);
+        self.voice_gain_db = self.voice_gain_db.clamp(-VOICE_GAIN_MAX_DB, VOICE_GAIN_MAX_DB);
         self.lowpass_hz = self
             .lowpass_hz
             .map(|v| v.clamp(LOWPASS_STEPS[0], LOWPASS_STEPS[LOWPASS_STEPS.len() - 1]));
@@ -139,40 +141,48 @@ impl EqParams {
     /// ローパスをラダー上で ±1 段動かす。オフから -1 で最上段（16k、一番弱い）から入り、
     /// 最上段から +1 でオフに抜ける。下端では止まる。
     pub fn lowpass_step(cur: Option<f64>, dir: i32) -> Option<f64> {
-        match cur {
-            None if dir < 0 => Some(LOWPASS_STEPS[LOWPASS_STEPS.len() - 1]),
-            None => None,
-            Some(v) => {
-                let idx = nearest_idx(&LOWPASS_STEPS, v) as i32 + dir;
-                if idx >= LOWPASS_STEPS.len() as i32 {
-                    None // 最上段の先＝オフ
-                } else {
-                    Some(LOWPASS_STEPS[idx.max(0) as usize])
-                }
-            }
-        }
+        ladder_step(&LOWPASS_STEPS, cur, dir, -1)
     }
 
     /// ハイパスをラダー上で ±1 段動かす。オフから +1 で最下段（40Hz、一番弱い）から入り、
     /// 最下段から -1 でオフに抜ける。上端では止まる。
     pub fn highpass_step(cur: Option<f64>, dir: i32) -> Option<f64> {
-        match cur {
-            None if dir > 0 => Some(HIGHPASS_STEPS[0]),
-            None => None,
-            Some(v) => {
-                let idx = nearest_idx(&HIGHPASS_STEPS, v) as i32 + dir;
-                if idx < 0 {
-                    None // 最下段の先＝オフ
+        ladder_step(&HIGHPASS_STEPS, cur, dir, 1)
+    }
+}
+
+/// lowpass_step / highpass_step の共通実装。`enter_dir` はオフからラダーに入る方向
+/// （-1 なら最上段から、+1 なら最下段から入る）で、抜ける側（オフに戻る側）はその逆になる。
+fn ladder_step(steps: &[f64], cur: Option<f64>, dir: i32, enter_dir: i32) -> Option<f64> {
+    match cur {
+        None if dir == enter_dir => {
+            Some(if enter_dir < 0 { steps[steps.len() - 1] } else { steps[0] })
+        }
+        None => None,
+        Some(v) => {
+            let idx = ladder_idx(steps, v) as i32 + dir;
+            if enter_dir < 0 {
+                // lowpass: 上端の先＝オフ、下端では止まる。
+                if idx >= steps.len() as i32 {
+                    None
                 } else {
-                    Some(HIGHPASS_STEPS[(idx as usize).min(HIGHPASS_STEPS.len() - 1)])
+                    Some(steps[idx.max(0) as usize])
+                }
+            } else {
+                // highpass: 下端の先＝オフ、上端では止まる。
+                if idx < 0 {
+                    None
+                } else {
+                    Some(steps[(idx as usize).min(steps.len() - 1)])
                 }
             }
         }
     }
 }
 
-/// v に最も近いラダー段の index。
-fn nearest_idx(steps: &[f64], v: f64) -> usize {
+/// v に最も近いラダー段の index。UI 側（EqSlider の frac→値表示）が devtools の
+/// ステップ操作と同じ離散化をするために公開する純関数。
+pub fn ladder_idx(steps: &[f64], v: f64) -> usize {
     let mut best = 0;
     for (i, s) in steps.iter().enumerate() {
         if (v - s).abs() < (v - steps[best]).abs() {
