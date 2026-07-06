@@ -522,9 +522,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     chat_width_ratio,
                     chat_font_px: _state.chat_font_px,
                     eq_open: _state.eq_open,
-                    eq_voice_gain_db: _state.eq().voice_gain_db,
-                    eq_lowpass_hz: _state.eq().lowpass_hz,
-                    eq_highpass_hz: _state.eq().highpass_hz,
+                    eq: _state.eq(),
                 };
                 if let Some(o) = _state.dcomp_overlay.as_mut() {
                     o.render(active, &view);

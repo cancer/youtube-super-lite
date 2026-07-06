@@ -268,9 +268,7 @@ pub struct PlaybackView {
     pub chat_font_px: f32,
     // --- EQ パネル ---
     pub eq_open: bool,
-    pub eq_voice_gain_db: f64,
-    pub eq_lowpass_hz: Option<f64>,
-    pub eq_highpass_hz: Option<f64>,
+    pub eq: ysl_core::types::EqParams,
 }
 
 /// 上部バー・下部コントローラ帯の高さ・行高（旧 native_overlay と同値）。
@@ -448,11 +446,7 @@ impl Control {
             }
             Control::Volume { rect, frac } => {
                 let cy = ((rect.top + rect.bottom) / 2) as f32;
-                let (x0, x1) = (rect.left as f32, rect.right as f32);
-                p.fill_round(rf(x0, cy - 2.0, x1, cy + 2.0), 2.0, ds::alpha(ds::TEXT_PRIMARY, 0.25));
-                let vx = x0 + (x1 - x0) * *frac;
-                p.fill_round(rf(x0, cy - 2.0, vx.max(x0), cy + 2.0), 2.0, ds::TEXT_PRIMARY);
-                p.fill_ellipse(vx, cy, 5.0, ds::TEXT_ON_ACCENT);
+                draw_slider_track(p, rect.left as f32, rect.right as f32, cy, *frac);
             }
             Control::Button { rect, label, col, .. } => {
                 let cy = (rect.top + rect.bottom) / 2;
@@ -462,15 +456,19 @@ impl Control {
                 let cy = ((rect.top + rect.bottom) / 2) as f32;
                 // ラベルはトラック左に固定幅で確保し、Control::Time と同じ縦センタリングで描く。
                 let label_w = EQ_SLIDER_LABEL_W;
-                let (x0, x1) = ((rect.left as f32 + label_w), rect.right as f32);
                 p.text(label, rf(rect.left as f32, cy - 9.0, rect.left as f32 + label_w - 8.0, cy + 9.0), fg);
-                p.fill_round(rf(x0, cy - 2.0, x1, cy + 2.0), 2.0, ds::alpha(ds::TEXT_PRIMARY, 0.25));
-                let vx = x0 + (x1 - x0) * *frac;
-                p.fill_round(rf(x0, cy - 2.0, vx.max(x0), cy + 2.0), 2.0, ds::TEXT_PRIMARY);
-                p.fill_ellipse(vx, cy, 5.0, ds::TEXT_ON_ACCENT);
+                draw_slider_track(p, rect.left as f32 + label_w, rect.right as f32, cy, *frac);
             }
         }
     }
+}
+
+/// スライダーのトラック＋つまみを描く（Volume と EqSlider で共通の見た目）。
+unsafe fn draw_slider_track(p: &Painter, x0: f32, x1: f32, cy: f32, frac: f32) {
+    p.fill_round(rf(x0, cy - 2.0, x1, cy + 2.0), 2.0, ds::alpha(ds::TEXT_PRIMARY, 0.25));
+    let vx = x0 + (x1 - x0) * frac;
+    p.fill_round(rf(x0, cy - 2.0, vx.max(x0), cy + 2.0), 2.0, ds::TEXT_PRIMARY);
+    p.fill_ellipse(vx, cy, 5.0, ds::TEXT_ON_ACCENT);
 }
 
 /// EQ スライダーのラベル領域幅（px。トラックはこの右側から始まる）。
@@ -850,13 +848,7 @@ impl DcompOverlay {
         });
         xr -= VOL_W + 10;
         // EQ トグル（有効時 or パネル開時はアクセント色）。
-        let eq_active = v.eq_open
-            || !ysl_core::types::EqParams {
-                voice_gain_db: v.eq_voice_gain_db,
-                lowpass_hz: v.eq_lowpass_hz,
-                highpass_hz: v.eq_highpass_hz,
-            }
-            .is_neutral();
+        let eq_active = v.eq_open || !v.eq.is_neutral();
         let eq_col = if eq_active { ds::ACCENT_BRAND } else { fg };
         let eq_label_w = unsafe { self.measure("EQ") }.ceil() as i32;
         controls.push(Control::Button {
@@ -1017,11 +1009,7 @@ impl DcompOverlay {
             // EQ パネル（下帯直上・右寄せ）: スライダー3本＋リセット。list_open 中は出さない
             // （呼び出し元の active && !list_open が保証済みだが、ここでは view.eq_open だけ見る）。
             if view.eq_open {
-                let eq = ysl_core::types::EqParams {
-                    voice_gain_db: view.eq_voice_gain_db,
-                    lowpass_hz: view.eq_lowpass_hz,
-                    highpass_hz: view.eq_highpass_hz,
-                };
+                let eq = view.eq;
                 let panel_w = 360;
                 let slider_h = ROW_H;
                 let reset_h = ROW_H;
@@ -1662,8 +1650,9 @@ fn frac_x(r: &RECT, x: i32) -> f64 {
     ((x - r.left) as f64 / w).clamp(0.0, 1.0)
 }
 
-/// ローパス/ハイパスのラダー刻み（オフの1区分込みで10区分）。
-const EQ_LADDER_BUCKETS: usize = 10;
+/// ローパス/ハイパスのラダー刻み（オフの1区分込みで段数+1）。
+const EQ_LADDER_BUCKETS: usize = ysl_core::types::LOWPASS_STEPS.len() + 1;
+const _: () = assert!(ysl_core::types::LOWPASS_STEPS.len() == ysl_core::types::HIGHPASS_STEPS.len());
 
 /// frac(0.0..=1.0) を 0..=buckets-1 の区分 index に量子化する。
 fn frac_bucket(frac: f64, buckets: usize) -> usize {
@@ -1678,10 +1667,11 @@ fn bucket_frac(idx: usize, buckets: usize) -> f32 {
 /// EQ スライダーのドラッグ/クリック位置(frac)を `OverlayAction` に直す純関数。
 /// ラダー定数は devtools のステップ操作と同じ離散値（`ysl_core::types` 参照）に量子化する。
 fn eq_action_from_frac(band: EqBand, frac: f64) -> OverlayAction {
-    use ysl_core::types::{HIGHPASS_STEPS, LOWPASS_STEPS};
+    use ysl_core::types::{HIGHPASS_STEPS, LOWPASS_STEPS, VOICE_GAIN_MAX_DB};
     match band {
         EqBand::Voice => {
-            let db = (frac * 24.0 - 12.0).round().clamp(-12.0, 12.0);
+            // クランプは set_eq(EqParams::clamped) に委譲する（値域の定義を二重化しない）。
+            let db = (frac * VOICE_GAIN_MAX_DB * 2.0 - VOICE_GAIN_MAX_DB).round();
             OverlayAction::SetEqVoice(db)
         }
         EqBand::Low => {
@@ -1700,20 +1690,20 @@ fn eq_action_from_frac(band: EqBand, frac: f64) -> OverlayAction {
 
 /// 現在の EQ 値からスライダーのつまみ位置(frac)を出す純関数（`eq_action_from_frac` の逆変換）。
 fn eq_frac(band: EqBand, eq: ysl_core::types::EqParams) -> f32 {
-    use ysl_core::types::{HIGHPASS_STEPS, LOWPASS_STEPS};
+    use ysl_core::types::{ladder_idx, HIGHPASS_STEPS, LOWPASS_STEPS, VOICE_GAIN_MAX_DB};
     match band {
-        EqBand::Voice => ((eq.voice_gain_db + 12.0) / 24.0) as f32,
+        EqBand::Voice => ((eq.voice_gain_db + VOICE_GAIN_MAX_DB) / (VOICE_GAIN_MAX_DB * 2.0)) as f32,
         EqBand::Low => match eq.lowpass_hz {
             None => bucket_frac(EQ_LADDER_BUCKETS - 1, EQ_LADDER_BUCKETS),
             Some(hz) => {
-                let idx = LOWPASS_STEPS.iter().position(|s| *s == hz).unwrap_or(0);
+                let idx = ladder_idx(&LOWPASS_STEPS, hz);
                 bucket_frac(idx, EQ_LADDER_BUCKETS)
             }
         },
         EqBand::High => match eq.highpass_hz {
             None => bucket_frac(0, EQ_LADDER_BUCKETS),
             Some(hz) => {
-                let idx = HIGHPASS_STEPS.iter().position(|s| *s == hz).unwrap_or(0);
+                let idx = ladder_idx(&HIGHPASS_STEPS, hz);
                 bucket_frac(idx + 1, EQ_LADDER_BUCKETS)
             }
         },

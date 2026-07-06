@@ -138,6 +138,14 @@ impl NativeRunning {
         }
     }
 
+    /// 現在の EQ を読み、`f` で1フィールドだけ差し替えて `set_eq` に渡す（EQ の相対/絶対
+    /// 変更アクションに共通の read-modify-write パターンをまとめたもの）。
+    fn update_eq(&mut self, f: impl FnOnce(&mut EqParams)) {
+        let mut eq = self.playback.eq();
+        f(&mut eq);
+        playback::set_eq(&mut self.playback, eq);
+    }
+
     /// チャットパネルの表示トグル（3 入力系統の共通実装。旧ドリフト: devtools/キーボード版は
     /// 固定 0.28・scroll 未リセットだったが、ユーザーが調整した幅を尊重するオーバーレイ版の
     /// 挙動に統一する — issue #11 PR B で明示された唯一の挙動変更）。
@@ -506,39 +514,19 @@ impl NativeRunning {
                 }
             }
             UiAction::ChatWidthBy(d) => self.chat_width_by(d),
-            UiAction::EqVoiceBy(d) => {
-                let mut eq = self.playback.eq();
-                eq.voice_gain_db += d;
-                playback::set_eq(&mut self.playback, eq);
-            }
+            UiAction::EqVoiceBy(d) => self.update_eq(|eq| eq.voice_gain_db += d),
             UiAction::EqLowpassStep(dir) => {
-                let mut eq = self.playback.eq();
-                eq.lowpass_hz = EqParams::lowpass_step(eq.lowpass_hz, dir);
-                playback::set_eq(&mut self.playback, eq);
+                self.update_eq(|eq| eq.lowpass_hz = EqParams::lowpass_step(eq.lowpass_hz, dir))
             }
             UiAction::EqHighpassStep(dir) => {
-                let mut eq = self.playback.eq();
-                eq.highpass_hz = EqParams::highpass_step(eq.highpass_hz, dir);
-                playback::set_eq(&mut self.playback, eq);
+                self.update_eq(|eq| eq.highpass_hz = EqParams::highpass_step(eq.highpass_hz, dir))
             }
             UiAction::EqOff => {
                 playback::set_eq(&mut self.playback, EqParams::default());
             }
-            UiAction::SetEqVoice(db) => {
-                let mut eq = self.playback.eq();
-                eq.voice_gain_db = db;
-                playback::set_eq(&mut self.playback, eq);
-            }
-            UiAction::SetEqLowpass(hz) => {
-                let mut eq = self.playback.eq();
-                eq.lowpass_hz = hz;
-                playback::set_eq(&mut self.playback, eq);
-            }
-            UiAction::SetEqHighpass(hz) => {
-                let mut eq = self.playback.eq();
-                eq.highpass_hz = hz;
-                playback::set_eq(&mut self.playback, eq);
-            }
+            UiAction::SetEqVoice(db) => self.update_eq(|eq| eq.voice_gain_db = db),
+            UiAction::SetEqLowpass(hz) => self.update_eq(|eq| eq.lowpass_hz = hz),
+            UiAction::SetEqHighpass(hz) => self.update_eq(|eq| eq.highpass_hz = hz),
             UiAction::ToggleEqPanel => {
                 self.eq_open = !self.eq_open;
             }
