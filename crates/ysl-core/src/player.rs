@@ -122,6 +122,12 @@ impl Player {
         let _ = self.mpv.set_property("hwdec", mode);
     }
 
+    /// 音声フィルタチェーン（mpv `af`）を設定する。空文字で解除。
+    /// af はグローバルプロパティなので、再生前でも再生中でも有効で、loadfile では消えない。
+    pub fn set_af(&self, af: &str) {
+        let _ = self.mpv.set_property("af", af);
+    }
+
     /// 映像の右マージン比率（0.0..1.0）を設定する。ネイティブ版でチャットを右に出すとき、
     /// 動画を左に縮めて重なりを避けるために使う（真の左右分割）。
     pub fn set_video_margin_right(&self, ratio: f64) {

@@ -182,6 +182,9 @@ impl NativeRunning {
             "is_live": self.is_live(),
             "volume": p.volume(),
             "muted": p.muted(),
+            "eq_voice_gain_db": self.eq().voice_gain_db,
+            "eq_lowpass_hz": self.eq().lowpass_hz,     // None → null
+            "eq_highpass_hz": self.eq().highpass_hz,
             "media_title": p.media_title(),
             "quality": self.quality().label(),
             "codec": self.codec().label(),
