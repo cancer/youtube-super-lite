@@ -77,6 +77,8 @@ pub(super) struct NativeRunning {
     pub(super) card_menu_open: Option<usize>,
     /// チャット（右パネル）表示中か。
     pub(super) chat_open: bool,
+    /// EQ パネル（コントローラ帯の EQ ボタンで開閉）表示中か。
+    pub(super) eq_open: bool,
     /// チャット（コメント）の文字サイズ（px）。UI（A-/A+）で増減する。
     pub(super) chat_font_px: f32,
     /// チャット欄の幅（ウィンドウ幅比 0.15..=0.6）。左端ドラッグで変更する。
@@ -223,6 +225,7 @@ impl NativeApp {
             list_source: ListSource::Subs,
             card_menu_open: None,
             chat_open: false,
+            eq_open: false,
             chat_font_px: settings.chat_font_px,
             chat_width_ratio: settings.chat_width_ratio,
             chat_scroll: 0,
@@ -442,6 +445,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 let list_open = _state.list_open;
                 let active = list_open
                     || _state.chat_open
+                    || _state.eq_open
                     || _state.last_activity.elapsed() < Duration::from_secs(3);
                 let logged_in = _state.account.channel_name().is_some_and(|c| !c.is_empty());
                 let auth_label = if logged_in {
@@ -525,6 +529,10 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     chat_scroll,
                     chat_width_ratio,
                     chat_font_px: _state.chat_font_px,
+                    eq_open: _state.eq_open,
+                    eq_voice_gain_db: _state.eq().voice_gain_db,
+                    eq_lowpass_hz: _state.eq().lowpass_hz,
+                    eq_highpass_hz: _state.eq().highpass_hz,
                 };
                 if let Some(o) = _state.dcomp_overlay.as_mut() {
                     o.render(active, &view);

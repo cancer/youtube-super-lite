@@ -65,6 +65,14 @@ pub(super) enum UiAction {
     EqHighpassStep(i32),
     /// EQ: 全ニュートラル（フィルタ解除）。
     EqOff,
+    /// EQ: ボイス帯域ゲインを dB で絶対設定（オーバーレイのスライダードラッグ用）。
+    SetEqVoice(f64),
+    /// EQ: ローパスカットオフを絶対設定（オーバーレイのスライダードラッグ用。None=オフ）。
+    SetEqLowpass(Option<f64>),
+    /// EQ: ハイパスカットオフを絶対設定（オーバーレイのスライダードラッグ用。None=オフ）。
+    SetEqHighpass(Option<f64>),
+    /// EQ パネルの表示トグル。
+    ToggleEqPanel,
 }
 
 impl From<crate::dcomp_overlay::OverlayAction> for UiAction {
@@ -102,6 +110,11 @@ impl From<crate::dcomp_overlay::OverlayAction> for UiAction {
             OverlayAction::SetChatWidth(r) => UiAction::SetChatWidth(r as f32),
             OverlayAction::ChatFontDec => UiAction::ChatFontBy(-2.0),
             OverlayAction::ChatFontInc => UiAction::ChatFontBy(2.0),
+            OverlayAction::ToggleEq => UiAction::ToggleEqPanel,
+            OverlayAction::SetEqVoice(db) => UiAction::SetEqVoice(db),
+            OverlayAction::SetEqLowpass(hz) => UiAction::SetEqLowpass(hz),
+            OverlayAction::SetEqHighpass(hz) => UiAction::SetEqHighpass(hz),
+            OverlayAction::EqReset => UiAction::EqOff,
         }
     }
 }
@@ -295,6 +308,7 @@ impl NativeRunning {
             "eq_highpass_up" => UiAction::EqHighpassStep(1),
             "eq_highpass_down" => UiAction::EqHighpassStep(-1),
             "eq_off" => UiAction::EqOff,
+            "eq_toggle" => UiAction::ToggleEqPanel,
             "quality_next" => UiAction::CycleQuality,
             "codec_next" => UiAction::CycleCodec,
             "toggle_chat" => UiAction::ToggleChat,
@@ -509,6 +523,24 @@ impl NativeRunning {
             }
             UiAction::EqOff => {
                 playback::set_eq(&mut self.playback, EqParams::default());
+            }
+            UiAction::SetEqVoice(db) => {
+                let mut eq = self.playback.eq();
+                eq.voice_gain_db = db;
+                playback::set_eq(&mut self.playback, eq);
+            }
+            UiAction::SetEqLowpass(hz) => {
+                let mut eq = self.playback.eq();
+                eq.lowpass_hz = hz;
+                playback::set_eq(&mut self.playback, eq);
+            }
+            UiAction::SetEqHighpass(hz) => {
+                let mut eq = self.playback.eq();
+                eq.highpass_hz = hz;
+                playback::set_eq(&mut self.playback, eq);
+            }
+            UiAction::ToggleEqPanel => {
+                self.eq_open = !self.eq_open;
             }
         }
         true
