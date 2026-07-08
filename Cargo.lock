@@ -2224,6 +2224,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "p0-sabr-probe"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "boa_engine",
+ "reqwest",
+ "serde_json",
+]
+
+[[package]]
 name = "parking_lot_core"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
