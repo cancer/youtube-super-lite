@@ -1,0 +1,21 @@
+[package]
+name = "p0-sabr-probe"
+version = "0.1.0"
+edition = "2021"
+description = "issue #16 のライブ SABR 調査用 PoC プローブ（本体から独立。TVHTML5+Bearer の serverAbrStreamingUrl に VideoPlaybackAbrRequest を POST し、PoToken/nsig 要否と go/no-go を実測する）。"
+publish = false
+
+# 本体(youtube-super-lite / ysl-core)には一切依存しない完全独立の調査ツール。
+# nsig(boa)実装は src/nsig.rs に同梱（ysl-core からの複製）。
+
+[[bin]]
+name = "p0_sabr_probe"
+path = "src/main.rs"
+
+[dependencies]
+# InnerTube / serverAbrStreamingUrl への HTTP。native-tls=SChannel（Windows で追加ビルド不要）。
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "native-tls", "json", "cookies"] }
+serde_json = "1"
+anyhow = "1"
+# nsig(n パラメータ)変換に base.js を評価する純Rust JS エンジン（ysl-core と同版）。
+boa_engine = "0.20"

@@ -1,0 +1,13 @@
+{
+  "name": "p0-sabr-probe-potoken",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "issue #16 PoC 用 PoToken 発行器 / 参照 SABR クライアント（bgutils-js + jsdom + youtubei.js + @luanrt/googlevideo）",
+  "dependencies": {
+    "bgutils-js": "^3.2.0",
+    "googlevideo": "^5.0.0",
+    "jsdom": "^25.0.0",
+    "youtubei.js": "^17.0.0"
+  }
+}
