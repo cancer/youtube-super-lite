@@ -9,6 +9,8 @@ mod ui;
 #[cfg(windows)]
 mod dcomp_overlay;
 mod settings;
+#[cfg(windows)]
+mod webview_host;
 
 use anyhow::{anyhow, bail, Result};
 use winit::event_loop::{ControlFlow, EventLoop};
@@ -30,6 +32,9 @@ struct CliArgs {
     backend: String,
     volume: Option<f64>,
     enable_dev_tools: bool,
+    /// WebView2 プローブ（issue #16 PR1）を有効化するか。無指定時は WebView2 子窓を作らず
+    /// 従来と完全に同一挙動（実験機能はフラグ排他）。
+    webview_probe: bool,
 }
 
 fn parse_args() -> Result<CliArgs> {
@@ -38,6 +43,7 @@ fn parse_args() -> Result<CliArgs> {
     let mut url: Option<String> = None;
     let mut volume: Option<f64> = None;
     let mut enable_dev_tools = false;
+    let mut webview_probe = false;
 
     let parse_volume = |s: &str| -> Result<f64> {
         let v: f64 = s
@@ -57,6 +63,8 @@ fn parse_args() -> Result<CliArgs> {
             }
             // 検証用ローカル HTTP（スクショ/操作注入）を有効化。
             "--enable-dev-tools" => enable_dev_tools = true,
+            // WebView2 プローブ（issue #16 PR1）を有効化。無指定時は WebView2 子窓を作らない。
+            "--webview-probe" => webview_probe = true,
             // 旧フラグ。互換のため受理するが無視する（オーバーレイは常に子窓+DirectComposition、
             // 描画は常にネイティブ版）。
             "--dcomp" | "--legacy" | "--native" => {}
@@ -92,6 +100,7 @@ fn parse_args() -> Result<CliArgs> {
         backend: backend.trim_end_matches('/').to_string(),
         volume,
         enable_dev_tools,
+        webview_probe,
     })
 }
 
@@ -106,6 +115,7 @@ fn print_help() {
          \x20\x20    --debug-backend URL   認証バックエンドを上書き（デバッグ用、デフォルト: {}）\n\
          \x20\x20    --volume N            初期音量 0-130（デバッグ用。例: --volume 0 で無音）\n\
          \x20\x20    --enable-dev-tools    検証用ローカル HTTP（/screenshot, /click, /action 等）を有効化\n\
+         \x20\x20    --webview-probe       WebView2 子窓プローブ（issue #16 PR1・実験機能）を有効化\n\
          \x20\x20-h, --help                このヘルプを表示",
         ysl_core::yt::auth::DEFAULT_BACKEND
     );
@@ -131,6 +141,7 @@ fn main() -> Result<()> {
         args.backend,
         args.volume,
         args.enable_dev_tools,
+        args.webview_probe,
     );
     event_loop.run_app(&mut app)?;
     Ok(())
