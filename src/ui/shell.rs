@@ -42,6 +42,9 @@ pub struct NativeApp {
     backend: String,
     initial_volume: Option<f64>,
     enable_dev_tools: bool,
+    /// WebView2 プローブ（issue #16 PR1）を有効化するか（`--webview-probe`）。
+    /// 無指定時は WebView2 子窓を作らず従来と同一挙動。
+    webview_probe: bool,
     state: Option<NativeRunning>,
 }
 
@@ -92,6 +95,11 @@ pub(super) struct NativeRunning {
     /// init 失敗時のみ None。
     #[cfg(windows)]
     pub(super) dcomp_overlay: Option<crate::dcomp_overlay::DcompOverlay>,
+    /// WebView2 ホスト子窓（issue #16 PR1）。ライブ SABR 詰み救済（公式 IFrame 埋め込み）の
+    /// 土台。Windows のみ。init 失敗時のみ None。**現時点では mpv と併存させるだけで、
+    /// 経路切替・hide 配線はしない**（PR3/PR4 の範疇）。
+    #[cfg(windows)]
+    pub(super) webview_host: Option<crate::webview_host::WebviewHost>,
     /// 自動非表示用: 最後に操作（マウス移動/キー/クリック）があった時刻。
     #[cfg(windows)]
     pub(super) last_activity: Instant,
@@ -117,6 +125,7 @@ impl NativeApp {
         backend: String,
         initial_volume: Option<f64>,
         enable_dev_tools: bool,
+        webview_probe: bool,
     ) -> Self {
         Self {
             proxy,
@@ -125,6 +134,7 @@ impl NativeApp {
             backend,
             initial_volume,
             enable_dev_tools,
+            webview_probe,
             state: None,
         }
     }
@@ -199,6 +209,21 @@ impl NativeApp {
             }
         };
 
+        // WebView2 ホスト子窓（issue #16 PR1）。`--webview-probe` 指定時のみ生成する
+        // （無指定時は None＝従来と完全に同一挙動。実験機能はフラグ排他。ガイド §4.0）。
+        #[cfg(windows)]
+        let webview_host = if self.webview_probe {
+            match crate::webview_host::WebviewHost::new(wid) {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    eprintln!("[native] webview2 host init failed: {e:#}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // 前回保存した UI 設定（文字サイズ・チャット幅）を引き継ぐ。
         let settings = crate::settings::load();
 
@@ -232,6 +257,8 @@ impl NativeApp {
             focused: true,
             #[cfg(windows)]
             dcomp_overlay,
+            #[cfg(windows)]
+            webview_host,
             #[cfg(windows)]
             last_activity: Instant::now(),
             #[cfg(windows)]
@@ -630,6 +657,10 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                 #[cfg(windows)]
                 if let Some(o) = state.dcomp_overlay.as_mut() {
                     o.resize(size.width as i32, size.height as i32);
+                }
+                #[cfg(windows)]
+                if let Some(w) = state.webview_host.as_mut() {
+                    w.resize(size.width as i32, size.height as i32);
                 }
                 let _ = size;
             }

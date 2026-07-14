@@ -67,3 +67,9 @@ windows = { version = "0.58", features = [
     # オーバーレイのスライダー（シーク/音量）ドラッグ用のマウスキャプチャ。
     "Win32_UI_Input_KeyboardAndMouse",
 ] }
+
+# WebView2 ホスト（issue #16 PR1）: ライブ SABR 詰みの救済として公式 IFrame プレーヤーを
+# 埋め込むための COM バインディング。`windows` crate と同じ 0.58 系にバージョンを固定する
+# （webview2-com 0.35 以降は windows 0.59+ を要求し、`windows` の重複解決＝型不整合を招くため
+# 0.34.0 を選定。実測は `cargo generate-lockfile` で windows のバージョンが単一に収束することで確認）。
+webview2-com = "=0.34.0"
