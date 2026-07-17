@@ -45,6 +45,10 @@ pub struct NativeApp {
     /// WebView2 プローブ（issue #16 PR1）を有効化するか（`--webview-probe`）。
     /// 無指定時は WebView2 子窓を作らず従来と同一挙動。
     webview_probe: bool,
+    /// WebView2 内で Google ログイン（issue #16 PR2・`--webview-login`）を行うか。
+    /// 立っている場合は `webview_probe` より優先し、オーバーレイを生成せず mpv も再生しない
+    /// 使い捨てログインセッションになる（cookie を固定 UserDataFolder に永続化）。
+    webview_login: bool,
     state: Option<NativeRunning>,
 }
 
@@ -118,6 +122,9 @@ pub(super) struct NativeRunning {
 }
 
 impl NativeApp {
+    // CLI フラグ（main.rs の CliArgs）が1つずつ増えるたびにこのコンストラクタ引数も増える。
+    // 引数はいずれも独立した起動オプションでグルーピングに意味が薄いため、束ねずに列挙する。
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         proxy: EventLoopProxy<UserEvent>,
         initial_url: Option<String>,
@@ -126,6 +133,7 @@ impl NativeApp {
         initial_volume: Option<f64>,
         enable_dev_tools: bool,
         webview_probe: bool,
+        webview_login: bool,
     ) -> Self {
         Self {
             proxy,
@@ -135,6 +143,7 @@ impl NativeApp {
             initial_volume,
             enable_dev_tools,
             webview_probe,
+            webview_login,
             state: None,
         }
     }
@@ -173,10 +182,14 @@ impl NativeApp {
         }
 
         // CLI で URL 指定があれば再生開始（URL 欄にも反映）。
+        // ただし --webview-login は使い捨てログインセッションで通常再生をしないため、mpv には
+        // loadfile しない（mpv 子窓は WebView2 の背面で黒のまま無害。issue #16 PR2）。
         let mut url_input = String::new();
         if let Some(url) = self.initial_url.take() {
             url_input = url.clone();
-            flows::play_with_chat(&mut playback_state, &mut chat_state, &account_state, &url, &waker);
+            if !self.webview_login {
+                flows::play_with_chat(&mut playback_state, &mut chat_state, &account_state, &url, &waker);
+            }
         }
 
         // dev-tools HTTP サーバ（--enable-dev-tools）。
@@ -197,31 +210,47 @@ impl NativeApp {
         };
 
         // 動画に重ねる透過オーバーレイ（子窓 + DirectComposition）。init 失敗時のみ None。
+        // --webview-login 時は生成しない: オーバーレイ子窓は WS_CHILD|WS_VISIBLE で全入力を所有し
+        // ensure_topmost が毎フレーム最前面へ引くため、WebView2 のログインフォームにクリック/キーが
+        // 届かず手動ログインできなくなる（issue #16 PR2・ガイド §4）。
         #[cfg(windows)]
-        let dcomp_overlay = match crate::dcomp_overlay::DcompOverlay::new(wid) {
-            Ok(o) => {
-                eprintln!("[native] dcomp overlay (子窓+DirectComposition) を使用");
-                Some(o)
-            }
-            Err(e) => {
-                eprintln!("[native] dcomp overlay init failed: {e:#}");
-                None
-            }
-        };
-
-        // WebView2 ホスト子窓（issue #16 PR1）。`--webview-probe` 指定時のみ生成する
-        // （無指定時は None＝従来と完全に同一挙動。実験機能はフラグ排他。ガイド §4.0）。
-        #[cfg(windows)]
-        let webview_host = if self.webview_probe {
-            match crate::webview_host::WebviewHost::new(wid) {
-                Ok(w) => Some(w),
+        let dcomp_overlay = if self.webview_login {
+            None
+        } else {
+            match crate::dcomp_overlay::DcompOverlay::new(wid) {
+                Ok(o) => {
+                    eprintln!("[native] dcomp overlay (子窓+DirectComposition) を使用");
+                    Some(o)
+                }
                 Err(e) => {
-                    eprintln!("[native] webview2 host init failed: {e:#}");
+                    eprintln!("[native] dcomp overlay init failed: {e:#}");
                     None
                 }
             }
-        } else {
-            None
+        };
+
+        // WebView2 ホスト子窓（issue #16 PR1/PR2）。`--webview-login` を最優先し、次に
+        // `--webview-probe`、どちらも無ければ None＝従来と完全に同一挙動（実験機能はフラグ排他）。
+        #[cfg(windows)]
+        let webview_host = {
+            use crate::webview_host::{WebviewHost, WebviewMode};
+            let mode = if self.webview_login {
+                Some(WebviewMode::Login)
+            } else if self.webview_probe {
+                Some(WebviewMode::Probe)
+            } else {
+                None
+            };
+            match mode {
+                Some(mode) => match WebviewHost::new(wid, mode) {
+                    Ok(w) => Some(w),
+                    Err(e) => {
+                        eprintln!("[native] webview2 host init failed: {e:#}");
+                        None
+                    }
+                },
+                None => None,
+            }
         };
 
         // 前回保存した UI 設定（文字サイズ・チャット幅）を引き継ぐ。

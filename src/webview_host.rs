@@ -1,10 +1,20 @@
-//! WebView2 ホスト子窓（issue #16 PR1）。
+//! WebView2 ホスト子窓（issue #16 PR1/PR2）。
 //!
 //! ライブ配信が SABR 詰みで mpv 再生できないケースの救済として、公式 IFrame プレーヤーを
-//! WebView2 で埋め込むための土台。このファイルが作るのは「3枚目の子窓に自前 HTML(iframe
-//! embed) をエラー153なしで描画する」ところまで（[inbox/issue16-implementation-guide.md]
-//! §4 PR1）。経路切替（mpv⇄WebView2, PR3）・ログイン cookie 永続化（PR2）・
-//! オーバーレイ/mpv の hide（PR4）はスコープ外。
+//! WebView2 で埋め込むための土台。子窓生成・Environment/Controller 生成・固定
+//! UserDataFolder（`%APPDATA%\YouTubeSuperLite\webview2`）への cookie 永続化は
+//! [`WebviewMode`] の両モード共通で、ナビゲーション部分だけがモードで分岐する:
+//!
+//! - **PR1 (`WebviewMode::Probe`)**: 自前 HTML(iframe embed) を仮想ホスト
+//!   （`https://ysl.embed.example/player.html`）から正規 origin で配信し、エラー153なしで
+//!   プレーヤーが描画されることを確認する（[inbox/issue16-implementation-guide.md] §4）。
+//! - **PR2 (`WebviewMode::Login`)**: 仮想ホストマッピングも player.html 書き出しもせず、
+//!   トップレベルで Google ログイン URL へ `Navigate` する。ユーザーが対話的に Google
+//!   ログインを完了すると、固定 UserDataFolder に cookie が永続化され、以後 Probe や本体が
+//!   この cookie を使い回す（bot ゲート突破の下地。§5 PR2）。
+//!
+//! 経路切替（mpv⇄WebView2, PR3）・オーバーレイ/mpv の hide（PR4）・onError fallback（PR5）は
+//! スコープ外。
 //!
 //! 構成は [`crate::dcomp_overlay::DcompOverlay`] と同じ要領（winit 親窓 `wid` を親に
 //! `WS_CHILD` 子窓を作る）。ただし描画は WebView2 自身が行うため、DComp/D3D11/D2D は
@@ -53,6 +63,26 @@ const DEV_FIXED_VIDEO_ID: &str = "jfKfPfyJRdk";
 /// （[inbox/issue16-implementation-guide.md] §4.4）。
 const VIRTUAL_HOST: &str = "ysl.embed.example";
 
+/// WebView2 子窓の動作モード（issue #16）。子窓・Environment・Controller の生成は両モード共通で、
+/// ナビゲーション部分だけがモードで分岐する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebviewMode {
+    /// PR1: 自前 HTML(iframe embed) を仮想ホストから配信し 153 回避を確認する（匿名でよい）。
+    Probe,
+    /// PR2: トップレベルで Google ログイン URL へナビゲートし、固定 UserDataFolder に
+    /// cookie を永続化する（ユーザーが対話的にログインを完了する導線）。
+    Login,
+}
+
+/// Login モードでトップレベルにナビゲートする Google ログイン URL（issue #16 PR2）。
+///
+/// `continue` を `www.youtube.com` に向けることで、ログイン後に YouTube へ着地して cookie 文脈を
+/// 保つ。`youtube-nocookie.com` は cookie（＝ログイン文脈）を捨てるため使わない。
+/// 純粋関数として切り出しているのは、副作用の無いこの生成ロジックをユニットテストするため。
+fn login_url() -> &'static str {
+    "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fwww.youtube.com%2F&hl=ja"
+}
+
 /// WebView2 を貼った子窓（winit 親窓 `wid` の3枚目の子窓）。
 /// `environment`/`controller` は COM の強参照。フィールドとして保持し続けないと
 /// ブラウザプロセスが解放されて描画が止まる。
@@ -77,7 +107,9 @@ impl Drop for WebviewHost {
 
 impl WebviewHost {
     /// winit 親窓（HWND を i64 で受ける）の子として作成する。
-    pub fn new(parent_wid: i64) -> Result<Self> {
+    /// `mode` でナビゲーション挙動が分岐する（[`WebviewMode`]）。子窓・Environment・
+    /// Controller の生成は両モード共通。
+    pub fn new(parent_wid: i64, mode: WebviewMode) -> Result<Self> {
         // WebView2 は STA 前提の COM API。多重初期化は S_FALSE で成功扱いになる
         // （`HRESULT::ok()` は失敗 HRESULT のみ Err を返すので、既に別スレッドが
         // 同じ STA で初期化済みなら実質ここは黙って通る）。
@@ -125,14 +157,9 @@ impl WebviewHost {
         };
 
         // UserDataFolder は固定パス（起動ごとに変えない＝ cookie を使い回す前提。PR2 の核）。
+        // 両モード共通: ここに溜まった cookie を Probe/本体が使い回す。
         let user_data_dir = webview2_user_data_dir()?;
         std::fs::create_dir_all(&user_data_dir)?;
-
-        // 自前 HTML（iframe embed）を配信するローカルフォルダ。起動のたびに書き直す
-        // （バイナリ側のテンプレート更新をそのまま反映させるため）。
-        let www_dir = user_data_dir.join("www");
-        std::fs::create_dir_all(&www_dir)?;
-        std::fs::write(www_dir.join("player.html"), player_html(DEV_FIXED_VIDEO_ID))?;
 
         // Environment 生成オプション。`--autoplay-policy` は生成時にしか渡せない
         // （条件C。後付け不可なのでここに同梱する）。
@@ -202,33 +229,60 @@ impl WebviewHost {
             controller.SetIsVisible(true)?;
         }
 
-        // 正規 origin/Referer を与えるため、仮想ホストにローカルフォルダをマップして
-        // その URL を Navigate する（NavigateToString や data/blob URL は Referer が
-        // 付かず153を踏むので不可）。
         let webview = unsafe { controller.CoreWebView2()? };
-        let webview3: ICoreWebView2_3 = windows::core::Interface::cast(&webview)?;
 
-        // ナビゲーション診断（issue #16 PR1 のゴール確認）。真っ白の原因が
-        // (A)iframe ロード成功だが匿名 bot ゲート/待機画面（＝実質成功） か
-        // (B)iframe ロード自体が失敗（153相当・origin/Referer 拒否） かを確定させるため、
-        // 主フレームと iframe のナビゲーション結果を probe.log に追記する。
-        // 登録は Navigate 前に行う（イベントを取りこぼさないため）。ハンドラ内は panic させず握る。
-        let log_path = user_data_dir.join("probe.log");
-        register_nav_diagnostics(&webview, log_path);
+        // ここからがモード分岐。子窓・Environment・Controller・SetBounds/SetIsVisible までは共通。
+        match mode {
+            WebviewMode::Probe => {
+                // 自前 HTML（iframe embed）を配信するローカルフォルダ。起動のたびに書き直す
+                // （バイナリ側のテンプレート更新をそのまま反映させるため）。Probe 専用。
+                let www_dir = user_data_dir.join("www");
+                std::fs::create_dir_all(&www_dir)?;
+                std::fs::write(www_dir.join("player.html"), player_html(DEV_FIXED_VIDEO_ID))?;
 
-        let www_dir_hstring = HSTRING::from(www_dir.as_os_str());
-        unsafe {
-            webview3.SetVirtualHostNameToFolderMapping(
-                w!("ysl.embed.example"),
-                &www_dir_hstring,
-                COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW,
-            )?;
-            webview.Navigate(w!("https://ysl.embed.example/player.html"))?;
+                // 正規 origin/Referer を与えるため、仮想ホストにローカルフォルダをマップして
+                // その URL を Navigate する（NavigateToString や data/blob URL は Referer が
+                // 付かず153を踏むので不可）。
+                let webview3: ICoreWebView2_3 = windows::core::Interface::cast(&webview)?;
+
+                // ナビゲーション診断（issue #16 PR1 のゴール確認）。真っ白の原因が
+                // (A)iframe ロード成功だが匿名 bot ゲート/待機画面（＝実質成功） か
+                // (B)iframe ロード自体が失敗（153相当・origin/Referer 拒否） かを確定させるため、
+                // 主フレームと iframe のナビゲーション結果を probe.log に追記する。
+                // 登録は Navigate 前に行う（イベントを取りこぼさないため）。ハンドラ内は panic させず握る。
+                let log_path = user_data_dir.join("probe.log");
+                register_nav_diagnostics(&webview, log_path);
+
+                let www_dir_hstring = HSTRING::from(www_dir.as_os_str());
+                unsafe {
+                    webview3.SetVirtualHostNameToFolderMapping(
+                        w!("ysl.embed.example"),
+                        &www_dir_hstring,
+                        COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW,
+                    )?;
+                    webview.Navigate(w!("https://ysl.embed.example/player.html"))?;
+                }
+
+                eprintln!(
+                    "[native] webview2 子窓を生成（Probe・video_id={DEV_FIXED_VIDEO_ID} 固定・仮想ホスト https://{VIRTUAL_HOST}/）"
+                );
+            }
+            WebviewMode::Login => {
+                // 仮想ホストマッピングも player.html 書き出しもしない。トップレベルで
+                // Google ログイン画面へ Navigate し、ユーザーが対話的にログインを完了すると
+                // 固定 UserDataFolder に cookie が永続化される（以後 Probe/本体が使い回す）。
+                // ログイン完了の自動判定はしない（手動運用）。
+                let log_path = user_data_dir.join("probe.log");
+                register_login_diagnostics(&webview, log_path);
+
+                let login_url_hstring = HSTRING::from(login_url());
+                unsafe {
+                    webview.Navigate(&login_url_hstring)?;
+                }
+
+                eprintln!("[native] webview2 子窓を生成（Login・{}）", login_url());
+            }
         }
-
-        eprintln!(
-            "[native] webview2 子窓を生成（video_id={DEV_FIXED_VIDEO_ID} 固定・仮想ホスト https://{VIRTUAL_HOST}/）"
-        );
 
         Ok(Self {
             hwnd,
@@ -379,6 +433,54 @@ fn register_nav_diagnostics(webview: &webview2_com::Microsoft::Web::WebView2::Wi
     probe_log(&log_path, "--- webview2 probe start (handlers registered) ---");
 }
 
+/// Login モード用の軽量診断（issue #16 PR2）。embed 用の [`register_nav_diagnostics`]（iframe
+/// 3ハンドラ）は不要なので、主フレームの `NavigationCompleted` を1つだけ購読し、着地 URL(`Source`)・
+/// `DocumentTitle` を probe.log/stderr に出す。ユーザーが「youtube.com にログイン状態で戻った」ことを
+/// 目視/ログで追うための傍証で、ログイン完了の自動判定はしない（手動運用）。ハンドラ内は panic させず握る。
+fn register_login_diagnostics(
+    webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2,
+    log_path: PathBuf,
+) {
+    let handler = NavigationCompletedEventHandler::create(Box::new(move |sender, args| {
+        let mut is_success = false;
+        let mut status = COREWEBVIEW2_WEB_ERROR_STATUS(0);
+        let mut source = String::new();
+        let mut title = String::new();
+        unsafe {
+            if let Some(args) = args.as_ref() {
+                let mut b = windows::Win32::Foundation::BOOL(0);
+                if args.IsSuccess(&mut b).is_ok() {
+                    is_success = b.as_bool();
+                }
+                let _ = args.WebErrorStatus(&mut status);
+            }
+            if let Some(wv) = sender.as_ref() {
+                let mut p = windows::core::PWSTR::null();
+                if wv.Source(&mut p).is_ok() && !p.is_null() {
+                    source = take_pwstr(p);
+                }
+                let mut t = windows::core::PWSTR::null();
+                if wv.DocumentTitle(&mut t).is_ok() && !t.is_null() {
+                    title = take_pwstr(t);
+                }
+            }
+        }
+        probe_log(
+            &log_path,
+            &format!(
+                "LoginNavigationCompleted uri={source} IsSuccess={is_success} WebErrorStatus={status:?} DocumentTitle={title:?}"
+            ),
+        );
+        Ok(())
+    }));
+    let mut token = EventRegistrationToken::default();
+    unsafe {
+        if let Err(e) = webview.add_NavigationCompleted(&handler, &mut token) {
+            eprintln!("[webview2-login] add_NavigationCompleted 登録失敗: {e:?}");
+        }
+    }
+}
+
 /// WebView2 の固定 UserDataFolder（`%APPDATA%\YouTubeSuperLite\webview2`）。
 /// 起動ごとに変えない＝ cookie を使い回す前提（PR2 の核）。
 fn webview2_user_data_dir() -> Result<PathBuf> {
@@ -421,4 +523,20 @@ fn player_html(video_id: &str) -> String {
 /// （このPRでは子窓への入力ハンドリングを配線しない。§PR4 の範疇）。
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Login モードのナビゲート先 URL（issue #16 PR2）が Google ログインで、`continue` が
+    /// YouTube に戻る形になっていること。Win32/COM に依存しない唯一の純粋ロジック。
+    #[test]
+    fn login_url_targets_google_login_returning_to_youtube() {
+        let u = login_url();
+        assert!(u.starts_with("https://"), "https:// で始まること: {u}");
+        assert!(u.contains("accounts.google.com"), "Google ログインであること: {u}");
+        assert!(u.contains("continue"), "continue パラメータを持つこと: {u}");
+        assert!(u.contains("youtube"), "continue が youtube に戻ること: {u}");
+    }
 }
