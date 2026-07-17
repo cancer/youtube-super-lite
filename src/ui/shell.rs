@@ -182,14 +182,16 @@ impl NativeApp {
         }
 
         // CLI で URL 指定があれば再生開始（URL 欄にも反映）。
-        // ただし --webview-login は使い捨てログインセッションで通常再生をしないため、mpv には
-        // loadfile しない（mpv 子窓は WebView2 の背面で黒のまま無害。issue #16 PR2）。
+        // ただし --webview-login は使い捨てログインセッションで通常再生をしない。mpv に loadfile
+        // しないのはもちろん、URL 欄にも入れない（入れると「欄に出ているのに再生されない」不整合に
+        // なる。login は URL を扱わないモード。issue #16 PR2）。
         let mut url_input = String::new();
-        if let Some(url) = self.initial_url.take() {
+        if self.webview_login {
+            // login は URL を扱わないモード。CLI 指定 URL は破棄する（欄にも入れず再生もしない）。
+            self.initial_url = None;
+        } else if let Some(url) = self.initial_url.take() {
             url_input = url.clone();
-            if !self.webview_login {
-                flows::play_with_chat(&mut playback_state, &mut chat_state, &account_state, &url, &waker);
-            }
+            flows::play_with_chat(&mut playback_state, &mut chat_state, &account_state, &url, &waker);
         }
 
         // dev-tools HTTP サーバ（--enable-dev-tools）。

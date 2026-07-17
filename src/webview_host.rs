@@ -273,7 +273,7 @@ impl WebviewHost {
                 // 固定 UserDataFolder に cookie が永続化される（以後 Probe/本体が使い回す）。
                 // ログイン完了の自動判定はしない（手動運用）。
                 let log_path = user_data_dir.join("probe.log");
-                register_login_diagnostics(&webview, log_path);
+                register_main_nav_completed(&webview, log_path, "LoginNavigationCompleted");
 
                 let login_url_hstring = HSTRING::from(login_url());
                 unsafe {
@@ -333,48 +333,8 @@ fn probe_log(path: &std::path::Path, line: &str) {
 /// 診断専用（issue #16 PR1 のゴール計測）。ここで再生挙動・経路・UI は一切変えない。
 fn register_nav_diagnostics(webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2, log_path: PathBuf) {
     // 主フレーム（player.html 自体）のロード完了。origin/Referer が効いているか、
-    // youtube 側が何を返したか（DocumentTitle）の傍証にもなる。
-    {
-        let log_path = log_path.clone();
-        let handler = NavigationCompletedEventHandler::create(Box::new(move |sender, args| {
-            let mut is_success = false;
-            let mut status = COREWEBVIEW2_WEB_ERROR_STATUS(0);
-            let mut source = String::new();
-            let mut title = String::new();
-            unsafe {
-                if let Some(args) = args.as_ref() {
-                    let mut b = windows::Win32::Foundation::BOOL(0);
-                    if args.IsSuccess(&mut b).is_ok() {
-                        is_success = b.as_bool();
-                    }
-                    let _ = args.WebErrorStatus(&mut status);
-                }
-                if let Some(wv) = sender.as_ref() {
-                    let mut p = windows::core::PWSTR::null();
-                    if wv.Source(&mut p).is_ok() && !p.is_null() {
-                        source = take_pwstr(p);
-                    }
-                    let mut t = windows::core::PWSTR::null();
-                    if wv.DocumentTitle(&mut t).is_ok() && !t.is_null() {
-                        title = take_pwstr(t);
-                    }
-                }
-            }
-            probe_log(
-                &log_path,
-                &format!(
-                    "MainNavigationCompleted uri={source} IsSuccess={is_success} WebErrorStatus={status:?} DocumentTitle={title:?}"
-                ),
-            );
-            Ok(())
-        }));
-        let mut token = EventRegistrationToken::default();
-        unsafe {
-            if let Err(e) = webview.add_NavigationCompleted(&handler, &mut token) {
-                eprintln!("[webview2-probe] add_NavigationCompleted 登録失敗: {e:?}");
-            }
-        }
-    }
+    // youtube 側が何を返したか（DocumentTitle）の傍証にもなる。Login 側と共通のヘルパで購読する。
+    register_main_nav_completed(webview, log_path.clone(), "MainNavigationCompleted");
 
     // iframe（youtube.com/embed）のナビゲート開始。決め手となる「どの URI へ行こうとしたか」。
     {
@@ -433,13 +393,18 @@ fn register_nav_diagnostics(webview: &webview2_com::Microsoft::Web::WebView2::Wi
     probe_log(&log_path, "--- webview2 probe start (handlers registered) ---");
 }
 
-/// Login モード用の軽量診断（issue #16 PR2）。embed 用の [`register_nav_diagnostics`]（iframe
-/// 3ハンドラ）は不要なので、主フレームの `NavigationCompleted` を1つだけ購読し、着地 URL(`Source`)・
-/// `DocumentTitle` を probe.log/stderr に出す。ユーザーが「youtube.com にログイン状態で戻った」ことを
-/// 目視/ログで追うための傍証で、ログイン完了の自動判定はしない（手動運用）。ハンドラ内は panic させず握る。
-fn register_login_diagnostics(
+/// 主フレームの `NavigationCompleted` を `label` 付きで購読する共通ヘルパ（issue #16 PR1/PR2）。
+/// IsSuccess/WebErrorStatus/Source/DocumentTitle を抽出し `<label> uri=… IsSuccess=… …` 形式で
+/// probe.log/stderr に出す。Probe（"MainNavigationCompleted"）と Login（"LoginNavigationCompleted"）で
+/// 差分はログ接頭辞だけなので、本体をここに集約する。ハンドラ内は panic させず取得失敗は握る。
+///
+/// Login モードでは embed 用の iframe ハンドラ（[`register_nav_diagnostics`] の
+/// `FrameNavigation*`）は登録せず、この主フレーム購読1本だけで
+/// 「youtube.com にログイン状態で戻った」ことを目視/ログで追う（自動判定はしない・手動運用）。
+fn register_main_nav_completed(
     webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2,
     log_path: PathBuf,
+    label: &'static str,
 ) {
     let handler = NavigationCompletedEventHandler::create(Box::new(move |sender, args| {
         let mut is_success = false;
@@ -468,7 +433,7 @@ fn register_login_diagnostics(
         probe_log(
             &log_path,
             &format!(
-                "LoginNavigationCompleted uri={source} IsSuccess={is_success} WebErrorStatus={status:?} DocumentTitle={title:?}"
+                "{label} uri={source} IsSuccess={is_success} WebErrorStatus={status:?} DocumentTitle={title:?}"
             ),
         );
         Ok(())
@@ -476,7 +441,7 @@ fn register_login_diagnostics(
     let mut token = EventRegistrationToken::default();
     unsafe {
         if let Err(e) = webview.add_NavigationCompleted(&handler, &mut token) {
-            eprintln!("[webview2-login] add_NavigationCompleted 登録失敗: {e:?}");
+            eprintln!("[webview2-probe] {label} add_NavigationCompleted 登録失敗: {e:?}");
         }
     }
 }
