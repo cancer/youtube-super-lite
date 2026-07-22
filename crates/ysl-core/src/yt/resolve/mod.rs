@@ -367,26 +367,35 @@ fn resolve_one(
     //    2026-07-04 以降 TVHTML5+Bearer でもライブは SABR 化（serverAbrStreamingUrl のみ・
     //    hlsManifestUrl が返らない）ケースがある。HLS が取れないライブは mpv では再生不可なので、
     //    公式 IFrame プレーヤー(WebView2)へ経路切替する指示を返す（issue #16 PR3）。
+    //
+    //    さらに、過去ライブのアーカイブ配信（isLive=false, isLiveContent=true）も SABR 由来
+    //    bot-gate に落ちて匿名 client が LOGIN_REQUIRED になるケースが観測されている。
+    //    ライブ由来（is_live または is_live_content）で HLS が取れなかったら同じく WebView2 に
+    //    委譲する。通常 VOD（is_live_content=false）はここに来ないので、下記 4) の TVHTML5+Bearer
+    //    adaptive 403 問題には触れない。
     if let Some(token) = req.access_token.as_deref() {
         if let Ok(tv) = clients::fetch_player(http, &clients::TVHTML5, &video_id, Some(token), visitor) {
-            if tv.status == "OK" && tv.is_live {
-                if let Some(streaming) = &tv.streaming {
-                    if let Some(hls) = clients::hls_manifest(streaming) {
-                        return Ok(ResolveOutcome::Native {
-                            resolved: Resolved {
-                                video_url: hls,
-                                audio_url: None,
-                            },
-                            title: tv.title,
-                            is_live: true,
-                        });
+            if tv.status == "OK" {
+                if tv.is_live {
+                    if let Some(streaming) = &tv.streaming {
+                        if let Some(hls) = clients::hls_manifest(streaming) {
+                            return Ok(ResolveOutcome::Native {
+                                resolved: Resolved {
+                                    video_url: hls,
+                                    audio_url: None,
+                                },
+                                title: tv.title,
+                                is_live: true,
+                            });
+                        }
                     }
                 }
-                // ライブ確定だが HLS が返らない ＝ SABR 詰み。WebView2 経路へ委譲する。
-                return Ok(ResolveOutcome::UseWebview {
-                    video_id: video_id.clone(),
-                    title: tv.title,
-                });
+                if tv.is_live || tv.is_live_content {
+                    return Ok(ResolveOutcome::UseWebview {
+                        video_id: video_id.clone(),
+                        title: tv.title,
+                    });
+                }
             }
         }
     }
