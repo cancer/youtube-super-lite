@@ -94,6 +94,12 @@ pub struct WebviewHost {
     controller: ICoreWebView2Controller,
     cw: i32,
     ch: i32,
+    /// 生成時のモード（issue #16 PR3）。`navigate_embed` は Probe モードで
+    /// 仮想ホストマッピング済みの前提でしか呼べないので、モードを保持して弾けるようにする。
+    mode: WebviewMode,
+    /// player.html を書き出すローカルフォルダ（`<user_data_dir>/www`）。
+    /// Probe モードでのみ実体を持つ（Login では未使用）。navigate_embed で再書き出しに使う。
+    www_dir: PathBuf,
 }
 
 impl Drop for WebviewHost {
@@ -231,12 +237,14 @@ impl WebviewHost {
 
         let webview = unsafe { controller.CoreWebView2()? };
 
+        // 自前 HTML（iframe embed）を配信するローカルフォルダ。Probe モードで実体化する
+        // （navigate_embed で再書き出しするためモード外でもパスは記録する）。
+        let www_dir = user_data_dir.join("www");
+
         // ここからがモード分岐。子窓・Environment・Controller・SetBounds/SetIsVisible までは共通。
         match mode {
             WebviewMode::Probe => {
-                // 自前 HTML（iframe embed）を配信するローカルフォルダ。起動のたびに書き直す
-                // （バイナリ側のテンプレート更新をそのまま反映させるため）。Probe 専用。
-                let www_dir = user_data_dir.join("www");
+                // 起動のたびに書き直す（バイナリ側のテンプレート更新をそのまま反映させるため）。
                 std::fs::create_dir_all(&www_dir)?;
                 std::fs::write(www_dir.join("player.html"), player_html(DEV_FIXED_VIDEO_ID))?;
 
@@ -290,7 +298,41 @@ impl WebviewHost {
             controller,
             cw,
             ch,
+            mode,
+            www_dir,
         })
+    }
+
+    /// 経路切替（issue #16 PR3）でライブ SABR 詰みが検知されたとき、指定 `video_id` の
+    /// 公式 IFrame プレーヤーを WebView2 上で再ロードする。
+    ///
+    /// 手順:
+    /// 1. `player_html(video_id)` で HTML を生成し `<user_data_dir>/www/player.html` に上書き
+    /// 2. `Navigate(https://ysl.embed.example/player.html)` を呼ぶ
+    ///
+    /// 仮想ホストマッピングは `WebviewMode::Probe` での `new()` で登録済みの前提。
+    /// `WebviewMode::Login` で生成したホストではマッピングが張られていないため、
+    /// 呼び出し自体を誤りとして `bail!` で明示的に落とす（呼び出し側は Probe 起動時のみ想定）。
+    pub fn navigate_embed(&mut self, video_id: &str) -> Result<()> {
+        if self.mode != WebviewMode::Probe {
+            return Err(anyhow!(
+                "navigate_embed は Probe モードでのみ呼び出せる（現在: {:?}）",
+                self.mode
+            ));
+        }
+
+        // player.html を video_id 差し替えで上書き（テンプレート・仮想ホストは既存を流用）。
+        std::fs::create_dir_all(&self.www_dir)?;
+        std::fs::write(self.www_dir.join("player.html"), player_html(video_id))?;
+
+        // 仮想ホストマッピングは new() の Probe 分岐で登録済み。同 URL への再 Navigate は
+        // 上書きした player.html を再取得させる（iframe の embed URL も再構築される）。
+        let webview = unsafe { self.controller.CoreWebView2()? };
+        unsafe {
+            webview.Navigate(w!("https://ysl.embed.example/player.html"))?;
+        }
+        eprintln!("[native] webview2 navigate_embed (video_id={video_id})");
+        Ok(())
     }
 
     /// 親窓のリサイズに追従する（DcompOverlay::resize と同じ流儀）。
