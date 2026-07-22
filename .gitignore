@@ -40,3 +40,7 @@
 /design/uploads/
 #  screenshots = 指示/作業に使った画像（機微・履歴から除去済み）
 /design/screenshots/
+
+# poc-webview2-iframe (issue #16) の自動キャプチャ出力（画面BitBltのため他ウィンドウが
+# 写り込むことがあり、再現可能な使い捨てデータなのでコミット対象外）
+/poc-shots/
