@@ -42,6 +42,14 @@ pub enum ResolveUpdate {
     Fallback(Resolved),
     /// タイトル・ライブ判定（再生開始後に後追いで届く。表示更新のみ）。
     Meta { title: Option<String>, is_live: bool },
+    /// SABR 詰みのライブ配信を検知し、mpv では再生できないため WebView2 の公式 IFrame プレーヤーへ
+    /// 経路を切り替える指示（issue #16 PR3）。判定材料は既存 resolve が持つ:
+    /// TVHTML5 + Bearer で `status=OK && isLive` かつ `hlsManifestUrl` が返らないケース。
+    UseWebview {
+        video_id: String,
+        title: Option<String>,
+        is_live: bool,
+    },
     Error(String),
 }
 

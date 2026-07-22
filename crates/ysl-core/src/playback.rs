@@ -195,6 +195,10 @@ pub fn poll_resolve(pb: &mut Playback) {
                     pb.player.set_force_media_title(&t);
                 }
             }
+            resolve::ResolveUpdate::UseWebview { .. } => {
+                // 経路切替の本体は次コミット（C4）で配線する。ここでは match 網羅性のためだけに
+                // 受け止め、no-op で捨てる（この時点では resolve 側もまだ送出しないので実害なし）。
+            }
             resolve::ResolveUpdate::Error(e) => {
                 eprintln!("resolve failed: {e}");
             }
