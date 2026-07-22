@@ -62,6 +62,9 @@ pub struct PlayerInfo {
     pub status: String,
     pub title: Option<String>,
     pub is_live: bool,
+    /// 過去にライブだった動画（アーカイブ配信）を含む「ライブ由来」フラグ。
+    /// 進行中ライブが終わっても true のまま残るので、SABR 由来 bot-gate の判別に使う。
+    pub is_live_content: bool,
     /// streamingData（無い＝再生不可）。
     pub streaming: Option<Value>,
 }
@@ -169,12 +172,14 @@ pub fn fetch_player(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     let is_live = val["videoDetails"]["isLive"].as_bool().unwrap_or(false);
+    let is_live_content = val["videoDetails"]["isLiveContent"].as_bool().unwrap_or(false);
     let streaming = val.get("streamingData").cloned();
 
     Ok(PlayerInfo {
         status,
         title,
         is_live,
+        is_live_content,
         streaming,
     })
 }
