@@ -376,20 +376,23 @@ fn resolve_one(
     if let Some(token) = req.access_token.as_deref() {
         if let Ok(tv) = clients::fetch_player(http, &clients::TVHTML5, &video_id, Some(token), visitor) {
             if tv.status == "OK" {
-                if tv.is_live {
-                    if let Some(streaming) = &tv.streaming {
-                        if let Some(hls) = clients::hls_manifest(streaming) {
-                            return Ok(ResolveOutcome::Native {
-                                resolved: Resolved {
-                                    video_url: hls,
-                                    audio_url: None,
-                                },
-                                title: tv.title,
-                                is_live: true,
-                            });
-                        }
-                    }
+                // ライブで HLS が取れれば mpv 経路（従来）。
+                let hls = if tv.is_live {
+                    tv.streaming.as_ref().and_then(clients::hls_manifest)
+                } else {
+                    None
+                };
+                if let Some(hls) = hls {
+                    return Ok(ResolveOutcome::Native {
+                        resolved: Resolved {
+                            video_url: hls,
+                            audio_url: None,
+                        },
+                        title: tv.title,
+                        is_live: true,
+                    });
                 }
+                // ライブ由来（進行中の SABR 詰み / アーカイブ配信の bot-gate）は WebView2 経路。
                 if tv.is_live || tv.is_live_content {
                     return Ok(ResolveOutcome::UseWebview {
                         video_id: video_id.clone(),
