@@ -160,8 +160,14 @@ pub fn fetch_player(
 
     let resp = req.json(&body).send()?;
     let text = resp.text()?;
-    let val: Value = serde_json::from_str(&text)
-        .map_err(|e| anyhow!("player レスポンス解析失敗({}): {e}", def.key))?;
+    parse_player_info(&text)
+        .map_err(|e| anyhow!("player レスポンス解析失敗({}): {e}", def.key))
+}
+
+/// player レスポンス JSON テキストを PlayerInfo に落とす（HTTP から分離。ユニットテスト対象）。
+fn parse_player_info(text: &str) -> Result<PlayerInfo> {
+    let val: Value = serde_json::from_str(text)
+        .map_err(|e| anyhow!("player レスポンス解析失敗: {e}"))?;
 
     let status = val["playabilityStatus"]["status"]
         .as_str()
@@ -295,4 +301,55 @@ pub fn select_streams(
     }
 
     bail!("再生可能な format がありません")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_regular_vod_returns_false_for_both() {
+        let json = r#"{
+            "playabilityStatus": {"status": "OK"},
+            "videoDetails": {"title": "sample", "isLive": false, "isLiveContent": false},
+            "streamingData": {"adaptiveFormats": []}
+        }"#;
+        let info = parse_player_info(json).unwrap();
+        assert_eq!(info.status, "OK");
+        assert!(!info.is_live);
+        assert!(!info.is_live_content);
+    }
+
+    #[test]
+    fn parse_live_broadcast_returns_true_for_both() {
+        let json = r#"{
+            "playabilityStatus": {"status": "OK"},
+            "videoDetails": {"title": "live", "isLive": true, "isLiveContent": true},
+            "streamingData": {"hlsManifestUrl": "https://example/hls.m3u8"}
+        }"#;
+        let info = parse_player_info(json).unwrap();
+        assert!(info.is_live);
+        assert!(info.is_live_content);
+    }
+
+    #[test]
+    fn parse_archived_live_returns_content_true_but_live_false() {
+        let json = r#"{
+            "playabilityStatus": {"status": "OK"},
+            "videoDetails": {"title": "archive", "isLive": false, "isLiveContent": true}
+        }"#;
+        let info = parse_player_info(json).unwrap();
+        assert!(!info.is_live);
+        assert!(info.is_live_content);
+    }
+
+    #[test]
+    fn parse_missing_is_live_content_defaults_false() {
+        let json = r#"{
+            "playabilityStatus": {"status": "OK"},
+            "videoDetails": {"title": "legacy", "isLive": false}
+        }"#;
+        let info = parse_player_info(json).unwrap();
+        assert!(!info.is_live_content);
+    }
 }
