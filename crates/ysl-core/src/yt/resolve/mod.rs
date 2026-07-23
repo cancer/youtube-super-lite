@@ -371,8 +371,8 @@ fn resolve_one(
     //    さらに、過去ライブのアーカイブ配信（isLive=false, isLiveContent=true）も SABR 由来
     //    bot-gate に落ちて匿名 client が LOGIN_REQUIRED になるケースが観測されている。
     //    ライブ由来（is_live または is_live_content）で HLS が取れなかったら同じく WebView2 に
-    //    委譲する。通常 VOD（is_live_content=false）はここに来ないので、下記 4) の TVHTML5+Bearer
-    //    adaptive 403 問題には触れない。
+    //    委譲する。通常 VOD（is_live_content=false）はどちらの return にも該当せず腕を素通しする
+    //    ので、下記 4) の TVHTML5+Bearer adaptive 403 問題を踏まない（サイドカー経路へ委譲される）。
     if let Some(token) = req.access_token.as_deref() {
         if let Ok(tv) = clients::fetch_player(http, &clients::TVHTML5, &video_id, Some(token), visitor) {
             if tv.status == "OK" {
