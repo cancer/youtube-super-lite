@@ -136,6 +136,13 @@ impl Player {
             .set_property("video-margin-ratio-right", ratio.clamp(0.0, 0.9));
     }
 
+    /// mpv の再生を停止する（`stop` コマンド。プレイリストクリア＋アイドル復帰）。
+    /// PR4: 再生経路を WebView2 に切り替える際、mpv 側の再生を止めて音を残さないための用途。
+    /// 失敗は握る（既存の loadfile/set_property スタイルと同じ）。
+    pub fn stop(&self) {
+        self.mpv.command("stop", &[]).ok();
+    }
+
     /// 動画を読み込む（loadfile replace）。
     /// `audio_url` / `title` は loadfile のオプションとして `audio-file=` / `force-media-title=` を渡す。
     pub fn loadfile(

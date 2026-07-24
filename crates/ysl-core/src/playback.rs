@@ -213,6 +213,9 @@ pub fn poll_resolve(pb: &mut Playback) -> Option<PendingRoute> {
                 if let Some(t) = title.as_deref() {
                     pb.player.set_force_media_title(t);
                 }
+                // PR4: 直前まで mpv で別動画を再生していた場合、そのまま音が残る事故を防ぐため
+                // 明示的に停止する。loadfile 経路（Ready）は replace で自然に置き換わるので不要。
+                pb.player.stop();
                 // native ロード監視は不要（そもそも loadfile しない）。fallback 監視も止める。
                 session.native_load_at = None;
                 session.fallback_armed = false;
