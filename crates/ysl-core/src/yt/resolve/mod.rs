@@ -42,6 +42,14 @@ pub enum ResolveUpdate {
     Fallback(Resolved),
     /// タイトル・ライブ判定（再生開始後に後追いで届く。表示更新のみ）。
     Meta { title: Option<String>, is_live: bool },
+    /// SABR 詰みのライブ配信を検知し、mpv では再生できないため WebView2 の公式 IFrame プレーヤーへ
+    /// 経路を切り替える指示（issue #16 PR3）。判定材料は既存 resolve が持つ:
+    /// TVHTML5 + Bearer で `status=OK && isLive` かつ `hlsManifestUrl` が返らないケース。
+    UseWebview {
+        video_id: String,
+        title: Option<String>,
+        is_live: bool,
+    },
     Error(String),
 }
 
@@ -55,6 +63,22 @@ pub struct ResolveRequest {
     /// ログイン中なら OAuth access_token（認証経路で TVHTML5 に Bearer 付与）。
     pub access_token: Option<String>,
     pub reply: Sender<ResolveUpdate>,
+}
+
+/// `resolve_one` の解決結果。従来の直リンク/HLS 経路（`Native`）と、mpv では再生不可な
+/// SABR 詰みライブを WebView2 の公式 IFrame プレーヤーへ流す経路（`UseWebview`）を分ける。
+/// 判定材料は同じ resolve 内なのでここに閉じて表現する（呼び出し側 `worker_loop` が
+/// 対応する `ResolveUpdate` へ変換する）。
+enum ResolveOutcome {
+    Native {
+        resolved: Resolved,
+        title: Option<String>,
+        is_live: bool,
+    },
+    UseWebview {
+        video_id: String,
+        title: Option<String>,
+    },
 }
 
 /// 常駐解決器へのハンドル。リクエストを送るだけ。
@@ -108,11 +132,21 @@ fn worker_loop(req_rx: Receiver<ResolveRequest>, waker: Waker) {
         }
 
         if !is_youtube_url(&req.url) {
-            // YouTube 以外は素通し（resolve_one が Ok を返す）。
+            // YouTube 以外は素通し（resolve_one が Native を返す。UseWebview はここでは発生しない）。
             match resolve_one(&http, &mut nsig, &req, visitor.as_deref()) {
-                Ok((resolved, title, is_live)) => {
+                Ok(ResolveOutcome::Native { resolved, title, is_live }) => {
                     let _ = req.reply.send(ResolveUpdate::Ready(resolved));
                     let _ = req.reply.send(ResolveUpdate::Meta { title, is_live });
+                }
+                Ok(ResolveOutcome::UseWebview { video_id, title }) => {
+                    // YouTube 以外の URL 経路でこの分岐に来ることは仕様上ないが、
+                    // 万一の暴発時も情報を落とさずメインへ委譲する。
+                    let _ = req.reply.send(ResolveUpdate::UseWebview {
+                        video_id,
+                        title: title.clone(),
+                        is_live: true,
+                    });
+                    let _ = req.reply.send(ResolveUpdate::Meta { title, is_live: true });
                 }
                 Err(e) => {
                     let _ = req.reply.send(ResolveUpdate::Error(e.to_string()));
@@ -128,7 +162,7 @@ fn worker_loop(req_rx: Receiver<ResolveRequest>, waker: Waker) {
         // ユーザー設定（解像度/コーデック）は両経路で同一に従わせる。
         let sc = spawn_sidecar(&req.url, &req).ok();
         match resolve_one(&http, &mut nsig, &req, visitor.as_deref()) {
-            Ok((resolved, title, is_live)) => {
+            Ok(ResolveOutcome::Native { resolved, title, is_live }) => {
                 // native を即再生。サイドカー結果は Fallback として控える（再生失敗時の即切替用）。
                 let _ = req.reply.send(ResolveUpdate::Ready(resolved));
                 let _ = req.reply.send(ResolveUpdate::Meta { title, is_live });
@@ -138,6 +172,22 @@ fn worker_loop(req_rx: Receiver<ResolveRequest>, waker: Waker) {
                         let _ = req.reply.send(ResolveUpdate::Fallback(fb));
                     }
                 }
+            }
+            // SABR 詰みライブ（TVHTML5+Bearer で isLive だが hlsManifestUrl が無い）→
+            // mpv では再生できないので WebView2 の公式 IFrame プレーヤーへ経路を切替える。
+            // サイドカーは fallback として不要（サイドカーも同じ SABR に詰まる想定・PoC #1）ため、
+            // 起動していたら停止してから通知する。
+            Ok(ResolveOutcome::UseWebview { video_id, title }) => {
+                if let Some((mut child, _stdout)) = sc {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                let _ = req.reply.send(ResolveUpdate::UseWebview {
+                    video_id,
+                    title: title.clone(),
+                    is_live: true,
+                });
+                let _ = req.reply.send(ResolveUpdate::Meta { title, is_live: true });
             }
             // native 全滅（多くは匿名 bot ゲート＝gated）→ サイドカーを本命にする。
             Err(native_err) => match sc.map(|(c, o)| read_sidecar_ready(c, o)) {
@@ -245,23 +295,24 @@ fn read_sidecar_ready(
     Ok((child, resolved, title, is_live))
 }
 
-/// 1 件を解決する。`(Resolved, title, is_live)` を返す。
+/// 1 件を解決する。`ResolveOutcome` を返す（従来の直リンク/HLS = `Native`、
+/// SABR 詰みライブ = `UseWebview`）。
 fn resolve_one(
     http: &reqwest::blocking::Client,
     _nsig: &mut nsig::NsigSolver,
     req: &ResolveRequest,
     visitor: Option<&str>,
-) -> Result<(Resolved, Option<String>, bool)> {
+) -> Result<ResolveOutcome> {
     // YouTube 以外は素通し（M3）。
     if !is_youtube_url(&req.url) {
-        return Ok((
-            Resolved {
+        return Ok(ResolveOutcome::Native {
+            resolved: Resolved {
                 video_url: req.url.clone(),
                 audio_url: None,
             },
-            None,
-            false,
-        ));
+            title: None,
+            is_live: false,
+        });
     }
 
     let video_id = clients::extract_video_id(&req.url)
@@ -272,7 +323,11 @@ fn resolve_one(
     if vr.status == "OK" && !vr.is_live {
         if let Some(streaming) = &vr.streaming {
             if let Ok((v, a)) = clients::select_streams(streaming, req.quality, req.codec) {
-                return Ok((finalize(http, v, a)?, vr.title, vr.is_live));
+                return Ok(ResolveOutcome::Native {
+                    resolved: finalize(http, v, a)?,
+                    title: vr.title,
+                    is_live: vr.is_live,
+                });
             }
         }
     }
@@ -283,18 +338,22 @@ fn resolve_one(
         if let Some(streaming) = &and.streaming {
             if and.is_live {
                 if let Some(hls) = clients::hls_manifest(streaming) {
-                    return Ok((
-                        Resolved {
+                    return Ok(ResolveOutcome::Native {
+                        resolved: Resolved {
                             video_url: hls,
                             audio_url: None,
                         },
-                        and.title,
-                        true,
-                    ));
+                        title: and.title,
+                        is_live: true,
+                    });
                 }
             }
             if let Ok((v, a)) = clients::select_streams(streaming, req.quality, req.codec) {
-                return Ok((finalize(http, v, a)?, and.title, and.is_live));
+                return Ok(ResolveOutcome::Native {
+                    resolved: finalize(http, v, a)?,
+                    title: and.title,
+                    is_live: and.is_live,
+                });
             }
         }
     }
@@ -304,20 +363,41 @@ fn resolve_one(
     //    confirm you're not a bot"）にしたため、匿名 ANDROID/ANDROID_VR ではライブが取れない。
     //    HLS はセグメントを mpv/ffmpeg が取得し nsig 変換が要らないので、下記 4) の VOD 認証経路の
     //    「403 になるから使わない」制約はライブには当てはまらない（ライブ限定で採用する）。
+    //
+    //    2026-07-04 以降 TVHTML5+Bearer でもライブは SABR 化（serverAbrStreamingUrl のみ・
+    //    hlsManifestUrl が返らない）ケースがある。HLS が取れないライブは mpv では再生不可なので、
+    //    公式 IFrame プレーヤー(WebView2)へ経路切替する指示を返す（issue #16 PR3）。
+    //
+    //    さらに、過去ライブのアーカイブ配信（isLive=false, isLiveContent=true）も SABR 由来
+    //    bot-gate に落ちて匿名 client が LOGIN_REQUIRED になるケースが観測されている。
+    //    ライブ由来（is_live または is_live_content）で HLS が取れなかったら同じく WebView2 に
+    //    委譲する。通常 VOD（is_live_content=false）はどちらの return にも該当せず腕を素通しする
+    //    ので、下記 4) の TVHTML5+Bearer adaptive 403 問題を踏まない（サイドカー経路へ委譲される）。
     if let Some(token) = req.access_token.as_deref() {
         if let Ok(tv) = clients::fetch_player(http, &clients::TVHTML5, &video_id, Some(token), visitor) {
-            if tv.status == "OK" && tv.is_live {
-                if let Some(streaming) = &tv.streaming {
-                    if let Some(hls) = clients::hls_manifest(streaming) {
-                        return Ok((
-                            Resolved {
-                                video_url: hls,
-                                audio_url: None,
-                            },
-                            tv.title,
-                            true,
-                        ));
-                    }
+            if tv.status == "OK" {
+                // ライブで HLS が取れれば mpv 経路（従来）。
+                let hls = if tv.is_live {
+                    tv.streaming.as_ref().and_then(clients::hls_manifest)
+                } else {
+                    None
+                };
+                if let Some(hls) = hls {
+                    return Ok(ResolveOutcome::Native {
+                        resolved: Resolved {
+                            video_url: hls,
+                            audio_url: None,
+                        },
+                        title: tv.title,
+                        is_live: true,
+                    });
+                }
+                // ライブ由来（進行中の SABR 詰み / アーカイブ配信の bot-gate）は WebView2 経路。
+                if tv.is_live || tv.is_live_content {
+                    return Ok(ResolveOutcome::UseWebview {
+                        video_id: video_id.clone(),
+                        title: tv.title,
+                    });
                 }
             }
         }

@@ -11,6 +11,14 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// `poll_resolve` から shell への「今回の解決結果はコアの mpv 経路では処理しきれない」旨の合図
+/// （issue #16 PR3）。返り値で経路要求を出すことで、shell 層に閉じている WebView2 の
+/// 具体的な操作（`navigate_embed`）をコア側に持ち込まずに済む。
+pub enum PendingRoute {
+    /// SABR 詰みライブが検知され、公式 IFrame プレーヤー(WebView2)へ切替を要求する。
+    Webview { video_id: String },
+}
+
 /// UI 非依存の再生状態。
 pub struct Playback {
     // --- 装置と好み（アプリ寿命）---
@@ -169,9 +177,12 @@ pub fn start_resolve(pb: &mut Playback, url: String, token: Option<&str>) {
     });
 }
 
-/// system: 解決結果を取り込み、mpv に loadfile する。
-pub fn poll_resolve(pb: &mut Playback) {
-    let Some(session) = pb.session.as_mut() else { return };
+/// system: 解決結果を取り込み、mpv に loadfile する（従来経路）。
+/// SABR 詰みライブなど mpv では扱えないケースは `Some(PendingRoute)` を返し、
+/// 呼び出し側（shell）が WebView2 等の別経路へ実際の再生要求を委譲する。
+pub fn poll_resolve(pb: &mut Playback) -> Option<PendingRoute> {
+    let session = pb.session.as_mut()?;
+    let mut route: Option<PendingRoute> = None;
     while let Ok(update) = session.reply_rx.try_recv() {
         match update {
             resolve::ResolveUpdate::Ready(r) => {
@@ -195,11 +206,25 @@ pub fn poll_resolve(pb: &mut Playback) {
                     pb.player.set_force_media_title(&t);
                 }
             }
+            resolve::ResolveUpdate::UseWebview { video_id, title, is_live } => {
+                // SABR 詰みライブ。mpv には loadfile せず、shell 側で WebView2 へ委譲する。
+                // Meta と同じ状態反映（is_live/title）はここでも行っておく（Meta 送出順に依存しない）。
+                pb.is_live = is_live;
+                if let Some(t) = title.as_deref() {
+                    pb.player.set_force_media_title(t);
+                }
+                // native ロード監視は不要（そもそも loadfile しない）。fallback 監視も止める。
+                session.native_load_at = None;
+                session.fallback_armed = false;
+                session.pending_fallback = None;
+                route = Some(PendingRoute::Webview { video_id });
+            }
             resolve::ResolveUpdate::Error(e) => {
                 eprintln!("resolve failed: {e}");
             }
         }
     }
+    route
 }
 
 /// system: native 再生が mpv で失敗（403/開けない）していないか監視し、失敗していれば並列に

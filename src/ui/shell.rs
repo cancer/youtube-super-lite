@@ -346,7 +346,31 @@ impl NativeRunning {
         content::poll_avatars(&mut self.avatars);
         content::poll_playlist(&mut self.playlist);
         playback::poll_gpu(&mut self.playback);
-        playback::poll_resolve(&mut self.playback);
+        // resolve 結果が SABR 詰みライブなら WebView2 経路へ委譲する（issue #16 PR3）。
+        // 経路要求はコア側でなく shell が受け取り、shell に閉じている WebView2 の
+        // 具体的な操作（navigate_embed）はここで発行する（コアを WebView2 に汚染させない）。
+        if let Some(playback::PendingRoute::Webview { video_id }) =
+            playback::poll_resolve(&mut self.playback)
+        {
+            #[cfg(windows)]
+            {
+                if let Some(w) = self.webview_host.as_mut() {
+                    if let Err(e) = w.navigate_embed(&video_id) {
+                        eprintln!("[route] navigate_embed failed: {e:#}");
+                    }
+                } else {
+                    eprintln!(
+                        "[route] WebView2 経路が要求されたが --webview-probe で有効化されていない (video_id={video_id})"
+                    );
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                eprintln!(
+                    "[route] WebView2 経路は Windows 専用（video_id={video_id}）"
+                );
+            }
+        }
         // native 直 URL が mpv で再生失敗していれば、並列に用意した中継(サイドカー)へ切替える。
         playback::check_fallback(&mut self.playback);
     }
