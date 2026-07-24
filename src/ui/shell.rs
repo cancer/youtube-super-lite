@@ -53,12 +53,9 @@ pub struct NativeApp {
     backend: String,
     initial_volume: Option<f64>,
     enable_dev_tools: bool,
-    /// WebView2 プローブ（issue #16 PR1）を有効化するか（`--webview-probe`）。
-    /// 無指定時は WebView2 子窓を作らず従来と同一挙動。
-    webview_probe: bool,
     /// WebView2 内で Google ログイン（issue #16 PR2・`--webview-login`）を行うか。
-    /// 立っている場合は `webview_probe` より優先し、オーバーレイを生成せず mpv も再生しない
-    /// 使い捨てログインセッションになる（cookie を固定 UserDataFolder に永続化）。
+    /// 立っている場合はオーバーレイを生成せず mpv も再生しない使い捨てログインセッションになる
+    /// （cookie を固定 UserDataFolder に永続化）。
     webview_login: bool,
     state: Option<NativeRunning>,
 }
@@ -153,7 +150,6 @@ impl NativeApp {
         backend: String,
         initial_volume: Option<f64>,
         enable_dev_tools: bool,
-        webview_probe: bool,
         webview_login: bool,
     ) -> Self {
         Self {
@@ -163,7 +159,6 @@ impl NativeApp {
             backend,
             initial_volume,
             enable_dev_tools,
-            webview_probe,
             webview_login,
             state: None,
         }
@@ -252,27 +247,23 @@ impl NativeApp {
             }
         };
 
-        // WebView2 ホスト子窓（issue #16 PR1/PR2）。`--webview-login` を最優先し、次に
-        // `--webview-probe`、どちらも無ければ None＝従来と完全に同一挙動（実験機能はフラグ排他）。
+        // WebView2 ホスト子窓（issue #16 PR1/PR2）は常時生成し、PlaybackMode（mpv/webview）で
+        // 可視制御する。`--webview-login` 時のみ Login モードで生成し、通常起動は Probe モード
+        // （SABR 詰みライブの iframe 埋め込み用の待機ホスト）。
         #[cfg(windows)]
         let webview_host = {
             use crate::webview_host::{WebviewHost, WebviewMode};
             let mode = if self.webview_login {
-                Some(WebviewMode::Login)
-            } else if self.webview_probe {
-                Some(WebviewMode::Probe)
+                WebviewMode::Login
             } else {
-                None
+                WebviewMode::Probe
             };
-            match mode {
-                Some(mode) => match WebviewHost::new(wid, mode) {
-                    Ok(w) => Some(w),
-                    Err(e) => {
-                        eprintln!("[native] webview2 host init failed: {e:#}");
-                        None
-                    }
-                },
-                None => None,
+            match WebviewHost::new(wid, mode) {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    eprintln!("[native] webview2 host init failed: {e:#}");
+                    None
+                }
             }
         };
 
@@ -379,8 +370,8 @@ impl NativeRunning {
         {
             #[cfg(windows)]
             {
-                // navigate_embed 成功時のみ mode を Webview に倒す。失敗や host None なら
-                // mpv/オーバーレイの可視は現状維持（子窓 hide の偏りを避ける）。
+                // navigate_embed 成功時のみ mode を Webview に倒す。失敗（webview_host 生成失敗や
+                // ナビゲーション失敗）なら mpv/オーバーレイの可視は現状維持（子窓 hide の偏りを避ける）。
                 // borrowck: webview_host の可変借用と self.apply_mode_visibility() が
                 // 衝突するため、遷移可否を bool に落としてから借用を切って self を再取得する。
                 let route_taken = match self.webview_host.as_mut() {
@@ -393,7 +384,7 @@ impl NativeRunning {
                     },
                     None => {
                         eprintln!(
-                            "[route] WebView2 経路が要求されたが --webview-probe で有効化されていない (video_id={video_id})"
+                            "[route] WebView2 経路が要求されたが webview_host が初期化されていない (video_id={video_id})"
                         );
                         false
                     }
