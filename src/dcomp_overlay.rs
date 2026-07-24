@@ -713,6 +713,22 @@ impl DcompOverlay {
         unsafe { GetWindow(self.hwnd, GW_HWNDPREV).is_err() }
     }
 
+    /// オーバーレイ子窓の可視状態を切り替える（PR4 WebView2 経路切替用）。
+    /// SW_SHOWNA を使いフォーカスを奪わない。ここでは可視のみで、
+    /// 描画自体の抑止（render 呼出しの skip）は呼び出し側が担う。
+    pub fn set_visible(&self, visible: bool) {
+        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOWNA};
+        unsafe {
+            let _ = ShowWindow(self.hwnd, if visible { SW_SHOWNA } else { SW_HIDE });
+        }
+    }
+
+    /// オーバーレイ子窓の HWND を isize で返す（子窓列挙で mpv VO を識別する際に、
+    /// 「これは overlay なので除外」と判定するために使う）。
+    pub fn hwnd_raw(&self) -> isize {
+        self.hwnd.0 as isize
+    }
+
     /// 親クライアントサイズの変化に合わせて子窓とサーフェスを更新する（位置は OS 追従＝不要）。
     pub fn resize(&mut self, w: i32, h: i32) {
         use windows::Win32::UI::WindowsAndMessaging::MoveWindow;
