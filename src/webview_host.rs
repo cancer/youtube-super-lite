@@ -335,6 +335,49 @@ impl WebviewHost {
         Ok(())
     }
 
+    /// WebView2 ホスト子窓の可視を切替える（PR4 経路切替用）。
+    /// Controller の SetIsVisible と子窓 ShowWindow の両方を揃える必要がある:
+    /// 前者だけだと子窓は残って入力を吸い続け、後者だけだと WebView 側が
+    /// 「非可視」と認識できず描画/アニメーションを止められない。
+    #[allow(dead_code)]
+    pub fn set_visible(&self, visible: bool) -> Result<()> {
+        use windows::Win32::Foundation::BOOL;
+        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOWNA};
+        unsafe {
+            self.controller.SetIsVisible(BOOL(visible as i32))?;
+            let _ = ShowWindow(self.hwnd, if visible { SW_SHOWNA } else { SW_HIDE });
+        }
+        Ok(())
+    }
+
+    /// WebView2 ホスト子窓を兄弟の最前面へ引き上げる（PR4 経路切替時のみ）。
+    /// フォーカスは奪わない（SWP_NOACTIVATE）。DcompOverlay の ensure_topmost と違い、
+    /// 毎フレーム呼ぶのではなく Mpv→Webview 遷移時に一度だけ呼ぶ。
+    #[allow(dead_code)]
+    pub fn bring_to_top(&self) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        };
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    /// WebView2 ホスト子窓の HWND を isize で返す（親直下の子窓列挙で
+    /// 「WebView2 は除外」と判定するために使う）。
+    #[allow(dead_code)]
+    pub fn hwnd_raw(&self) -> isize {
+        self.hwnd.0 as isize
+    }
+
     /// 親窓のリサイズに追従する（DcompOverlay::resize と同じ流儀）。
     pub fn resize(&mut self, w: i32, h: i32) {
         let w = w.max(1);
