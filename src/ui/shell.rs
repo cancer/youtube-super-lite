@@ -379,14 +379,28 @@ impl NativeRunning {
         {
             #[cfg(windows)]
             {
-                if let Some(w) = self.webview_host.as_mut() {
-                    if let Err(e) = w.navigate_embed(&video_id) {
-                        eprintln!("[route] navigate_embed failed: {e:#}");
+                // navigate_embed 成功時のみ mode を Webview に倒す。失敗や host None なら
+                // mpv/オーバーレイの可視は現状維持（子窓 hide の偏りを避ける）。
+                // borrowck: webview_host の可変借用と self.apply_mode_visibility() が
+                // 衝突するため、遷移可否を bool に落としてから借用を切って self を再取得する。
+                let route_taken = match self.webview_host.as_mut() {
+                    Some(w) => match w.navigate_embed(&video_id) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            eprintln!("[route] navigate_embed failed: {e:#}");
+                            false
+                        }
+                    },
+                    None => {
+                        eprintln!(
+                            "[route] WebView2 経路が要求されたが --webview-probe で有効化されていない (video_id={video_id})"
+                        );
+                        false
                     }
-                } else {
-                    eprintln!(
-                        "[route] WebView2 経路が要求されたが --webview-probe で有効化されていない (video_id={video_id})"
-                    );
+                };
+                if route_taken {
+                    self.mode = PlaybackMode::Webview;
+                    self.apply_mode_visibility();
                 }
             }
             #[cfg(not(windows))]
@@ -478,6 +492,91 @@ impl NativeRunning {
         self.last_settings_save = Instant::now();
     }
 
+    /// mpv/オーバーレイ vs WebView2 の可視を排他的に切替える（PR4）。
+    ///
+    /// mpv 側は自動生成された VO 子窓を直接公開しないため、`parent_wid` 直下の
+    /// 子窓を [`refresh_mpv_child_hwnds`] で列挙して overlay/webview 以外を hide/show する。
+    /// 描画そのものの停止（`render` の呼出しスキップ）は `about_to_wait` の
+    /// mode 判定に任せる（ここでは可視のみ）。
+    #[cfg(windows)]
+    pub(super) fn apply_mode_visibility(&mut self) {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOWNA};
+
+        let mpv_mode = self.mode == PlaybackMode::Mpv;
+
+        if let Some(o) = self.dcomp_overlay.as_ref() {
+            o.set_visible(mpv_mode);
+        }
+        if let Some(w) = self.webview_host.as_ref() {
+            if let Err(e) = w.set_visible(!mpv_mode) {
+                eprintln!("[route] webview set_visible failed: {e:#}");
+            }
+            if !mpv_mode {
+                // Mpv→Webview 遷移直後の1回だけ z-order を引き上げる。
+                // 以後 mpv の VO 子窓は hide 済みなので毎フレーム再主張しなくてよい。
+                w.bring_to_top();
+            }
+        }
+
+        self.refresh_mpv_child_hwnds();
+        for hwnd in &self.mpv_child_hwnds {
+            unsafe {
+                let _ = ShowWindow(
+                    HWND(*hwnd as *mut core::ffi::c_void),
+                    if mpv_mode { SW_SHOWNA } else { SW_HIDE },
+                );
+            }
+        }
+    }
+
+    /// `parent_wid` 直下の子窓を1階層列挙し、overlay/webview 以外を
+    /// mpv の VO 子窓とみなして `mpv_child_hwnds` に集める（PR4）。
+    ///
+    /// EnumChildWindows は全孫を列挙するため、`GetAncestor(hwnd, GA_PARENT) == parent_wid` で
+    /// 直下だけに絞る（mpv の VO は親の直下、DComp/WebView2 のさらに孫は対象外）。
+    #[cfg(windows)]
+    fn refresh_mpv_child_hwnds(&mut self) {
+        use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetAncestor, GA_PARENT};
+
+        struct Ctx {
+            parent: isize,
+            overlay: Option<isize>,
+            webview: Option<isize>,
+            out: Vec<isize>,
+        }
+
+        unsafe extern "system" fn cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let ctx = &mut *(lparam.0 as *mut Ctx);
+            let parent = GetAncestor(hwnd, GA_PARENT);
+            if parent.0 as isize != ctx.parent {
+                return BOOL(1); // 続行（直下でない孫は無視）
+            }
+            let h = hwnd.0 as isize;
+            if Some(h) == ctx.overlay || Some(h) == ctx.webview {
+                return BOOL(1);
+            }
+            ctx.out.push(h);
+            BOOL(1)
+        }
+
+        let mut ctx = Ctx {
+            parent: self.parent_wid as isize,
+            overlay: self.dcomp_overlay.as_ref().map(|o| o.hwnd_raw()),
+            webview: self.webview_host.as_ref().map(|w| w.hwnd_raw()),
+            out: Vec::new(),
+        };
+        unsafe {
+            let _ = EnumChildWindows(
+                HWND(self.parent_wid as *mut core::ffi::c_void),
+                Some(cb),
+                LPARAM(&mut ctx as *mut Ctx as isize),
+            );
+        }
+        self.mpv_child_hwnds = ctx.out;
+    }
+
     /// 現在のウィンドウ（クライアント領域）を PNG にして返す（取得不可なら空）。
     #[cfg(windows)]
     fn capture_png(&self) -> Vec<u8> {
@@ -520,8 +619,11 @@ impl ApplicationHandler<UserEvent> for NativeApp {
             // 文字サイズ・チャット幅の変更をデバウンス保存（次回起動で引き継ぐ）。
             _state.maybe_save_settings(false);
             // オーバーレイの操作適用・自動非表示・定期再描画。
+            // Webview モード中はオーバーレイ子窓を hide 済みで、実マウス入力も届かない。
+            // ensure_topmost（render 内）を呼ぶと WebView2 の下から z-order を奪ってしまうので、
+            // 描画自体を skip する（overlay の内部状態と mode の二重管理を避けるため）。
             #[cfg(windows)]
-            if _state.dcomp_overlay.is_some() {
+            if _state.mode == PlaybackMode::Mpv && _state.dcomp_overlay.is_some() {
                 // 新ホスト（子窓+DComp）: クリック適用＋活動記録＋自動非表示＋描画。
                 use crate::dcomp_overlay::{Card, ListTab, PlaybackView};
                 let actions = _state
