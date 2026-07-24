@@ -23,6 +23,17 @@ use crate::{Codec, Quality, UserEvent};
 
 use super::actions::UiAction;
 
+/// 再生経路（PR4）。mpv（既定）と WebView2（SABR 詰みライブの iframe 埋め込み経路）で
+/// 使う子窓が完全に排他になるため、遷移時に片方だけを可視にする判定へ使う。
+/// ライブ SABR 検知のみが Mpv→Webview 遷移を起こし、新 URL の再生開始（`play`）は
+/// 常に Mpv から始める（webview2 mode は同一 URL の中で完結する救済経路）。
+#[cfg(windows)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PlaybackMode {
+    Mpv,
+    Webview,
+}
+
 /// 一覧の表示ソース。1/2/3 キーで切替。
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum ListSource {
@@ -109,6 +120,16 @@ pub(super) struct NativeRunning {
     pub(super) last_activity: Instant,
     #[cfg(windows)]
     pub(super) overlay_visible: bool,
+    /// 現在の再生経路（PR4）。SABR 詰みで WebView2 に切替わったかを保持し、
+    /// 描画スキップ・子窓 hide の判定に使う。
+    #[cfg(windows)]
+    pub(super) mode: PlaybackMode,
+    /// mpv が親窓 `parent_wid` 直下に自動生成する VO 子窓の HWND リスト（PR4）。
+    /// Mpv⇄Webview 遷移時に EnumChildWindows で列挙し直し、
+    /// overlay/webview 以外を「mpv の出力」とみなして ShowWindow で切替える。
+    /// mpv 側は VO 子窓を直接公開しないためここで捕捉する。
+    #[cfg(windows)]
+    pub(super) mpv_child_hwnds: Vec<isize>,
     /// dev-tools（--enable-dev-tools）からの要求受信口。None なら無効。
     pub(super) devtools_rx: Option<std::sync::mpsc::Receiver<crate::devtools::Command>>,
     /// 保留中のスクリーンショット返信先。前面化＋再描画を待ってからキャプチャするため遅延させる。
@@ -294,6 +315,10 @@ impl NativeApp {
             last_activity: Instant::now(),
             #[cfg(windows)]
             overlay_visible: true,
+            #[cfg(windows)]
+            mode: PlaybackMode::Mpv,
+            #[cfg(windows)]
+            mpv_child_hwnds: Vec::new(),
             devtools_rx,
             pending_shot: None,
             shot_delay: 0,
