@@ -199,6 +199,7 @@ impl NativeRunning {
             "media_title": p.media_title(),
             "quality": self.quality().label(),
             "codec": self.codec().label(),
+            "speed": p.speed(),
             "chat_open": self.chat_open,
             "eq_open": self.eq_open,
             "chat_font_px": self.chat_font_px,

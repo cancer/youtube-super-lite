@@ -49,6 +49,9 @@ pub enum OverlayAction {
     CycleQuality,
     /// コーデックを巡回（→ 同上）。
     CycleCodec,
+    /// 再生速度を巡回（0.5/0.75/1.0/1.25/1.5/2.0）。mpv `speed` プロパティに即時反映され、
+    /// loadfile を跨いでも保持される（≠ quality/codec のような再解決は不要）。
+    CycleSpeed,
     /// ログイン開始（未ログイン時）。
     Login,
     /// 一覧（指定タブ）を開く。
@@ -245,6 +248,8 @@ pub struct PlaybackView {
     pub is_live: bool,
     pub quality: String,
     pub codec: String,
+    /// 現在の再生速度（1.0 = 等速）。速度ボタンのラベル "速度: xxx" 用。
+    pub speed: f64,
     // --- 上部バー ---
     pub url_input: String,
     pub auth_label: String,
@@ -890,6 +895,12 @@ impl DcompOverlay {
         let quality = format!("画質: {}", v.quality);
         let qw = unsafe { self.measure(&quality) }.ceil() as i32;
         controls.push(Control::Button { rect: row(xr - qw - 8, xr), label: quality, col: fg, action: OverlayAction::CycleQuality });
+        xr -= qw + 8 + 12;
+        // 再生速度。1.0x 以外はアクセント色で「等速でない」ことを目立たせる。
+        let speed_label = format!("速度: {}", format_speed(v.speed));
+        let sw = unsafe { self.measure(&speed_label) }.ceil() as i32;
+        let speed_col = if (v.speed - 1.0).abs() > f64::EPSILON { ds::ACCENT_BRAND } else { fg };
+        controls.push(Control::Button { rect: row(xr - sw - 8, xr), label: speed_label, col: speed_col, action: OverlayAction::CycleSpeed });
 
         controls
     }
@@ -1661,6 +1672,19 @@ fn fmt_time(secs: f64) -> String {
         format!("{h}:{m:02}:{s:02}")
     } else {
         format!("{m:02}:{s:02}")
+    }
+}
+
+/// 再生速度を "1x" / "1.25x" のように末尾ゼロを削って整形する。
+/// 速度ボタンのラベル用（速度ボタン自身以外からは呼ばれない）。
+fn format_speed(s: f64) -> String {
+    // 端数がゼロなら整数表記、そうでなければ小数点2桁までの必要な桁数を出す。
+    if (s - s.round()).abs() < 1e-6 {
+        format!("{}x", s.round() as i64)
+    } else if (s * 10.0 - (s * 10.0).round()).abs() < 1e-6 {
+        format!("{s:.1}x")
+    } else {
+        format!("{s:.2}x")
     }
 }
 

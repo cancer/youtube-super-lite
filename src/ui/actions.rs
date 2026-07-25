@@ -15,6 +15,10 @@ use crate::{Codec, Quality};
 use super::shell::PlaybackMode;
 use super::shell::{ListSource, NativeRunning};
 
+/// 再生速度の巡回段（右方向：0.5→0.75→1.0→…→2.0→0.5…）。
+/// 1.0 を必ず含める（等速に戻せるように）。オーバーレイのボタン・dev-tools 双方が同じ配列を使う。
+pub(super) const SPEED_STEPS: &[f64] = &[0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+
 /// 全入力系統（オーバーレイ/dev-tools/キーボード）が組み立てて `apply_action` に渡す行動。
 /// 「同一アクションの実装が1箇所ずつ」を実現する唯一のエントリポイント（Issue #11 PR B）。
 pub(super) enum UiAction {
@@ -29,6 +33,8 @@ pub(super) enum UiAction {
     LiveEdge,
     CycleQuality,
     CycleCodec,
+    /// 再生速度を巡回（[`SPEED_STEPS`]）。mpv の `speed` プロパティに即時反映する。
+    CycleSpeed,
     Login,
     Like,
     /// URL 欄の内容を再生する（devtools の play_url・キーボードの Enter で使う）。
@@ -90,6 +96,7 @@ impl From<crate::dcomp_overlay::OverlayAction> for UiAction {
             OverlayAction::Like => UiAction::Like,
             OverlayAction::CycleQuality => UiAction::CycleQuality,
             OverlayAction::CycleCodec => UiAction::CycleCodec,
+            OverlayAction::CycleSpeed => UiAction::CycleSpeed,
             OverlayAction::Login => UiAction::Login,
             OverlayAction::OpenList(tab) => UiAction::OpenList(match tab {
                 ListTab::Recommend => ListSource::Recommend,
@@ -353,6 +360,7 @@ impl NativeRunning {
             "eq_toggle" => UiAction::ToggleEqPanel,
             "quality_next" => UiAction::CycleQuality,
             "codec_next" => UiAction::CycleCodec,
+            "speed_next" => UiAction::CycleSpeed,
             "toggle_chat" => UiAction::ToggleChat,
             "chat_font_inc" => UiAction::ChatFontBy(2.0),
             "chat_font_dec" => UiAction::ChatFontBy(-2.0),
@@ -454,6 +462,20 @@ impl NativeRunning {
                 let all = Codec::ALL;
                 let i = all.iter().position(|c| *c == self.codec()).unwrap_or(0);
                 self.set_codec(all[(i + 1) % all.len()]);
+            }
+            UiAction::CycleSpeed => {
+                // 現在の mpv `speed` に一番近い段の「次」へ進める（末尾で先頭に戻る）。
+                // 手動で 1.03 のような中間値が入っていても最寄りの段から巡回できる。
+                let p = self.player();
+                let cur = p.speed();
+                let (i, _) = SPEED_STEPS
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, a), (_, b)| {
+                        (**a - cur).abs().partial_cmp(&(**b - cur).abs()).unwrap()
+                    })
+                    .unwrap();
+                p.set_speed(SPEED_STEPS[(i + 1) % SPEED_STEPS.len()]);
             }
             UiAction::Login => {
                 if !self.account.is_busy() {

@@ -89,6 +89,16 @@ impl Player {
     pub fn set_muted(&self, m: bool) {
         let _ = self.mpv.set_property("mute", m);
     }
+    /// 再生速度（1.0 = 等速）。mpv の `speed` プロパティを読む。
+    /// 読み出せなければ 1.0（既定値）を返す。
+    pub fn speed(&self) -> f64 {
+        self.mpv.get_property("speed").unwrap_or(1.0)
+    }
+    /// 再生速度を設定する。mpv の `speed` プロパティは映像・音声の双方に効き、
+    /// loadfile を跨いでも保持される（プロセス全体のプロパティ）。
+    pub fn set_speed(&self, s: f64) {
+        let _ = self.mpv.set_property("speed", s);
+    }
     /// 再生中メディアのタイトル（mpv が解決したもの）。
     pub fn media_title(&self) -> String {
         self.mpv
