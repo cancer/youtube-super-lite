@@ -85,8 +85,20 @@ fn fetch_feed_inner(access_token: &str) -> Result<Vec<SubVideo>> {
     extract_videos(&v)
 }
 
-/// レスポンス JSON から「すべて」タブの動画タイルを抽出する。
-/// 同じ video_id が複数 shelf に含まれるケースを dedup する。
+/// レスポンス JSON から「すべて」タブの動画タイルを抽出し、投稿時刻の新しい順に並べ替える。
+///
+/// TVHTML5 の FEsubscriptions「すべて」タブは 2026 時点でアルゴリズム推薦になっており、
+/// 先頭に「関連が強い」shelf（15 件・非時系列）が並ぶ。以降の shelf も配信予定/live/最近アップ
+/// の混在で、shelf 順にそのまま並べると 1〜2 日前の動画が list 上位に来る（＝「新着なのに古い」）。
+///
+/// 対策:
+///  1. 「関連が強い」shelf を丸ごとスキップする（時系列でない推薦は「新着」の趣旨に反する）。
+///  2. 残りの動画 tile を meta 文字列から経過時間へ解釈し、新しい順に安定ソート。
+///     - "N 分/時間/日/週間/か月/年前" → 経過秒
+///     - "人が視聴中"（配信中）→ 0（最上位に相当）
+///     - "公開予定"（プレミア/配信予定）→ i64::MAX（末尾に落とす。UI は "新着" 一覧）
+///     - 解釈不能 → i64::MAX（末尾）
+///  同じ video_id が複数 shelf に含まれるケースは dedup する。
 fn extract_videos(v: &Value) -> Result<Vec<SubVideo>> {
     let tabs = v
         .pointer("/contents/tvBrowseRenderer/content/tvSecondaryNavRenderer/sections/0/tvSecondaryNavSectionRenderer/tabs")
@@ -110,8 +122,11 @@ fn extract_videos(v: &Value) -> Result<Vec<SubVideo>> {
         .ok_or_else(|| anyhow!("「すべて」タブの shelves を取れません"))?;
 
     let mut seen = HashSet::new();
-    let mut out = Vec::new();
+    let mut out: Vec<(i64, SubVideo)> = Vec::new();
     for shelf in shelves {
+        if shelf_is_algorithmic_recommendation(shelf) {
+            continue;
+        }
         let items = match shelf
             .pointer("/shelfRenderer/content/horizontalListRenderer/items")
             .and_then(|x| x.as_array())
@@ -139,19 +154,85 @@ fn extract_videos(v: &Value) -> Result<Vec<SubVideo>> {
             let meta = tile_meta(tile);
             let menu = tile_menu(tile);
 
-            out.push(SubVideo {
-                video_id: video_id.to_string(),
-                title,
-                channel,
-                thumbnail,
-                duration,
-                live,
-                meta,
-                menu,
-            });
+            let key = meta_recency_key(meta.as_deref().unwrap_or(""), live);
+            out.push((
+                key,
+                SubVideo {
+                    video_id: video_id.to_string(),
+                    title,
+                    channel,
+                    thumbnail,
+                    duration,
+                    live,
+                    meta,
+                    menu,
+                },
+            ));
         }
     }
-    Ok(out)
+    out.sort_by_key(|(k, _)| *k);
+    Ok(out.into_iter().map(|(_, v)| v).collect())
+}
+
+/// shelf ヘッダのタイトルが「関連が強い」（TVHTML5 の推薦系 shelf）なら true。
+/// 「新着」の趣旨とは無関係なアルゴリズム推薦なので一覧から除外する。
+fn shelf_is_algorithmic_recommendation(shelf: &Value) -> bool {
+    let title = shelf
+        .pointer("/shelfRenderer/headerRenderer/shelfHeaderRenderer/avatarLockup/avatarLockupRenderer/title");
+    let text = title
+        .and_then(|t| {
+            t.get("simpleText")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    t.get("runs").and_then(|v| v.as_array()).map(|runs| {
+                        runs.iter()
+                            .filter_map(|r| r.get("text").and_then(|v| v.as_str()))
+                            .collect::<String>()
+                    })
+                })
+        })
+        .unwrap_or_default();
+    text == "関連が強い"
+}
+
+/// tile の meta 文字列（例 "19万回視聴•1 日前 に配信済み" / "3.2万 人が視聴中" /
+/// "2026/07/25 6:00 に公開予定"）から並び替え用のキーを作る。小さいほど新しい。
+///
+/// - 配信中(`人が視聴中` または tile 側の live フラグ) → 0
+/// - "N 分/時間/日/週間/か月/年前" → 経過秒
+/// - "公開予定"（プレミア）→ i64::MAX
+/// - 解釈不能 → i64::MAX
+pub(crate) fn meta_recency_key(meta: &str, live: bool) -> i64 {
+    if live || meta.contains("人が視聴中") {
+        return 0;
+    }
+    if meta.contains("公開予定") {
+        return i64::MAX;
+    }
+    // 長い接尾辞から順に照合（"時間前" と "週間前" は末尾が "間前" で衝突しうるので、
+    // "週間前" を先に置く必要はないが、意味的に長い単位から書いている）。
+    const UNITS: &[(&str, i64)] = &[
+        ("分前", 60),
+        ("時間前", 3600),
+        ("日前", 86400),
+        ("週間前", 604800),
+        ("か月前", 2_592_000),
+        ("年前", 31_536_000),
+    ];
+    for (unit, secs) in UNITS {
+        let Some(pos) = meta.find(unit) else { continue };
+        // 単位直前の末尾連続数字を取り出す（"8 時間前" の "8" / "17 時間前" の "17"）。
+        let before = meta[..pos].trim_end();
+        let n_str: String = before.chars().rev().take_while(|c| c.is_ascii_digit()).collect();
+        let n_str: String = n_str.chars().rev().collect();
+        if let Ok(n) = n_str.parse::<i64>() {
+            if n > 0 {
+                return n * secs;
+            }
+        }
+    }
+    i64::MAX
 }
 
 /// チャンネル名からアバター URL を引く（無認証 WEB 検索の channelRenderer）。
@@ -441,4 +522,142 @@ fn extract_line(tile: &Value, line_idx: usize) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recency_live_now_ranks_first() {
+        assert_eq!(meta_recency_key("3.2万 人が視聴中", false), 0);
+        assert_eq!(meta_recency_key("", true), 0);
+    }
+
+    #[test]
+    fn recency_relative_time_units() {
+        assert_eq!(meta_recency_key("6.1万回視聴•10 分前", false), 10 * 60);
+        assert_eq!(meta_recency_key("6.1万回視聴•8 時間前 に配信済み", false), 8 * 3600);
+        assert_eq!(meta_recency_key("14万回視聴•1 日前", false), 86400);
+        assert_eq!(meta_recency_key("視聴•2 週間前", false), 2 * 604800);
+        assert_eq!(meta_recency_key("視聴•3 か月前", false), 3 * 2_592_000);
+        assert_eq!(meta_recency_key("視聴•4 年前", false), 4 * 31_536_000);
+    }
+
+    #[test]
+    fn recency_multi_digit() {
+        assert_eq!(meta_recency_key("15万回視聴•17 時間前 に配信済み", false), 17 * 3600);
+    }
+
+    #[test]
+    fn recency_upcoming_and_unknown_go_last() {
+        assert_eq!(meta_recency_key("2026/07/25 6:00 に公開予定", false), i64::MAX);
+        assert_eq!(meta_recency_key("よくわからない meta", false), i64::MAX);
+        assert_eq!(meta_recency_key("", false), i64::MAX);
+    }
+
+    fn shelf_json(title: Option<&str>, tile_ids_and_meta: &[(&str, &str)]) -> Value {
+        let items: Vec<Value> = tile_ids_and_meta
+            .iter()
+            .map(|(id, meta)| {
+                serde_json::json!({
+                    "tileRenderer": {
+                        "contentId": id,
+                        "metadata": { "tileMetadataRenderer": {
+                            "title": { "simpleText": format!("title-{id}") },
+                            "lines": [
+                                { "lineRenderer": { "items": [
+                                    { "lineItemRenderer": { "text": { "simpleText": "channel" } } }
+                                ]}},
+                                { "lineRenderer": { "items": [
+                                    { "lineItemRenderer": { "text": { "simpleText": *meta } } }
+                                ]}},
+                            ]
+                        }}
+                    }
+                })
+            })
+            .collect();
+        let mut shelf = serde_json::json!({
+            "shelfRenderer": {
+                "content": { "horizontalListRenderer": { "items": items }}
+            }
+        });
+        if let Some(t) = title {
+            shelf["shelfRenderer"]["headerRenderer"] = serde_json::json!({
+                "shelfHeaderRenderer": {
+                    "avatarLockup": { "avatarLockupRenderer": {
+                        "title": { "runs": [ { "text": t } ] }
+                    }}
+                }
+            });
+        }
+        shelf
+    }
+
+    fn build_subs_response(shelves: Vec<Value>) -> Value {
+        serde_json::json!({
+            "contents": { "tvBrowseRenderer": { "content": {
+                "tvSecondaryNavRenderer": { "sections": [{
+                    "tvSecondaryNavSectionRenderer": { "tabs": [{
+                        "tabRenderer": {
+                            "title": "すべて",
+                            "selected": true,
+                            "content": { "tvSurfaceContentRenderer": { "content": {
+                                "sectionListRenderer": { "contents": shelves }
+                            }}}
+                        }
+                    }]}
+                }]}
+            }}}
+        })
+    }
+
+    fn ids(items: &[SubVideo]) -> Vec<String> {
+        items.iter().map(|v| v.video_id.clone()).collect()
+    }
+
+    #[test]
+    fn extract_skips_algorithmic_recommendation_shelf() {
+        // 「関連が強い」shelf の 1 日前の動画 old0000000A が上位に来てはいけない。
+        // 他 shelf の 8 時間前 fresh000000A が上に来ること。
+        let resp = build_subs_response(vec![
+            shelf_json(
+                Some("関連が強い"),
+                &[("old0000000A", "1 日前 に配信済み"), ("old0000000B", "1 日前")],
+            ),
+            shelf_json(None, &[("fresh000000A", "8 時間前 に配信済み")]),
+        ]);
+        assert_eq!(ids(&extract_videos(&resp).unwrap()), vec!["fresh000000A"]);
+    }
+
+    #[test]
+    fn extract_sorts_across_shelves_newest_first() {
+        // 実データ準拠のシナリオ: shelf 順は live-now → 6h → 1h → 上映予定 だが、
+        // 出力は 0 → 3600 → 21600 → MAX で並ぶこと。
+        let resp = build_subs_response(vec![
+            shelf_json(None, &[("aaaaaaaaaaa", "6 時間前 に配信済み")]),
+            shelf_json(None, &[
+                ("bbbbbbbbbbb", "人が視聴中"),
+                ("ccccccccccc", "1 時間前"),
+                ("ddddddddddd", "2026/07/26 に公開予定"),
+            ]),
+        ]);
+        assert_eq!(
+            ids(&extract_videos(&resp).unwrap()),
+            vec!["bbbbbbbbbbb", "ccccccccccc", "aaaaaaaaaaa", "ddddddddddd"]
+        );
+    }
+
+    #[test]
+    fn extract_dedups_across_shelves() {
+        // 同じ video_id が複数 shelf に含まれても 1 度だけ出す。
+        let resp = build_subs_response(vec![
+            shelf_json(None, &[("dupe0000001", "3 時間前")]),
+            shelf_json(None, &[("dupe0000001", "3 時間前"), ("uniq0000001", "1 時間前")]),
+        ]);
+        let out = extract_videos(&resp).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(ids(&out), vec!["uniq0000001", "dupe0000001"]);
+    }
 }
