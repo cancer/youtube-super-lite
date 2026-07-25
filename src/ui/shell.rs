@@ -701,6 +701,7 @@ impl ApplicationHandler<UserEvent> for NativeApp {
                     is_live: _state.is_live(),
                     quality: _state.quality().label().to_string(),
                     codec: _state.codec().label().to_string(),
+                    speed: p.speed(),
                     url_input: _state.url_input.clone(),
                     auth_label,
                     logged_in,
