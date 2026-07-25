@@ -11,6 +11,8 @@ use ysl_core::yt::{auth, resolve};
 use ysl_core::{account, chat, content, flows, playback};
 use crate::{Codec, Quality};
 
+#[cfg(windows)]
+use super::shell::PlaybackMode;
 use super::shell::{ListSource, NativeRunning};
 
 /// 全入力系統（オーバーレイ/dev-tools/キーボード）が組み立てて `apply_action` に渡す行動。
@@ -239,6 +241,14 @@ impl NativeRunning {
 
     /// 再生開始 + チャット接続（旧 Controller::load + start_chat のコンボ）。
     pub(super) fn play(&mut self, url: &str) {
+        // PR4: 新 URL 再生は必ず Mpv 経路で開始する。WebView2 は SABR 詰みの救済経路で、
+        // 同 URL の中で完結する（Webview→Mpv の戻し契機は「別 URL の再生開始」）。
+        // 直前が Webview モードのまま残っていたら子窓 hide が偏るので、強制リセット。
+        #[cfg(windows)]
+        {
+            self.mode = PlaybackMode::Mpv;
+            self.apply_mode_visibility();
+        }
         // トークンが失効していたら更新を先に開始する。flows::play は更新中（token=None かつ
         // busy）なら解決を保留し、TokenRefreshed が新トークンで解決し直す。
         account::ensure_fresh_token(&mut self.account, &self.waker);

@@ -32,11 +32,8 @@ struct CliArgs {
     backend: String,
     volume: Option<f64>,
     enable_dev_tools: bool,
-    /// WebView2 プローブ（issue #16 PR1）を有効化するか。無指定時は WebView2 子窓を作らず
-    /// 従来と完全に同一挙動（実験機能はフラグ排他）。
-    webview_probe: bool,
     /// WebView2 内で Google ログイン（issue #16 PR2）を行うか。cookie を固定
-    /// UserDataFolder に永続化する。立っている場合は `webview_probe` より優先。
+    /// UserDataFolder に永続化する。
     webview_login: bool,
 }
 
@@ -46,7 +43,6 @@ fn parse_args() -> Result<CliArgs> {
     let mut url: Option<String> = None;
     let mut volume: Option<f64> = None;
     let mut enable_dev_tools = false;
-    let mut webview_probe = false;
     let mut webview_login = false;
 
     let parse_volume = |s: &str| -> Result<f64> {
@@ -67,14 +63,11 @@ fn parse_args() -> Result<CliArgs> {
             }
             // 検証用ローカル HTTP（スクショ/操作注入）を有効化。
             "--enable-dev-tools" => enable_dev_tools = true,
-            // WebView2 プローブ（issue #16 PR1）を有効化。無指定時は WebView2 子窓を作らない。
-            "--webview-probe" => webview_probe = true,
             // WebView2 内で Google ログイン（issue #16 PR2）。cookie を固定 UserDataFolder に永続化。
-            // 立っている場合は --webview-probe より優先（下の init で分岐）。
             "--webview-login" => webview_login = true,
             // 旧フラグ。互換のため受理するが無視する（オーバーレイは常に子窓+DirectComposition、
-            // 描画は常にネイティブ版）。
-            "--dcomp" | "--legacy" | "--native" => {}
+            // 描画は常にネイティブ版、WebView2 ホストは常時生成し PlaybackMode で可視制御）。
+            "--dcomp" | "--legacy" | "--native" | "--webview-probe" => {}
             // 初期音量（デバッグ用。例: --volume 0 で無音起動）。`--volume=0` 形式も可。
             "--volume" => {
                 let v = args
@@ -107,7 +100,6 @@ fn parse_args() -> Result<CliArgs> {
         backend: backend.trim_end_matches('/').to_string(),
         volume,
         enable_dev_tools,
-        webview_probe,
         webview_login,
     })
 }
@@ -123,7 +115,6 @@ fn print_help() {
          \x20\x20    --debug-backend URL   認証バックエンドを上書き（デバッグ用、デフォルト: {}）\n\
          \x20\x20    --volume N            初期音量 0-130（デバッグ用。例: --volume 0 で無音）\n\
          \x20\x20    --enable-dev-tools    検証用ローカル HTTP（/screenshot, /click, /action 等）を有効化\n\
-         \x20\x20    --webview-probe       WebView2 子窓プローブ（issue #16 PR1・実験機能）を有効化\n\
          \x20\x20    --webview-login       WebView2 内で Google ログイン（cookie を永続保存・issue #16 PR2）\n\
          \x20\x20-h, --help                このヘルプを表示",
         ysl_core::yt::auth::DEFAULT_BACKEND
@@ -150,7 +141,6 @@ fn main() -> Result<()> {
         args.backend,
         args.volume,
         args.enable_dev_tools,
-        args.webview_probe,
         args.webview_login,
     );
     event_loop.run_app(&mut app)?;
