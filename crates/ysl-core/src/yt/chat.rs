@@ -367,11 +367,20 @@ fn extract_api_key(html: &str) -> Result<String> {
 
 /// ytInitialData からチャットの continuation トークンと配信種別 (live / replay) を抽出する。
 ///
-/// - ライブ: `liveChatRenderer.continuations[].reloadContinuationData.continuation`
-/// - リプレイ: `liveChatRenderer.header.liveChatHeaderRenderer.viewSelector
-///             .sortFilterSubMenuRenderer.subMenuItems[].continuation.reloadContinuationData.continuation`
-///   subMenuItems は通常「上位のチャット」「すべてのチャット」の 2 要素を持つ。
-///   `selected: true` の項目（既定では「上位のチャット」が多い）を優先し、無ければ末尾を使う。
+/// ライブ／リプレイのどちらも初期 continuation は `liveChatRenderer.continuations[]` にある
+/// （`reloadContinuationData.continuation` または `invalidationContinuationData.continuation`）。
+/// `isReplay` フラグは配信種別を伝えるだけで、トークンの所在は変わらない。
+///
+/// トークン所在の対応表（同じキー名で別意味が同居しているため取り違え注意）:
+///
+/// | トークンの所在                                                        | 用途                        | エンドポイント                        |
+/// |-----------------------------------------------------------------------|-----------------------------|---------------------------------------|
+/// | `liveChatRenderer.continuations[].reloadContinuationData.continuation`| ライブ／リプレイのポーリング| `youtubei/v1/live_chat/get_live_chat[_replay]` |
+/// | `header.…viewSelector.sortFilterSubMenuRenderer.subMenuItems[].continuation.reloadContinuationData.continuation` | 「上位のチャット/すべてのチャット」フィルタ切替（iframe 丸ごと reload） | 使用不可（youtubei に渡すと 400 INVALID_ARGUMENT）|
+///
+/// subMenuItems の方は youtubei 系エンドポイントには通らない。過去に subMenuItems を採用して
+/// いた実装があったが、アーカイブでコメントが 1 件も表示されない不具合を招いていたためこの
+/// 関数からは参照しない（キー名は完全に同じで見分けが付きづらいので、上表を根拠に判断する）。
 fn extract_chat_continuation(data: &Value) -> Result<(String, bool)> {
     let renderer = &data["contents"]["twoColumnWatchNextResults"]["conversationBar"]
         ["liveChatRenderer"];
@@ -382,35 +391,16 @@ fn extract_chat_continuation(data: &Value) -> Result<(String, bool)> {
 
     let is_replay = renderer["isReplay"].as_bool().unwrap_or(false);
 
-    if !is_replay {
-        if let Some(arr) = renderer["continuations"].as_array() {
-            for item in arr {
-                for key in ["reloadContinuationData", "invalidationContinuationData"] {
-                    if let Some(c) = item[key]["continuation"].as_str() {
-                        return Ok((c.to_string(), false));
-                    }
+    if let Some(arr) = renderer["continuations"].as_array() {
+        for item in arr {
+            for key in ["reloadContinuationData", "invalidationContinuationData"] {
+                if let Some(c) = item[key]["continuation"].as_str() {
+                    return Ok((c.to_string(), is_replay));
                 }
             }
         }
-        bail!("ライブチャットの continuation が見つかりません（ライブ配信ではない可能性）");
     }
-
-    let sub_items = &renderer["header"]["liveChatHeaderRenderer"]["viewSelector"]
-        ["sortFilterSubMenuRenderer"]["subMenuItems"];
-    let arr = sub_items
-        .as_array()
-        .ok_or_else(|| anyhow!("リプレイチャットの subMenuItems が見つかりません"))?;
-
-    let pick = arr
-        .iter()
-        .find(|item| item["selected"].as_bool().unwrap_or(false))
-        .or_else(|| arr.last())
-        .ok_or_else(|| anyhow!("リプレイチャットの subMenuItems が空です"))?;
-
-    if let Some(c) = pick["continuation"]["reloadContinuationData"]["continuation"].as_str() {
-        return Ok((c.to_string(), true));
-    }
-    bail!("リプレイチャットの reloadContinuationData が見つかりません")
+    bail!("ライブチャットの continuation が見つかりません（ライブ配信ではない可能性）");
 }
 
 /// addChatItemAction からメッセージを抽出する。
@@ -534,4 +524,92 @@ fn pick_emoji_image_url(emoji: &Value) -> Option<String> {
         })
         .or_else(|| thumbs.first())?;
     pick["url"].as_str().map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// ytInitialData を模した Value を組み立てる。`extra_header` に渡した Value を
+    /// `liveChatRenderer.header` に注入することで、subMenuItems 有無の検証を切り替える。
+    fn make_init_data(is_replay: bool, top_token: &str, extra_header: Value) -> Value {
+        json!({
+            "contents": {
+                "twoColumnWatchNextResults": {
+                    "conversationBar": {
+                        "liveChatRenderer": {
+                            "isReplay": is_replay,
+                            "continuations": [{
+                                "reloadContinuationData": { "continuation": top_token }
+                            }],
+                            "header": extra_header
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// ライブ配信: `continuations[]` から取り、is_replay=false を返す（既存動作の回帰ガード）。
+    #[test]
+    fn live_extracts_from_top_level_continuations() {
+        let data = make_init_data(false, "LIVE_TOK", json!({}));
+        let (token, is_replay) = extract_chat_continuation(&data).unwrap();
+        assert_eq!(token, "LIVE_TOK");
+        assert!(!is_replay);
+    }
+
+    /// リプレイ配信も `continuations[]` から取る。旧実装は header 側の subMenuItems を
+    /// 見ていたが、そこには youtubei/v1 の polling には通らない iframe reload 用の
+    /// 短いトークンしか無いため 400 INVALID_ARGUMENT に落ちていた（アーカイブでコメントが
+    /// 一切出ないバグの本体）。
+    #[test]
+    fn replay_extracts_from_top_level_continuations() {
+        let data = make_init_data(true, "REPLAY_TOK", json!({}));
+        let (token, is_replay) = extract_chat_continuation(&data).unwrap();
+        assert_eq!(token, "REPLAY_TOK");
+        assert!(is_replay);
+    }
+
+    /// リプレイで subMenuItems が併存していても、top-level `continuations[]` 側を採用する。
+    /// subMenuItems は「上位のチャット / すべてのチャット」フィルタ切替（iframe reload）用で
+    /// youtubei エンドポイントには通らないため。
+    #[test]
+    fn replay_ignores_submenu_items_when_top_level_exists() {
+        let extra_header = json!({
+            "liveChatHeaderRenderer": {
+                "viewSelector": {
+                    "sortFilterSubMenuRenderer": {
+                        "subMenuItems": [
+                            {
+                                "selected": true,
+                                "continuation": {
+                                    "reloadContinuationData": { "continuation": "IFRAME_RELOAD_TOK" }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        });
+        let data = make_init_data(true, "POLLING_TOK", extra_header);
+        let (token, _) = extract_chat_continuation(&data).unwrap();
+        assert_eq!(token, "POLLING_TOK", "iframe reload 用の subMenuItems トークンを採用してはいけない");
+    }
+
+    /// liveChatRenderer 自体が存在しない動画（通常 VOD）: エラーメッセージに
+    /// 「continuation が見つかりません」を含める（run_chat_poll がこの文言を見て
+    /// NotLive に振り分けるため。文言変更は影響波及する）。
+    #[test]
+    fn missing_livechatrenderer_produces_not_live_message() {
+        let data = json!({
+            "contents": { "twoColumnWatchNextResults": { "conversationBar": {} } }
+        });
+        let err = extract_chat_continuation(&data).unwrap_err().to_string();
+        assert!(
+            err.contains("continuation が見つかりません"),
+            "run_chat_poll が NotLive にルーティングするための文言が失われている: {err}"
+        );
+    }
 }
