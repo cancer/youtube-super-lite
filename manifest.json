@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Super Lite",
+  "version": "0.0.0",
+  "description": "公式 YouTube の watch ページから無駄を剥ぎ、視聴に必要な部分だけを残す。",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/watch*",
+        "https://www.youtube.com/live_chat*"
+      ],
+      "js": ["main.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    }
+  ]
+}
