@@ -14,5 +14,32 @@
       "all_frames": true,
       "world": "MAIN"
     }
-  ]
+  ],
+  "permissions": ["declarativeNetRequest"],
+  "declarative_net_request": {
+    "rule_resources": [
+      { "id": "a-telemetry", "enabled": true, "path": "rules/a-telemetry.json" },
+      {
+        "id": "a-ads-tracking",
+        "enabled": true,
+        "path": "rules/a-ads-tracking.json"
+      },
+      { "id": "a-thumbnails", "enabled": true, "path": "rules/a-thumbnails.json" },
+      {
+        "id": "exp-heartbeat",
+        "enabled": false,
+        "path": "rules/experiments/exp-heartbeat.json"
+      },
+      {
+        "id": "exp-attestation",
+        "enabled": false,
+        "path": "rules/experiments/exp-attestation.json"
+      },
+      {
+        "id": "exp-prefetch",
+        "enabled": false,
+        "path": "rules/experiments/exp-prefetch.json"
+      }
+    ]
+  }
 }

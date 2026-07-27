@@ -1,0 +1,11 @@
+[
+  {
+    "id": 9201,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "||googlevideo.com/generate_204",
+      "resourceTypes": ["ping", "xmlhttprequest", "other"]
+    }
+  }
+]

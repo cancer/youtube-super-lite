@@ -1,0 +1,11 @@
+[
+  {
+    "id": 9001,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "||youtube.com/youtubei/v1/player/heartbeat",
+      "resourceTypes": ["xmlhttprequest", "ping", "other"]
+    }
+  }
+]
