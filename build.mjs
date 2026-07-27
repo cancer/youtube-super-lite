@@ -22,7 +22,10 @@ await build({
   // ESM 出力・コード分割・動的 import はいずれも不可。
   format: "iife",
   platform: "browser",
-  target: "chrome120",
+  // 自動更新される Chrome へ unpacked で入れる前提なので、下限は現行の安定版に合わせる。
+  // 2026-07 時点の手元の安定版は 150.0.7871.182（実測）。Chrome は約 4 週で 1 マイルストーン
+  // 進むため、更新が 1 巡遅れている環境でも動くよう 1 つ下の 149 を下限に採る。
+  target: "chrome149",
   // MAIN world に注入された content script にはページ（YouTube）の CSP が適用されるため、
   // eval を使う sourcemap は落ちる。external なら .map を別ファイルに出すだけで eval を踏まない。
   sourcemap: "external",
