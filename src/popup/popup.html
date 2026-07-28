@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>YouTube Super Lite</title>
+  </head>
+  <body>
+    <h1>YouTube Super Lite</h1>
+    <!--
+      各機能の UI はこの枠の中身として後から入る（R4 のイコライザ / R5 のチャット表示）。
+      枠だけを先に置いてあるので、機能ごとの追加は section の中身に閉じる。
+    -->
+    <section id="equalizer">
+      <h2>イコライザ</h2>
+    </section>
+    <section id="chat-display">
+      <h2>チャット表示</h2>
+      <p id="chat-display-values"></p>
+    </section>
+    <!-- MV3 の CSP でインラインスクリプトは動かないので、必ず外部ファイルとして読む。 -->
+    <script src="popup.js"></script>
+  </body>
+</html>
