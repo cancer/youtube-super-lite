@@ -7,11 +7,17 @@ import { build } from "esbuild";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.join(root, "dist");
 
-/** 変換せずに dist へ置くファイル（[root 相対の入力, dist 相対の出力]）。 */
-const staticFiles = [
+/**
+ * 変換せずに dist へ置くファイル・ディレクトリ（[root 相対の入力, dist 相対の出力]）。
+ *
+ * `rules` は declarativeNetRequest の静的 ruleset。manifest の `path` は拡張ルート相対なので、
+ * リポジトリ上の配置をそのまま dist に写す必要がある（バンドル対象ではない）。
+ */
+const staticPaths = [
   ["manifest.json", "manifest.json"],
   // popup の HTML は manifest の default_popup と対応させるため dist 直下に置く。
   ["src/popup/popup.html", "popup.html"],
+  ["rules", "rules"],
 ];
 
 await rm(outDir, { recursive: true, force: true });
@@ -43,7 +49,11 @@ await build({
 });
 
 await Promise.all(
-  staticFiles.map(([from, to]) =>
-    cp(path.join(root, from), path.join(outDir, to)),
+  staticPaths.map(([from, to]) =>
+    cp(path.join(root, from), path.join(outDir, to), {
+      recursive: true,
+      // ルールの根拠を書いた README は実行時に使われない。配布物に混ぜない。
+      filter: (source) => !source.endsWith(".md"),
+    }),
   ),
 );

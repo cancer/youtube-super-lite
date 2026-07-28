@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1201,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "||ytimg.com/vi/",
+      "resourceTypes": ["image", "xmlhttprequest", "other"]
+    }
+  },
+  {
+    "id": 1202,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "||ytimg.com/vi_webp/",
+      "resourceTypes": ["image", "xmlhttprequest", "other"]
+    }
+  }
+]

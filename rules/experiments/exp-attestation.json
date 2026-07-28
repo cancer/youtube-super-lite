@@ -1,0 +1,11 @@
+[
+  {
+    "id": 9101,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "||youtube.com/youtubei/v1/att/",
+      "resourceTypes": ["xmlhttprequest", "ping", "other"]
+    }
+  }
+]
