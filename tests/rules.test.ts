@@ -299,18 +299,48 @@ describe("静的ルールの上限に触れない", () => {
   });
 });
 
+type ContentScript = {
+  readonly matches?: readonly string[];
+  readonly js?: readonly string[];
+  readonly run_at?: string;
+  readonly all_frames?: boolean;
+  readonly world?: string;
+};
+
 describe("manifest の既存宣言を壊さない", () => {
   test("declarativeNetRequest 権限を宣言している", () => {
     expect(manifestJson.permissions).toContain("declarativeNetRequest");
   });
 
-  // このタスクは manifest を共有する他タスクと並行して動く。追記のはずの編集が
-  // 既存の content script 宣言を書き換えていないことを、ここで機械的に押さえる。
-  test("content script の宣言が残っている", () => {
+  /**
+   * このタスクは manifest を共有する他タスクと並行して動く。追記のはずの編集が
+   * MAIN world の main.js 宣言を書き換えていないことを、ここで機械的に押さえる。
+   *
+   * content_scripts の件数では検査しない。件数は他タスクが別 world の宣言を正当に
+   * 追記しただけで変わるため、守りたい宣言が無傷でも落ちる（過剰仕様）。
+   * 守る対象は「main.js を読む宣言が 1 つあり、その中身が意図どおりであること」に限る。
+   */
+  test("MAIN world の main.js 宣言が無傷である", () => {
     const contentScripts = manifestJson.content_scripts as
-      | readonly { readonly js?: readonly string[] }[]
+      | readonly ContentScript[]
       | undefined;
-    expect(contentScripts?.length).toBe(1);
-    expect(contentScripts?.[0]?.js).toEqual(["main.js"]);
+
+    // 宣言の同一性は js の中身で引く。world や run_at が壊された場合も、
+    // 「見つからない」ではなく「中身が違う」として下の検査で原因が読めるようにするため。
+    const declarations = (contentScripts ?? []).filter((script) =>
+      script.js?.includes("main.js"),
+    );
+    // 2 つ以上あれば main.js が二重に読み込まれる。どちらが本体かも決められない。
+    expect(declarations.length).toBe(1);
+
+    const declaration = declarations[0];
+    expect(declaration?.js).toEqual(["main.js"]);
+    expect(declaration?.world).toBe("MAIN");
+    expect(declaration?.matches).toEqual([
+      "https://www.youtube.com/watch*",
+      "https://www.youtube.com/live_chat*",
+    ]);
+    expect(declaration?.run_at).toBe("document_start");
+    expect(declaration?.all_frames).toBe(true);
   });
 });
