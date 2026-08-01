@@ -123,7 +123,7 @@ describe("readSection", () => {
     });
   });
 
-  test("保存値が設定として壊れていても既定値で読み出せる", async () => {
+  test("チャット表示の保存値が壊れていても既定値で読み出せる", async () => {
     const { store } = fakeStore({ chatDisplay: "壊れた値" });
 
     expect(await readSection(store, chatDisplaySection)).toEqual({
@@ -168,7 +168,7 @@ describe("readSection（watch ページの整理）", () => {
     });
   });
 
-  test("保存値が設定として壊れていても既定値で読み出せる", async () => {
+  test("watch ページの整理の保存値が壊れていても既定値で読み出せる", async () => {
     const { store } = fakeStore({ watchDeclutter: "壊れた値" });
 
     expect(await readSection(store, watchDeclutterSection)).toEqual({
