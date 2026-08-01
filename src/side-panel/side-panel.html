@@ -15,7 +15,20 @@
     </section>
     <section id="chat-display">
       <h2>チャット表示</h2>
-      <p id="chat-display-values"></p>
+      <!--
+        スライダーの可動域（min / max / step）は書かない。範囲は shared/settings が持つ値が唯一の
+        出所で、side-panel.js が読み込み時に与える。
+      -->
+      <p>
+        <label for="chat-font-size">文字サイズ</label>
+        <input id="chat-font-size" type="range" />
+        <output id="chat-font-size-value" for="chat-font-size"></output>
+      </p>
+      <p>
+        <label for="chat-panel-width">パネル幅</label>
+        <input id="chat-panel-width" type="range" />
+        <output id="chat-panel-width-value" for="chat-panel-width"></output>
+      </p>
     </section>
     <!-- MV3 の CSP でインラインスクリプトは動かないので、必ず外部ファイルとして読む。 -->
     <script src="side-panel.js"></script>

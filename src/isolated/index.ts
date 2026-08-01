@@ -7,6 +7,7 @@ import {
   watchSection,
   type SettingsSection,
 } from "../shared/settings";
+import { applyChatDisplay } from "./chat-display";
 
 /**
  * ISOLATED world の入口。
@@ -45,4 +46,24 @@ for (const section of deliveredSections) {
 // 取りこぼし得るが、MAIN 側は到着まで既定値で動き、次の遷移で追いつく。
 onNavigated(() => {
   void deliverAll();
+});
+
+/**
+ * R5 のチャット表示。DOM へ CSS を当てるので MAIN world へは配らず、この world で当てる。
+ *
+ * watch ページとライブチャットの iframe の両方でこの content script が走り、それぞれが
+ * 自分の文書へ当てる。どちらの規則が効くかは CSS のセレクタが決めるので、面（watch か
+ * live_chat か）をここで見分けない。
+ */
+const applyChatDisplayFromStorage = async (): Promise<void> => {
+  applyChatDisplay(await readSection(localSettingsStore, chatDisplaySection));
+};
+
+void applyChatDisplayFromStorage();
+
+watchSection(localSettingsStore, chatDisplaySection, applyChatDisplay);
+
+// 遷移では文書が作り直されないので、当てた CSS が残っているとは限らない。当て直す。
+onNavigated(() => {
+  void applyChatDisplayFromStorage();
 });
