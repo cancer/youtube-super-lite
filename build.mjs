@@ -10,21 +10,21 @@ const outDir = path.join(root, "dist");
 /** 変換せずに dist へ置くファイル（[root 相対の入力, dist 相対の出力]）。 */
 const staticFiles = [
   ["manifest.json", "manifest.json"],
-  // popup の HTML は manifest の default_popup と対応させるため dist 直下に置く。
-  ["src/popup/popup.html", "popup.html"],
+  // サイドパネルの HTML は manifest の side_panel.default_path と対応させるため dist 直下に置く。
+  ["src/side-panel/side-panel.html", "side-panel.html"],
 ];
 
 await rm(outDir, { recursive: true, force: true });
 await mkdir(outDir, { recursive: true });
 
 await build({
-  // 出力名は manifest の `js` / `service_worker` / popup.html の script src と対応する
+  // 出力名は manifest の `js` / `service_worker` / side-panel.html の script src と対応する
   // （main → dist/main.js）。
   entryPoints: {
     main: path.join(root, "src/main/index.ts"),
     isolated: path.join(root, "src/isolated/index.ts"),
     sw: path.join(root, "src/background/sw.ts"),
-    popup: path.join(root, "src/popup/index.ts"),
+    "side-panel": path.join(root, "src/side-panel/index.ts"),
   },
   outdir: outDir,
   bundle: true,

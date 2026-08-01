@@ -7,16 +7,16 @@ import {
 } from "../shared/settings";
 
 /**
- * popup の骨。
+ * サイドパネルの骨。
  *
  * 設定の読み出しと変更購読の配線だけを持つ。操作 UI（R4 のノブ / R5 のスライダー）は
- * popup.html の対応する section へ差し込み、保存は shared/settings の writeSection を使う。
- * 保存すれば storage.onChanged 経由で content script へ届くので、popup から直接配送しない。
+ * side-panel.html の対応する section へ差し込み、保存は shared/settings の writeSection を使う。
+ * 保存すれば storage.onChanged 経由で content script へ届くので、ここから直接配送しない。
  */
 
 const valuesElement = document.getElementById("chat-display-values");
 if (valuesElement === null) {
-  throw new Error("popup.html に #chat-display-values が無い");
+  throw new Error("side-panel.html に #chat-display-values が無い");
 }
 
 /** 操作 UI が入るまでの仮表示。R5 の実装でスライダーの現在値表示に置き換わる。 */

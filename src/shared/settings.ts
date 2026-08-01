@@ -136,7 +136,7 @@ export const writeSection = async <T>(
 /**
  * 区画の変更を購読する。
  *
- * storage.onChanged は拡張の全コンテキスト（service worker / content script / popup）へ届くため、
+ * storage.onChanged は拡張の全コンテキスト（service worker / content script / サイドパネル）へ届くため、
  * service worker による中継を挟まない。挟むと同じ変更が二重に流れる。
  */
 export const watchSection = <T>(
