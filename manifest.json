@@ -3,13 +3,14 @@
   "name": "YouTube Super Lite",
   "version": "0.0.0",
   "description": "公式 YouTube の watch ページから無駄を剥ぎ、視聴に必要な部分だけを残す。",
-  "permissions": ["storage", "declarativeNetRequest"],
+  "permissions": ["storage", "sidePanel", "declarativeNetRequest"],
   "background": {
     "service_worker": "sw.js"
   },
-  "action": {
-    "default_popup": "popup.html"
+  "side_panel": {
+    "default_path": "side-panel.html"
   },
+  "action": {},
   "content_scripts": [
     {
       "matches": [
