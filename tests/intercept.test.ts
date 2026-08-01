@@ -218,9 +218,12 @@ describe("XMLHttpRequest の傍受", () => {
     expect(second).toEqual(first);
   });
 
-  test("responseText を 2 回読んでも結果が変わらない", () => {
+  // responseText はパースと文字列化を伴うので、こちらは記憶して 1 回に留める。
+  test("responseText を 2 回読んでも変換は 1 回しか走らない", () => {
     const globals = makeGlobals();
+    let passes = 0;
     installIntercept(globals).register("live_chat", (json) => {
+      passes += 1;
       delete (json as Record<string, unknown>).drop;
       return json;
     });
@@ -231,6 +234,7 @@ describe("XMLHttpRequest の傍受", () => {
 
     expect(xhr.responseText).toBe('{"keep":1}');
     expect(xhr.responseText).toBe('{"keep":1}');
+    expect(passes).toBe(1);
   });
 
   test("完了前の responseText は変換しない", () => {

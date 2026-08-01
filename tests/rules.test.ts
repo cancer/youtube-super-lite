@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
+import { manifestJson } from "./support/manifest";
 import {
   enabledRules,
   loadStaticRulesets,
-  manifestJson,
   matchesOf,
   ruleResources,
   rulesetById,

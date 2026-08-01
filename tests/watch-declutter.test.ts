@@ -9,7 +9,11 @@ import {
   hasAddedNodes,
   installWatchDeclutter,
 } from "../src/isolated/watch-declutter";
+import { onNavigated } from "../src/shared/navigation";
 import type { SettingsStore, StoredChange } from "../src/shared/settings";
+
+import { flush } from "./support/flush";
+import { fakeNavigationSource } from "./support/navigation-source";
 
 /**
  * watch ページの整理の繋ぎ込み（設定・実 DOM・再適用の契機）。
@@ -44,13 +48,6 @@ const recordingRoot = (): {
         .map((group) => group.name),
   };
 };
-
-/**
- * 保留中の処理が片付くまで待つ。
- *
- * 読み出しは await を挟んで解決へ届くので、マイクロタスク 1 回では適用まで進まない。
- */
-const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 /**
  * 読み出しの解決をテストが握る storage。
@@ -90,15 +87,8 @@ const controlledStore = (): {
   };
 };
 
-/**
- * 登録されたコールバックをテストから発火させる契機。登録が無ければ発火しても何も起きない。
- *
- * `callOnRegister` は onNavigated の契約（登録時に初回ぶんを 1 回呼ぶ）を写すためのもの。
- * ここを写しておかないと「読み出しの後に初回適用が走る」ことを検査できない。
- */
-const capturedTrigger = (
-  callOnRegister = false,
-): {
+/** 登録されたコールバックをテストから発火させる契機。登録が無ければ発火しても何も起きない。 */
+const capturedTrigger = (): {
   register: (callback: () => void) => void;
   fire: () => void;
 } => {
@@ -106,7 +96,6 @@ const capturedTrigger = (
   return {
     register: (callback) => {
       callbacks.push(callback);
-      if (callOnRegister) callback();
     },
     fire: () => {
       for (const callback of callbacks) callback();
@@ -136,11 +125,19 @@ const capturedDelay = (): {
   };
 };
 
-const install = () => {
+/**
+ * 遷移は実物の onNavigated を通す。
+ *
+ * 初回適用が走る条件（readyState が loading なら DOMContentLoaded まで待つ）は onNavigated が
+ * 持っており、自前の「登録したら 1 回呼ぶ」フェイクで代用するとその条件が検査から抜ける。
+ * 既定を "complete" にしてあるのは、storage の読み出しが解決する頃には構築が進んでいる場合を
+ * 既定の状況として扱うため。document_start に居合わせた場合は個別のテストで指定する。
+ */
+const install = (readyState: DocumentReadyState = "complete") => {
   const dom = recordingRoot();
   const storage = controlledStore();
   const additions = capturedTrigger();
-  const navigation = capturedTrigger(true);
+  const navigation = fakeNavigationSource(readyState);
   const timer = capturedDelay();
   const reported: string[] = [];
 
@@ -148,7 +145,7 @@ const install = () => {
     store: storage.store,
     root: dom.root,
     watchAdditions: additions.register,
-    navigate: navigation.register,
+    navigate: (apply) => onNavigated(apply, navigation.source),
     delay: timer.delay,
     report: (message) => reported.push(message),
   });
@@ -162,7 +159,8 @@ describe("installWatchDeclutter の適用順序", () => {
     const { dom, additions, navigation } = install();
 
     // 契機が先に張られていれば、この発火で既定値のまま適用が走る。
-    navigation.fire();
+    navigation.dispatch("yt-navigate-finish");
+    navigation.dispatch("DOMContentLoaded");
     additions.fire();
 
     expect(dom.removedGroups()).toEqual([]);
@@ -176,15 +174,33 @@ describe("installWatchDeclutter の適用順序", () => {
     expect(dom.removedGroups()).toEqual(["next-videos", "comments"]);
   });
 
+  /**
+   * 読み出しが構築中に解決した場合。
+   *
+   * onNavigated は readyState が loading のあいだ初回適用を DOMContentLoaded まで待たせる。
+   * 消す対象はまだ挿入されていないので待って構わないが、待ったぶんが取りこぼしにならないこと
+   * （後から来る DOMContentLoaded で消える）は確かめておく。
+   */
+  test("構築中に読み出しが解決したら、DOMContentLoaded まで待ってから消す", async () => {
+    const { dom, storage, navigation } = install("loading");
+
+    await storage.resolve(undefined);
+    expect(dom.removedGroups()).toEqual([]);
+
+    navigation.dispatch("DOMContentLoaded");
+
+    expect(dom.removedGroups()).toEqual(["next-videos", "comments"]);
+  });
+
   // 「残す」を選んでいる人のコメント欄は、どの契機を通しても消えてはならない。
   test("コメント欄を残す設定なら、遷移でも DOM の追加でもコメント欄は消えない", async () => {
     const { dom, storage, additions, navigation } = install();
 
-    navigation.fire();
+    navigation.dispatch("yt-navigate-finish");
     additions.fire();
     await storage.resolve({ removeComments: false });
 
-    navigation.fire();
+    navigation.dispatch("yt-navigate-finish");
     additions.fire();
 
     expect(dom.removedGroups()).toEqual(["next-videos"]);

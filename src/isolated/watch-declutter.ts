@@ -55,6 +55,9 @@ export type DelayedTask = (task: () => void, delayMs: number) => void;
  * 対象は document_start の時点では存在せず、遷移でも作り直される。出現を捕まえるには待つしか
  * ないので childList を購読し続ける。監視を打ち切ると、後から差し込まれた分（読み込みが遅れた
  * コメント欄など）を取りこぼす。
+ *
+ * 見る文書は `root` と同じ実文書だが、`root` は「セレクタで探せる」ことしか要求しない型なので
+ * ここからは辿れない。`root` を差し替えるなら、その文書を見る `watchAdditions` も併せて渡すこと。
  */
 const observeDocumentAdditions: AdditionWatcher = (onAdded) => {
   new MutationObserver((records) => {

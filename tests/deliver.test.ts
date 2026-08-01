@@ -4,6 +4,7 @@ import { DELIVERED_SECTIONS, startSettingsDelivery } from "../src/isolated/deliv
 import { watchDeclutterSection, writeSection } from "../src/shared/settings";
 import type { SettingsSection } from "../src/shared/settings";
 
+import { flush } from "./support/flush";
 import { fakeStore } from "./support/settings-store";
 
 /**
@@ -51,8 +52,6 @@ const capturedNavigation = (): {
   };
 };
 
-/** 配送は非同期の読み出しを挟むので、検査の前に片付くまで待つ。 */
-const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("配送対象の区画", () => {
   /**

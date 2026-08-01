@@ -41,9 +41,6 @@ type Manifest = {
   };
 };
 
-/** manifest の読み口は 1 つ。ここは ruleset の解決だけを足す。 */
-export { manifestJson };
-
 const manifest = manifestJson as unknown as Manifest;
 
 export const ruleResources = (): readonly RuleResource[] => {

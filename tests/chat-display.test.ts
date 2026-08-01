@@ -15,10 +15,8 @@ import {
 } from "../src/isolated/chat-display";
 import { chatDisplaySection, writeSection } from "../src/shared/settings";
 
+import { flush } from "./support/flush";
 import { fakeStore } from "./support/settings-store";
-
-/** 読み出しは await を挟むので、検査の前に保留中の処理が片付くまで待つ。 */
-const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 /**
  * document のフェイク。
