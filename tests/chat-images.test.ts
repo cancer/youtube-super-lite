@@ -821,6 +821,55 @@ describe("アーカイブ（replay）の外形", () => {
   });
 });
 
+/**
+ * 同じ木へ繰り返し当たっても結果が変わらないこと。
+ *
+ * 傍受層の XHR（responseType: "json"）の経路では、ページが `.response` を読むたびに同じ木へ
+ * この変換が当たる。傍受層はそこに記憶を持たず、この冪等性に寄りかかっている。鍵を消す以外の
+ * 操作（値の書き換え・追記）を足すとその前提が崩れるので、崩れたら落ちるようにしておく。
+ */
+describe("変換の冪等性", () => {
+  const everything = (): unknown =>
+    liveEnvelope(
+      textMessage(iconBadge("MODERATOR")),
+      textMessage(memberBadge()),
+      {
+        liveChatPaidStickerRenderer: {
+          purchaseAmountText: { simpleText: "￥90" },
+          authorPhoto: authorPhoto(),
+          sticker: { thumbnails: [{ url: "//lh3.googleusercontent.com/y", width: 40 }] },
+        },
+      },
+      {
+        giftMessageViewModel: {
+          giftImage: { sources: [{ url: "//www.gstatic.com/g.png=w480-h480" }] },
+          giftImageA11yLabel: "ギフト",
+        },
+      },
+    );
+
+  test("2 回当てた結果が 1 回当てた結果と一致する", () => {
+    const payload = everything();
+
+    const once = structuredClone(stripChatImages(payload));
+    const twice = stripChatImages(payload);
+
+    expect(twice).toEqual(once);
+  });
+
+  test("2 回目で残すべきものが消えない", () => {
+    const payload = everything();
+
+    stripChatImages(payload);
+    const result = stripChatImages(payload);
+
+    expect(at(result, ...liveItem(0), MESSAGE, "authorPhoto", "thumbnails")).toHaveLength(2);
+    expect(at(result, ...liveItem(3), "giftMessageViewModel", "giftImageA11yLabel")).toBe(
+      "ギフト",
+    );
+  });
+});
+
 describe("想定外の入力への耐性", () => {
   test("JSON がオブジェクトでなくても throw しない", () => {
     expect(stripChatImages(null)).toBeNull();

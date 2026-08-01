@@ -131,7 +131,12 @@ const patchFetch = (target: InterceptTarget, state: InterceptState): void => {
   };
 };
 
-/** 変換対象の応答の変換結果。同じ応答を何度読まれても変換は 1 回に留める。 */
+/**
+ * 変換対象として開かれた応答に紐づく状態。
+ *
+ * `transformed` は responseText 用の記憶で、同じ応答を何度読まれても文字列の変換とパースは
+ * 1 回に留める。responseType: "json" の経路にはこれに当たる記憶を持たない（下の responseOf）。
+ */
 type XhrPending = { transform: JsonTransform; transformed?: string };
 
 const patchXhr = (ctor: PatchableXhrConstructor, state: InterceptState): void => {
@@ -164,6 +169,9 @@ const patchXhr = (ctor: PatchableXhrConstructor, state: InterceptState): void =>
       case "":
       case "text":
         return textOf(xhr);
+      // ネイティブの getter は読むたびに同じ木を返すので、ここは変換結果を覚えない代わりに
+      // 同じ木へ変換を当て直す。鍵を消すだけの変換なら結果は変わらない（tests/chat-images の
+      // 「変換の冪等性」で固定）。冪等でない変換を登録するなら、ここに記憶を足す必要がある。
       case "json":
         return safeTransform(original(), entry.transform);
       // arraybuffer / blob / document は JSON として扱えない。
