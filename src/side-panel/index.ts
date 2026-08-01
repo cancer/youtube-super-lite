@@ -1,3 +1,5 @@
+// 機能ごとの操作 UI は自分のモジュールに閉じる。ここは読み込むだけ。
+import "./equalizer";
 import {
   chatDisplaySection,
   localSettingsStore,
