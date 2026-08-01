@@ -1,7 +1,7 @@
 import { installEqualizer } from "./audio-graph";
 import { registerChatImages } from "./chat-images";
 import { installIntercept } from "./intercept";
-import { surfaceOf } from "./surface";
+import { surfaceOf } from "../shared/surface";
 
 // ページの JS が最初のリクエストを出す前に差し替えを終える必要があるので、
 // 何よりも先に組み込む。R2（コメント・関連動画）の変換は後続でここに足す。

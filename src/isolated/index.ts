@@ -1,3 +1,4 @@
+import { surfaceOf } from "../shared/surface";
 import { startChatDisplay } from "./chat-display";
 import { CHAT_ITEM_LIST_SELECTOR, startChatTrim } from "./chat-trim";
 import { startSettingsDelivery } from "./deliver";
@@ -18,8 +19,7 @@ startSettingsDelivery();
 
 // watch ページから「次の動画」の列とコメント欄を消す（R2）。この content script は
 // ライブチャットの iframe（/live_chat）にも入るが、整理の対象は watch ページだけ。
-// 判定は manifest の matches と対応させてある。
-if (location.pathname.startsWith("/watch")) installWatchDeclutter();
+if (surfaceOf(location.pathname) === "watch") installWatchDeclutter();
 
 // チャット項目の上限を当て続ける（R3 の DOM 層）。watch ページにも注入されるが、
 // そちらではセレクタが一致せず何も起きない。

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+import { manifestJson } from "./manifest";
 import { matchesUrlFilter } from "./url-filter";
 
 /**
@@ -40,8 +41,8 @@ type Manifest = {
   };
 };
 
-/** 型は宣言だが検証はしていない。形の検査は rules.test.ts のスキーマ検査が担う。 */
-export const manifestJson = readJson("manifest.json") as Record<string, unknown>;
+/** manifest の読み口は 1 つ。ここは ruleset の解決だけを足す。 */
+export { manifestJson };
 
 const manifest = manifestJson as unknown as Manifest;
 
