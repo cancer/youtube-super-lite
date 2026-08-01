@@ -18,6 +18,11 @@ import type { JsonTransform, TransformRegistry } from "./intercept";
  * 落とすのは画像 URL の配列だけで、入れ物は残す。代替テキスト（絵文字の alt、スタンプ名）が
  * 入れ物側にあり、発言の意味を保つのに要るため。
  *
+ * メンバーバッジの画像（`authorBadges[].liveChatAuthorBadgeRenderer.customThumbnail`、16/32px の
+ * `yt3.ggpht.com`）は落とさない。ユーザーの決定（2026-08-01）で「残す」。要件が落とすと挙げた
+ * 3 カテゴリ（絵文字・スタンプ・スーパーチャット装飾）のいずれでもなく、メンバーの見分けに
+ * 使われるため。落とす鍵を足すときは、この画像を巻き込まないこと。
+ *
  * この変換は初回バッチには掛からない。チャットの最初の ~100 件は fetch を通らず
  * iframe の HTML に ytInitialData として埋め込まれて届くため、そのぶんのアバターは残る。
  */
@@ -29,6 +34,11 @@ const IMAGE_URL_KEYS: ReadonlySet<string> = new Set(["thumbnails", "sources"]);
  * 中の画像を無条件に落とす鍵。値の下にある画像 URL の配列をすべて消す。
  *
  * `authorPhoto` はここに無い。投稿者のバッジ次第で残すため、別の規則で扱う。
+ *
+ * 逆に、ここに挙げた鍵はバッジを見ない。投稿者がモデレーターやオーナーであっても落ちる。
+ * 要件が残すと定めたのは「投稿者アバター（`authorPhoto`）」という鍵名指しの 1 つだけで、
+ * ギフト・ティッカー・❤ の画像は残す対象ではなく落とす側（スーパーチャット装飾）に属するため。
+ * 取りこぼしではなく決定なので、モデレーターでも落ちることをテストで固定してある。
  */
 const STRIPPED_KEYS: ReadonlySet<string> = new Set([
   // 絵文字。unicode 絵文字も画像として取りに行くので、種類を問わず落とす。

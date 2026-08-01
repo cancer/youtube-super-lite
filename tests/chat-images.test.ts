@@ -38,14 +38,16 @@ const liveEnvelope = (...items: unknown[]): unknown => ({
   },
 });
 
-const LIVE_ITEM = [
+const liveItem = (index: number): readonly (string | number)[] => [
   "continuationContents",
   "liveChatContinuation",
   "actions",
-  0,
+  index,
   "addChatItemAction",
   "item",
-] as const;
+];
+
+const LIVE_ITEM = liveItem(0);
 
 /** アーカイブ（get_live_chat_replay）の外形。replayChatItemAction の階層が 1 つ多い。 */
 const replayEnvelope = (...items: unknown[]): unknown => ({
@@ -390,6 +392,47 @@ describe("アバターの選択的除去", () => {
     ).toBeUndefined();
   });
 
+  /**
+   * メンバーバッジの画像（`customThumbnail`、16/32px）は落とさない。
+   *
+   * ユーザーの決定（2026-08-01）で「残す」。要件が落とすと定めた 3 カテゴリ（絵文字・スタンプ・
+   * スーパーチャット装飾）に入らず、メンバーの見分けに使われるため。落ちる・落ちないのどちらとも
+   * 決まっていない状態にしないよう、残ることを明示的に固定する。
+   */
+  test("メンバーバッジの画像は残る", () => {
+    const result = stripChatImages(liveEnvelope(textMessage(memberBadge())));
+
+    expect(
+      at(
+        result,
+        ...LIVE_ITEM,
+        MESSAGE,
+        "authorBadges",
+        0,
+        "liveChatAuthorBadgeRenderer",
+        "customThumbnail",
+        "thumbnails",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("アバターを落とす投稿でもメンバーバッジの画像は残る", () => {
+    const result = stripChatImages(liveEnvelope(textMessage(memberBadge())));
+
+    expect(at(result, ...LIVE_ITEM, MESSAGE, "authorPhoto")).toBeUndefined();
+    expect(
+      at(
+        result,
+        ...LIVE_ITEM,
+        MESSAGE,
+        "authorBadges",
+        0,
+        "liveChatAuthorBadgeRenderer",
+        "customThumbnail",
+      ),
+    ).toBeDefined();
+  });
+
   test("参加者リストの一般参加者は authorPhoto が落ちる", () => {
     const payload = {
       contents: {
@@ -587,6 +630,164 @@ describe("装飾画像の除去", () => {
 
     expect(at(result, ...nested, "sticker", "thumbnails")).toBeUndefined();
     expect(at(result, ...nested, "authorPhoto")).toBeUndefined();
+  });
+});
+
+/**
+ * バッジによる例外がどこまで効くか。
+ *
+ * 例外が掛かるのは `authorPhoto` だけで、`authorAvatar`・`sponsorPhoto`・`creatorThumbnail` は
+ * 投稿者がモデレーターやオーナーでも落ちる。要件は「表示対象外の投稿者の authorPhoto を落とす」と
+ * 鍵を名指しで定めており、ギフト・ティッカー・❤ の画像は残す対象ではなく、落とす側の
+ * 「スーパーチャット装飾」に属するため。実装の取りこぼしと読み違えられないよう、経路ごとに固定する。
+ */
+describe("バッジの例外が掛からない画像", () => {
+  test("モデレーターのスーパーチャットでも creatorThumbnail は落ちる", () => {
+    const paid = {
+      liveChatPaidMessageRenderer: {
+        purchaseAmountText: { simpleText: "￥500" },
+        authorPhoto: authorPhoto(),
+        authorBadges: [iconBadge("MODERATOR")],
+        creatorHeartButton: {
+          creatorHeartViewModel: {
+            creatorThumbnail: {
+              sources: [{ url: "https://yt3.ggpht.com/c=s48-c-k-c0x00ffffff-no-rj" }],
+            },
+          },
+        },
+      },
+    };
+    const renderer = [...LIVE_ITEM, "liveChatPaidMessageRenderer"] as const;
+
+    const result = stripChatImages(liveEnvelope(paid));
+
+    expect(at(result, ...renderer, "authorPhoto", "thumbnails")).toHaveLength(2);
+    expect(
+      at(result, ...renderer, "creatorHeartButton", "creatorHeartViewModel", "creatorThumbnail", "sources"),
+    ).toBeUndefined();
+  });
+
+  test("モデレーターのティッカー項目でも sponsorPhoto は落ちる", () => {
+    const ticker = {
+      liveChatTickerSponsorItemRenderer: {
+        sponsorPhoto: {
+          thumbnails: [{ url: "https://yt4.ggpht.com/ytc/b=s32", width: 32 }],
+        },
+        // バッジを同じ階層に置いても sponsorPhoto には効かない、というのがここで固定したい決定。
+        authorBadges: [iconBadge("MODERATOR")],
+        showItemEndpoint: {
+          showLiveChatItemEndpoint: {
+            renderer: textMessage(iconBadge("MODERATOR")),
+          },
+        },
+      },
+    };
+    const item = [...LIVE_ITEM, "liveChatTickerSponsorItemRenderer"] as const;
+
+    const result = stripChatImages(liveEnvelope(ticker));
+
+    expect(at(result, ...item, "sponsorPhoto", "thumbnails")).toBeUndefined();
+    // 入れ子の発言側は authorPhoto なので、同じ項目の中でも例外が効く。
+    expect(
+      at(
+        result,
+        ...item,
+        "showItemEndpoint",
+        "showLiveChatItemEndpoint",
+        "renderer",
+        MESSAGE,
+        "authorPhoto",
+        "thumbnails",
+      ),
+    ).toHaveLength(2);
+  });
+
+  // ギフトの authorAvatar は ViewModel 側の鍵で、バッジの有無を見ずに落とす。
+  test("モデレーターのバッジが並んでいてもギフトの authorAvatar は落ちる", () => {
+    const gift = {
+      giftMessageViewModel: {
+        text: { content: "かき氷 を送信しました" },
+        authorBadges: [iconBadge("MODERATOR")],
+        authorAvatar: {
+          avatarViewModel: {
+            image: { sources: [{ url: "https://yt4.ggpht.com/a=s32", width: 32 }] },
+          },
+        },
+      },
+    };
+
+    const result = stripChatImages(liveEnvelope(gift));
+
+    expect(
+      at(result, ...LIVE_ITEM, "giftMessageViewModel", "authorAvatar", "avatarViewModel", "image", "sources"),
+    ).toBeUndefined();
+  });
+});
+
+/**
+ * 1 つの actions[] に種類の違う項目が同居する場合。
+ *
+ * 実際のバッチは 1 項目では来ない。経路を列挙せず木を再帰で走る設計が意味を持つのはここで、
+ * 兄弟のあいだで判定が持ち越されない（モデレーターの隣の一般発言が落ちる、その逆も）ことを固定する。
+ */
+describe("混在バッチ", () => {
+  const giftItem = (): unknown => ({
+    giftMessageViewModel: {
+      text: { content: "かき氷 を送信しました" },
+      giftImage: {
+        sources: [{ url: "//www.gstatic.com/youtube/img/pdg/gift/assets/shaved_ice.png=w480-h480" }],
+      },
+      giftImageA11yLabel: "@… さんから かき氷 のギフトが送られました",
+    },
+  });
+
+  test("モデレーターの次の一般発言は authorPhoto が落ちる", () => {
+    const result = stripChatImages(
+      liveEnvelope(textMessage(iconBadge("MODERATOR")), textMessage(), giftItem()),
+    );
+
+    expect(at(result, ...liveItem(0), MESSAGE, "authorPhoto", "thumbnails")).toHaveLength(2);
+    expect(at(result, ...liveItem(1), MESSAGE, "authorPhoto")).toBeUndefined();
+  });
+
+  test("一般発言の次のモデレーター発言は authorPhoto が残る", () => {
+    const result = stripChatImages(
+      liveEnvelope(textMessage(), textMessage(iconBadge("MODERATOR")), textMessage()),
+    );
+
+    expect(at(result, ...liveItem(0), MESSAGE, "authorPhoto")).toBeUndefined();
+    expect(at(result, ...liveItem(1), MESSAGE, "authorPhoto", "thumbnails")).toHaveLength(2);
+    expect(at(result, ...liveItem(2), MESSAGE, "authorPhoto")).toBeUndefined();
+  });
+
+  test("同じバッチのギフトは、隣にモデレーターが居ても画像が落ちる", () => {
+    const result = stripChatImages(
+      liveEnvelope(textMessage(iconBadge("MODERATOR")), textMessage(), giftItem()),
+    );
+
+    expect(at(result, ...liveItem(2), "giftMessageViewModel", "giftImage", "sources")).toBeUndefined();
+    expect(at(result, ...liveItem(2), "giftMessageViewModel", "giftImageA11yLabel")).toBe(
+      "@… さんから かき氷 のギフトが送られました",
+    );
+  });
+
+  test("メンバーバッジの画像は混在バッチでも残る", () => {
+    const result = stripChatImages(
+      liveEnvelope(textMessage(iconBadge("MODERATOR")), textMessage(memberBadge())),
+    );
+
+    expect(
+      at(
+        result,
+        ...liveItem(1),
+        MESSAGE,
+        "authorBadges",
+        0,
+        "liveChatAuthorBadgeRenderer",
+        "customThumbnail",
+        "thumbnails",
+      ),
+    ).toHaveLength(1);
   });
 });
 
