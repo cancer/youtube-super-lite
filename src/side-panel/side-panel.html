@@ -17,6 +17,21 @@
       <h2>チャット表示</h2>
       <p id="chat-display-values"></p>
     </section>
+    <section id="watch-declutter">
+      <h2>watch ページの整理</h2>
+      <p>
+        <label>
+          <input type="checkbox" id="remove-comments" />
+          コメント欄を消す
+        </label>
+      </p>
+      <!--
+        消したノードは戻せないので、チェックを外した効果が現れるのは次に開いた watch ページから。
+        「外したのに戻らない」と見えるのを避けるため、UI の側で先に伝える。
+      -->
+      <p>チェックを外したときは、ページを開き直すとコメント欄が戻る。</p>
+      <p>右側の「次の動画」の列は常に消す。</p>
+    </section>
     <!-- MV3 の CSP でインラインスクリプトは動かないので、必ず外部ファイルとして読む。 -->
     <script src="side-panel.js"></script>
   </body>

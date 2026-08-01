@@ -83,6 +83,39 @@ export const chatDisplaySection: SettingsSection<ChatDisplaySettings> = {
   },
 };
 
+/**
+ * 真偽の設定を読み出す。真偽でない値は既定値へ落とす。
+ *
+ * 数値の clampToRange と同じ役割で、storage の手編集や旧版の残骸を読み出しの側で受け止める。
+ */
+export const toBoolean = (fallback: boolean, value: unknown): boolean =>
+  typeof value === "boolean" ? value : fallback;
+
+/** watch ページから消す部分の設定。 */
+export type WatchDeclutterSettings = {
+  /**
+   * コメント欄を消すか。
+   *
+   * 「次の動画」の列と違って切り替えられるのは、ライブアーカイブのコメント欄に視聴位置の
+   * タイムスタンプが投稿されるため。消えると困る動画があるので、消すかどうかは人が決める。
+   */
+  readonly removeComments: boolean;
+};
+
+/** 既定はコメント欄も消す。要る動画のときだけ人が戻す。 */
+const watchDeclutterDefaults: WatchDeclutterSettings = { removeComments: true };
+
+export const watchDeclutterSection: SettingsSection<WatchDeclutterSettings> = {
+  key: "watchDeclutter",
+  defaults: watchDeclutterDefaults,
+  normalize: (stored) => ({
+    removeComments: toBoolean(
+      watchDeclutterDefaults.removeComments,
+      asUntrustedRecord(stored).removeComments,
+    ),
+  }),
+};
+
 /** storage の変更 1 件。newValue が無い（キー削除）場合も normalize が既定値へ落とす。 */
 export type StoredChange = {
   readonly newValue?: unknown;
