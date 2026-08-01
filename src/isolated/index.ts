@@ -11,6 +11,7 @@ import {
   type SettingsSection,
   type WatchDeclutterSettings,
 } from "../shared/settings";
+import { applyChatDisplay } from "./chat-display";
 import { applyDeclutter, unmatchedGroupNames } from "./declutter";
 
 /**
@@ -125,3 +126,23 @@ if (location.pathname.startsWith("/watch")) {
 // 再適用も同じ経路で済み、onNavigated への登録は要らない。watch ページにも注入されるが、
 // そちらではセレクタが一致せず何も起きない。
 startChatTrim(() => document.querySelector(CHAT_ITEM_LIST_SELECTOR));
+
+/**
+ * R5 のチャット表示。DOM へ CSS を当てるので MAIN world へは配らず、この world で当てる。
+ *
+ * watch ページとライブチャットの iframe の両方でこの content script が走り、それぞれが
+ * 自分の文書へ当てる。どちらの規則が効くかは CSS のセレクタが決めるので、面（watch か
+ * live_chat か）をここで見分けない。
+ */
+const applyChatDisplayFromStorage = async (): Promise<void> => {
+  applyChatDisplay(await readSection(localSettingsStore, chatDisplaySection));
+};
+
+void applyChatDisplayFromStorage();
+
+watchSection(localSettingsStore, chatDisplaySection, applyChatDisplay);
+
+// 遷移では文書が作り直されないので、当てた CSS が残っているとは限らない。当て直す。
+onNavigated(() => {
+  void applyChatDisplayFromStorage();
+});
