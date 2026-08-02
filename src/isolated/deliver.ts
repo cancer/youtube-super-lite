@@ -2,9 +2,9 @@ import { publishSection } from "../shared/bridge";
 import { equalizerSection } from "../shared/equalizer";
 import { onNavigated } from "../shared/navigation";
 import {
+  applySection,
   chatDisplaySection,
   localSettingsStore,
-  readSection,
   watchSection,
   type SettingsSection,
   type SettingsStore,
@@ -48,7 +48,7 @@ export const startSettingsDelivery = ({
 }: SettingsDeliveryOptions = {}): void => {
   const deliverAll = async (): Promise<void> => {
     for (const section of sections) {
-      publish(section, await readSection(store, section));
+      await applySection(store, section, (value) => publish(section, value));
     }
   };
 

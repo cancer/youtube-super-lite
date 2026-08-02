@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import {
   CHAT_FONT_SIZE_PX,
   CHAT_PANEL_WIDTH_RATIO,
+  applySection,
   chatDisplaySection,
   clampToRange,
   readSection,
@@ -10,6 +11,7 @@ import {
   watchDeclutterSection,
   watchSection,
   writeSection,
+  type SettingsStore,
 } from "../src/shared/settings";
 
 import { fakeStore } from "./support/settings-store";
@@ -182,6 +184,168 @@ describe("watchSection", () => {
     });
 
     expect(received).toEqual([]);
+  });
+});
+
+describe("applySection", () => {
+  test("読めた値を当てる", async () => {
+    const { store } = fakeStore({ chatDisplay: { fontSizePx: 22 } });
+    const applied: unknown[] = [];
+
+    await applySection(store, chatDisplaySection, (value) => applied.push(value));
+
+    expect(applied).toEqual([{ fontSizePx: 22, panelWidthRatio: 0.28 }]);
+  });
+});
+
+/**
+ * 拡張コンテキストの失効。
+ *
+ * unpacked 拡張を再読み込みすると、開いたままのページに残った content script や
+ * サイドパネルは storage を触れなくなる。ページを開き直すまで回復しないので、
+ * 設定の反映を止めることが正しい振る舞いで、例外の伝播も再試行も誤りになる。
+ */
+describe("拡張コンテキストの失効", () => {
+  const originalDebug = console.debug;
+  let debugMessages: unknown[][] = [];
+
+  beforeEach(() => {
+    debugMessages = [];
+    console.debug = (...args: unknown[]): void => {
+      debugMessages.push(args);
+    };
+  });
+
+  afterEach(() => {
+    console.debug = originalDebug;
+  });
+
+  test("失効した後の読み出しは例外を投げず、設定が無いことを返す", async () => {
+    const { store, invalidate } = fakeStore({ chatDisplay: { fontSizePx: 22 } });
+    invalidate();
+
+    expect(await readSection(store, chatDisplaySection)).toBeUndefined();
+  });
+
+  test("読み出しの最中に失効しても例外は伝播しない", async () => {
+    const { store, invalidate } = fakeStore();
+    const racing: SettingsStore = {
+      ...store,
+      get: (keys) => {
+        invalidate();
+        return store.get(keys);
+      },
+    };
+
+    expect(await readSection(racing, chatDisplaySection)).toBeUndefined();
+  });
+
+  test("失効していれば設定を当てない", async () => {
+    const { store, invalidate } = fakeStore({ chatDisplay: { fontSizePx: 22 } });
+    const applied: unknown[] = [];
+    invalidate();
+
+    await applySection(store, chatDisplaySection, (value) => applied.push(value));
+
+    expect(applied).toEqual([]);
+  });
+
+  test("失効した後の書き込みは例外を投げず、保存もしない", async () => {
+    const { store, stored, invalidate } = fakeStore();
+    invalidate();
+
+    await writeSection(store, chatDisplaySection, {
+      fontSizePx: 20,
+      panelWidthRatio: 0.3,
+    });
+
+    expect(stored.chatDisplay).toBeUndefined();
+  });
+
+  test("書き込みの最中に失効しても例外は伝播しない", async () => {
+    const { store, invalidate } = fakeStore();
+    const racing: SettingsStore = {
+      ...store,
+      set: (items) => {
+        invalidate();
+        return store.set(items);
+      },
+    };
+
+    await writeSection(racing, chatDisplaySection, {
+      fontSizePx: 20,
+      panelWidthRatio: 0.3,
+    });
+  });
+
+  test("購読の後に失効したら、以降の通知が止まる", async () => {
+    const { store, invalidate } = fakeStore();
+    const received: unknown[] = [];
+    watchSection(store, chatDisplaySection, (value) => received.push(value));
+
+    invalidate();
+    await writeSection(store, chatDisplaySection, {
+      fontSizePx: 20,
+      panelWidthRatio: 0.3,
+    });
+
+    expect(received).toEqual([]);
+  });
+
+  test("失効した後に購読を始めても例外を投げない", () => {
+    const { store, invalidate } = fakeStore();
+    invalidate();
+
+    expect(() => watchSection(store, chatDisplaySection, () => {})).not.toThrow();
+  });
+
+  test("失効した後に購読を解除しても例外を投げない", () => {
+    const { store, invalidate } = fakeStore();
+    const stop = watchSection(store, chatDisplaySection, () => {});
+
+    invalidate();
+
+    expect(stop).not.toThrow();
+  });
+
+  test("失効の報告は何度触っても 1 度だけ", async () => {
+    const { store, invalidate } = fakeStore();
+    invalidate();
+
+    await readSection(store, chatDisplaySection);
+    await readSection(store, chatDisplaySection);
+    await writeSection(store, chatDisplaySection, chatDisplaySection.defaults);
+    watchSection(store, chatDisplaySection, () => {})();
+
+    expect(debugMessages.length).toBe(1);
+  });
+
+  test("失効していない読み出しの失敗は呼び出し側へ伝わる", async () => {
+    const { store } = fakeStore();
+    const broken: SettingsStore = {
+      ...store,
+      get: async () => {
+        throw new Error("storage が壊れた");
+      },
+    };
+
+    await expect(readSection(broken, chatDisplaySection)).rejects.toThrow(
+      "storage が壊れた",
+    );
+  });
+
+  test("失効していない書き込みの失敗は呼び出し側へ伝わる", async () => {
+    const { store } = fakeStore();
+    const broken: SettingsStore = {
+      ...store,
+      set: async () => {
+        throw new Error("storage が壊れた");
+      },
+    };
+
+    await expect(
+      writeSection(broken, chatDisplaySection, chatDisplaySection.defaults),
+    ).rejects.toThrow("storage が壊れた");
   });
 });
 

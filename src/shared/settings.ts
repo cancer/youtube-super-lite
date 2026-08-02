@@ -135,6 +135,14 @@ export type SettingsStore = {
       listener: (changes: Record<string, StoredChange>) => void,
     ): void;
   };
+  /**
+   * この保存先へまだ触れるか。
+   *
+   * 拡張を再読み込みすると、開いたままのページに残った content script やサイドパネルは
+   * 拡張コンテキストを失い、以後 storage への操作がすべて失敗する。ページを開き直すまで
+   * 回復しないので、失敗を再試行の合図ではなく「設定はもう使えない」状態として読む。
+   */
+  isAlive(): boolean;
 };
 
 /**
@@ -151,38 +159,126 @@ export const localSettingsStore: SettingsStore = {
     removeListener: (listener) =>
       chrome.storage.local.onChanged.removeListener(listener),
   },
+  /**
+   * 失効の判定に chrome.runtime.id の消滅を使う。
+   *
+   * 失効そのものが公式ドキュメントに無い（chrome.runtime のリファレンスにも content scripts の
+   * 解説にも記述が無く、標準化の議論 w3c/webextensions#138 が「通知する手段が無い」ことを
+   * 前提に新イベントを提案している段階）ため、判定手段も規定が無い。
+   * 例外メッセージ "Extension context invalidated." の文字列一致は表示文言が変われば黙って
+   * 壊れるので、値の有無で見るこちらを採る。
+   *
+   * どちらも規定ではなく観測された挙動なので、判定はこの 1 行に閉じてある。効かなくなったら
+   * ここだけを差し替えればよく、失効の扱い（反映を止める・再試行しない・報告は 1 度）は動かない。
+   */
+  isAlive: () => chrome?.runtime?.id !== undefined,
 };
 
-/** 区画を読む。保存値が範囲外・型違い・未保存のいずれでも、返る値は必ず正規化済み。 */
+/** 失効を報告済みの保存先。同じ失効を何度も console へ出さないため。 */
+const reportedStores = new WeakSet<SettingsStore>();
+
+/**
+ * 保存先へ触れなくなっていれば、1 度だけ報告して true を返す。
+ *
+ * 失効は拡張コンテキストが作り直されるまで回復しないので、再試行しない。報告を 1 度に絞るのは、
+ * 設定を触る箇所の数だけ console が埋まると、同じページで起きている他の問題が読めなくなるため。
+ */
+const hasGoneAway = (store: SettingsStore): boolean => {
+  if (store.isAlive()) return false;
+  if (!reportedStores.has(store)) {
+    reportedStores.add(store);
+    console.debug(
+      "[youtube-super-lite] 拡張が再読み込みされたため、このページでの設定の反映を止めた。ページを開き直すと再開する。",
+    );
+  }
+  return true;
+};
+
+/**
+ * 保存先へ触れるあいだだけ操作し、触れなくなっていたら諦める。
+ *
+ * 失効でない失敗（storage 自体の異常）はそのまま投げる。区別を付けずに全部飲み込むと、
+ * 直すべき不具合が黙って消える。
+ */
+const unlessGoneAway = async <T>(
+  store: SettingsStore,
+  access: () => Promise<T>,
+  whenGone: T,
+): Promise<T> => {
+  if (hasGoneAway(store)) return whenGone;
+  try {
+    return await access();
+  } catch (error) {
+    // 操作の最中に失効するとここへ来る。失効しているかは例外ではなく保存先へ訊く。
+    if (!hasGoneAway(store)) throw error;
+    return whenGone;
+  }
+};
+
+/**
+ * 区画を読む。保存値が範囲外・型違い・未保存のいずれでも、返る値は必ず正規化済み。
+ *
+ * 失効していれば undefined を返す。既定値ではないのは、「保存が無い」と「設定が分からない」が
+ * 別の状態だから。失効を既定値で埋めると、既定と違う設定で動いていたページを失効の巻き添えで
+ * 既定へ戻してしまう。undefined を失効の印にできるのは、区画の normalize が未保存でも必ず値を
+ * 作るため。normalize が undefined を返す区画を足すと、この区別が壊れる。
+ */
 export const readSection = async <T>(
   store: SettingsStore,
   section: SettingsSection<T>,
-): Promise<T> => section.normalize((await store.get([section.key]))[section.key]);
+): Promise<T | undefined> =>
+  unlessGoneAway<T | undefined>(
+    store,
+    async () => section.normalize((await store.get([section.key]))[section.key]),
+    undefined,
+  );
 
-/** 区画を保存する。 */
+/**
+ * 区画を読んで当てる。読めたときだけ当てる。
+ *
+ * 設定の読み出しは「読んでその場で反映する」形でしか使わないので、失効時に何もしない判断も
+ * ここへ寄せる。呼び出し側が undefined を毎回さばく必要は無い。
+ */
+export const applySection = async <T>(
+  store: SettingsStore,
+  section: SettingsSection<T>,
+  apply: (value: T) => void,
+): Promise<void> => {
+  const value = await readSection(store, section);
+  if (value !== undefined) apply(value);
+};
+
+/** 区画を保存する。失効していれば保存しない。 */
 export const writeSection = async <T>(
   store: SettingsStore,
   section: SettingsSection<T>,
   value: T,
-): Promise<void> => store.set({ [section.key]: value });
+): Promise<void> =>
+  unlessGoneAway(store, () => store.set({ [section.key]: value }), undefined);
 
 /**
  * 区画の変更を購読する。
  *
  * storage.onChanged は拡張の全コンテキスト（service worker / content script / サイドパネル）へ届くため、
  * service worker による中継を挟まない。挟むと同じ変更が二重に流れる。
+ *
+ * 失効していれば購読しない。購読済みなら、通知の出所である storage ごと失われるので通知は止まる。
  */
 export const watchSection = <T>(
   store: SettingsStore,
   section: SettingsSection<T>,
   onChange: (value: T) => void,
 ): (() => void) => {
+  if (hasGoneAway(store)) return () => {};
   const listener = (changes: Record<string, StoredChange>): void => {
     if (!(section.key in changes)) return;
     onChange(section.normalize(changes[section.key].newValue));
   };
   store.onChanged.addListener(listener);
-  return () => store.onChanged.removeListener(listener);
+  return () => {
+    if (hasGoneAway(store)) return;
+    store.onChanged.removeListener(listener);
+  };
 };
 
 /**
@@ -194,8 +290,9 @@ export const watchSection = <T>(
 export const repairSection = async <T>(
   store: SettingsStore,
   section: SettingsSection<T>,
-): Promise<T> => {
+): Promise<T | undefined> => {
   const value = await readSection(store, section);
+  if (value === undefined) return undefined;
   await writeSection(store, section, value);
   return value;
 };

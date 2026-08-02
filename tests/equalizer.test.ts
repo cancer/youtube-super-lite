@@ -54,6 +54,8 @@ const fakeStore = (
         listeners.delete(listener);
       },
     },
+    // 失効はこのフェイクの関心の外。失効の扱いは shared/settings のテストが見る。
+    isAlive: () => true,
   };
   return { store, stored };
 };
