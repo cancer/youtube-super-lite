@@ -14,22 +14,29 @@ const XHR_LOADING = 3;
  *
  * bun のテスト環境に XMLHttpRequest が無いため用意する。パッチはプロトタイプに当たるので、
  * テストごとに別のクラスを作って他のテストへ影響が漏れないようにしてある。
+ *
+ * responseType: "json" の getter は、読むたびに解析し直すのではなく同じ木を返す。実物がそうで
+ * あり、そこが「変換が同じ木へ繰り返し当たる」という傍受層の前提の出所だから。毎回新しい木を
+ * 返すフェイクにすると、その前提が壊れていても検査に掛からない。
  */
 const createXhrClass = () =>
   class FakeXhr {
     readyState = 0;
     responseType: XMLHttpRequestResponseType = "";
     private body = "";
+    private parsed: unknown = undefined;
 
     open(_method: string, _url: string | URL): void {
       this.readyState = 1;
       this.body = "";
+      this.parsed = undefined;
     }
 
     /** サーバ応答の到着をテストから再現する。 */
     receive(body: string, readyState: number = XHR_DONE): void {
       this.body = body;
       this.readyState = readyState;
+      this.parsed = undefined;
     }
 
     get responseText(): string {
@@ -37,7 +44,9 @@ const createXhrClass = () =>
     }
 
     get response(): unknown {
-      return this.responseType === "json" ? JSON.parse(this.body) : this.body;
+      if (this.responseType !== "json") return this.body;
+      this.parsed ??= JSON.parse(this.body);
+      return this.parsed;
     }
   };
 
@@ -184,6 +193,48 @@ describe("XMLHttpRequest の傍受", () => {
     xhr.receive('{"actions":[1,2,3]}');
 
     expect(xhr.response).toEqual({ trimmed: true });
+  });
+
+  /**
+   * responseType: "json" の getter はページの読み出しごとに呼ばれ、そのたびに同じ木へ変換が
+   * 当たる。傍受層はこの経路に記憶を持たず、変換が冪等であることに寄りかかっている。
+   * 寄りかかっている以上、寄りかかり先はテストで固定しておく。
+   */
+  test("response を 2 回読んでも結果が変わらない", () => {
+    const globals = makeGlobals();
+    installIntercept(globals).register("live_chat", (json) => {
+      delete (json as Record<string, unknown>).drop;
+      return json;
+    });
+
+    const xhr = new globals.XMLHttpRequest();
+    xhr.responseType = "json";
+    xhr.open("POST", "https://www.youtube.com/youtubei/v1/live_chat/get_live_chat");
+    xhr.receive('{"keep":1,"drop":2}');
+
+    const first = xhr.response;
+    const second = xhr.response;
+    expect(first).toEqual({ keep: 1 });
+    expect(second).toEqual(first);
+  });
+
+  // responseText はパースと文字列化を伴うので、こちらは記憶して 1 回に留める。
+  test("responseText を 2 回読んでも変換は 1 回しか走らない", () => {
+    const globals = makeGlobals();
+    let passes = 0;
+    installIntercept(globals).register("live_chat", (json) => {
+      passes += 1;
+      delete (json as Record<string, unknown>).drop;
+      return json;
+    });
+
+    const xhr = new globals.XMLHttpRequest();
+    xhr.open("POST", "https://www.youtube.com/youtubei/v1/live_chat/get_live_chat");
+    xhr.receive('{"keep":1,"drop":2}');
+
+    expect(xhr.responseText).toBe('{"keep":1}');
+    expect(xhr.responseText).toBe('{"keep":1}');
+    expect(passes).toBe(1);
   });
 
   test("完了前の responseText は変換しない", () => {

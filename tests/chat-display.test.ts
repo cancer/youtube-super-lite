@@ -10,9 +10,13 @@ import {
   CHAT_PANEL_SELECTOR,
   applyChatDisplay,
   chatDisplayVariables,
+  startChatDisplay,
   type StyleHost,
 } from "../src/isolated/chat-display";
-import { chatDisplaySection } from "../src/shared/settings";
+import { chatDisplaySection, writeSection } from "../src/shared/settings";
+
+import { flush } from "./support/flush";
+import { fakeStore } from "./support/settings-store";
 
 /**
  * document のフェイク。
@@ -248,5 +252,72 @@ describe("サイドパネルのチャット表示 UI", () => {
 
     expect(section).toContain('id="chat-font-size"');
     expect(section).toContain('id="chat-panel-width"');
+  });
+});
+
+describe("startChatDisplay", () => {
+  const start = (stored: Record<string, unknown> = {}) => {
+    const { store } = fakeStore(stored);
+    const dom = fakeHost();
+    // 登録時には呼ばない。document_start では onNavigated が初回を DOMContentLoaded まで
+    // 遅らせるので、そこを待たずに当てることを起動時の適用として検査するため。
+    const navigated: (() => void)[] = [];
+    startChatDisplay({
+      store,
+      host: dom.host,
+      navigate: (apply) => {
+        navigated.push(apply);
+      },
+    });
+    return {
+      store,
+      dom,
+      navigate: () => {
+        for (const apply of navigated) apply();
+      },
+    };
+  };
+
+  const fontSize = (variables: Map<string, string>): string | undefined =>
+    variables.get("--youtube-super-lite-chat-font-size");
+
+  test("保存値を読んで当てる", async () => {
+    const { dom } = start({ chatDisplay: { fontSizePx: 22, panelWidthRatio: 0.4 } });
+
+    await flush();
+
+    expect(fontSize(dom.variables)).toBe("22px");
+  });
+
+  test("未保存なら既定値を当てる", async () => {
+    const { dom } = start();
+
+    await flush();
+
+    expect(fontSize(dom.variables)).toBe("16px");
+  });
+
+  test("設定が変わったら当て直す", async () => {
+    const { store, dom } = start();
+    await flush();
+
+    await writeSection(store, chatDisplaySection, {
+      fontSizePx: 20,
+      panelWidthRatio: 0.3,
+    });
+
+    expect(fontSize(dom.variables)).toBe("20px");
+  });
+
+  // 遷移では文書が作り直されないので、当てた CSS が残っているとは限らない。当て直す。
+  test("遷移のたびに当て直す", async () => {
+    const { dom, navigate } = start({ chatDisplay: { fontSizePx: 22, panelWidthRatio: 0.4 } });
+    await flush();
+    dom.detachStyles();
+
+    navigate();
+    await flush();
+
+    expect(dom.styles).toHaveLength(1);
   });
 });

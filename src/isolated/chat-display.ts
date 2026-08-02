@@ -1,4 +1,12 @@
-import { chatDisplaySection, type ChatDisplaySettings } from "../shared/settings";
+import { onNavigated } from "../shared/navigation";
+import {
+  chatDisplaySection,
+  localSettingsStore,
+  readSection,
+  watchSection,
+  type ChatDisplaySettings,
+  type SettingsStore,
+} from "../shared/settings";
 
 /**
  * R5 のチャット表示（文字サイズ・パネル幅）を CSS で当てる。
@@ -137,4 +145,43 @@ export const applyChatDisplay = (
   } catch (error) {
     debug("適用に失敗した", error);
   }
+};
+
+/** 繋ぎ先。既定は実ブラウザのもので、テストはすべて差し替える。 */
+export type ChatDisplayOptions = {
+  readonly store?: SettingsStore;
+  readonly host?: StyleHost;
+  readonly navigate?: (apply: () => void) => void;
+};
+
+/**
+ * 保存値を読んで当て、以後は変更と遷移のたびに当て直す。
+ *
+ * watch ページとライブチャットの iframe の両方でこの content script が走り、それぞれが
+ * 自分の文書へ当てる。どちらの規則が効くかは CSS のセレクタが決めるので、面（watch か
+ * live_chat か）をここで見分けない。
+ *
+ * 当てる順序は問わない。CSS は上書きで戻せるので、保存値が届く前に既定値が当たっても
+ * 取り返しがつく（DOM から消す整理とはそこが違う）。
+ */
+export const startChatDisplay = ({
+  store = localSettingsStore,
+  host = document,
+  navigate = onNavigated,
+}: ChatDisplayOptions = {}): void => {
+  const applyFromStore = async (): Promise<void> => {
+    applyChatDisplay(await readSection(store, chatDisplaySection), host);
+  };
+
+  // document_start では onNavigated が DOMContentLoaded まで初回を遅らせるので、そこを待たずに当てる。
+  void applyFromStore();
+
+  watchSection(store, chatDisplaySection, (settings) =>
+    applyChatDisplay(settings, host),
+  );
+
+  // 遷移では文書が作り直されないので、当てた CSS が残っているとは限らない。当て直す。
+  navigate(() => {
+    void applyFromStore();
+  });
 };

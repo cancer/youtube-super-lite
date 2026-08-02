@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+import { manifestJson } from "./manifest";
 import { matchesUrlFilter } from "./url-filter";
 
 /**
@@ -39,9 +40,6 @@ type Manifest = {
     readonly rule_resources?: readonly RuleResource[];
   };
 };
-
-/** 型は宣言だが検証はしていない。形の検査は rules.test.ts のスキーマ検査が担う。 */
-export const manifestJson = readJson("manifest.json") as Record<string, unknown>;
 
 const manifest = manifestJson as unknown as Manifest;
 
