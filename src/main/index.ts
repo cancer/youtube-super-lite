@@ -1,10 +1,11 @@
 import { installEqualizer } from "./audio-graph";
+import { registerChatImages } from "./chat-images";
 import { installIntercept } from "./intercept";
 import { surfaceOf } from "./surface";
 
 // ページの JS が最初のリクエストを出す前に差し替えを終える必要があるので、
-// 何よりも先に組み込む。変換関数（R2 / R3）は後続でここに登録する。
-installIntercept();
+// 何よりも先に組み込む。R2（コメント・関連動画）の変換は後続でここに足す。
+registerChatImages(installIntercept());
 
 const surface = surfaceOf(location.pathname);
 

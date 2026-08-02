@@ -1,6 +1,7 @@
 import { publishSection } from "../shared/bridge";
 import { equalizerSection } from "../shared/equalizer";
 import { onNavigated } from "../shared/navigation";
+import { CHAT_ITEM_LIST_SELECTOR, startChatTrim } from "./chat-trim";
 import {
   chatDisplaySection,
   localSettingsStore,
@@ -119,3 +120,8 @@ const installWatchDeclutter = (): void => {
 if (location.pathname.startsWith("/watch")) {
   installWatchDeclutter();
 }
+
+// チャット項目の上限を当て続ける（R3 の DOM 層）。適用先を周期ごとに引き直すので、遷移後の
+// 再適用も同じ経路で済み、onNavigated への登録は要らない。watch ページにも注入されるが、
+// そちらではセレクタが一致せず何も起きない。
+startChatTrim(() => document.querySelector(CHAT_ITEM_LIST_SELECTOR));
