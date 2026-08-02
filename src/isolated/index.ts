@@ -9,6 +9,7 @@ import { surfaceOf } from "../shared/surface";
 import { requestTabId } from "../shared/tab-id";
 import { tabScopedStore } from "../shared/tab-store";
 import { startChatDisplay } from "./chat-display";
+import { startChatResize } from "./chat-resize";
 import { CHAT_ITEM_LIST_SELECTOR, startChatTrim } from "./chat-trim";
 import { startSettingsDelivery } from "./deliver";
 import { installWatchDeclutter } from "./watch-declutter";
@@ -60,7 +61,12 @@ void settingsStoreOfThisTab().then((store) => {
 
   // watch ページから「次の動画」の列とコメント欄を消す（R2）。この content script は
   // ライブチャットの iframe（/live_chat）にも入るが、整理の対象は watch ページだけ。
-  if (surface === "watch") installWatchDeclutter({ store });
+  if (surface === "watch") {
+    installWatchDeclutter({ store });
+    // チャットの幅を掴んで変えるハンドル（R5）。置き先は watch ページの列で、
+    // 保存は「このタブ」と「次に開くタブの初期値」の両方に要るので保存先を 2 つ渡す。
+    startChatResize({ store, persistent: localSettingsStore });
+  }
 
   // チャットの文字サイズとパネル幅（R5）。DOM へ CSS を当てるので MAIN world へは配らず、
   // この world の各文書（watch とライブチャットの iframe）へ当てる。

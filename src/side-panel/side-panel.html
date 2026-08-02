@@ -47,11 +47,12 @@
         <input id="chat-font-size" type="range" />
         <output id="chat-font-size-value" for="chat-font-size"></output>
       </p>
-      <p>
-        <label for="chat-panel-width">パネル幅</label>
-        <input id="chat-panel-width" type="range" />
-        <output id="chat-panel-width-value" for="chat-panel-width"></output>
-      </p>
+      <!--
+        パネル幅のつまみはここに置かない。幅は見ている画面を見ながら決めるものなので、
+        watch ページのチャット左端に付くハンドルで変える（isolated/chat-resize）。
+        置き場所が分からないと触れないので、どこにあるかだけ書いておく。
+      -->
+      <p>チャットの幅は、watch ページのチャット左端をドラッグして変える。</p>
     </section>
     <section id="watch-declutter">
       <h2>watch ページの整理</h2>

@@ -2,7 +2,6 @@
 import "./equalizer";
 import {
   CHAT_FONT_SIZE_PX,
-  CHAT_PANEL_WIDTH_RATIO,
   chatDisplaySection,
   watchDeclutterSection,
   type ChatDisplaySettings,
@@ -39,9 +38,7 @@ const requireElement = (id: string): HTMLElement => {
 };
 
 const fontSizeInput = requireInput("chat-font-size");
-const panelWidthInput = requireInput("chat-panel-width");
 const fontSizeValue = requireElement("chat-font-size-value");
-const panelWidthValue = requireElement("chat-panel-width-value");
 
 /** スライダーの可動域を設定の範囲に合わせる。範囲の出所は shared/settings だけにする。 */
 const useRange = (
@@ -54,16 +51,21 @@ const useRange = (
   input.step = String(step);
 };
 
-// 刻みは範囲と違って保存値の仕様ではなく、つまみの操作粒度。文字サイズは 1px、比率は 1%。
+// 刻みは範囲と違って保存値の仕様ではなく、つまみの操作粒度。文字サイズは 1px。
 useRange(fontSizeInput, CHAT_FONT_SIZE_PX, 1);
-useRange(panelWidthInput, CHAT_PANEL_WIDTH_RATIO, 0.01);
+
+/**
+ * 相手のタブの今の値。
+ *
+ * 保存は区画ごと書き換わるので、ここで操作しない設定（パネル幅。ページ内のハンドルが持つ）も
+ * 一緒に持っておく必要がある。持たずに書くと、文字サイズを動かすたびに幅が既定値へ戻る。
+ */
+let current: ChatDisplaySettings = chatDisplaySection.defaults;
 
 const render = (settings: ChatDisplaySettings): void => {
+  current = settings;
   fontSizeInput.value = String(settings.fontSizePx);
-  panelWidthInput.value = String(settings.panelWidthRatio);
   fontSizeValue.textContent = `${settings.fontSizePx}px`;
-  // 比率はビューポート幅に対する割合なので、目で見て分かる百分率で出す。
-  panelWidthValue.textContent = `${Math.round(settings.panelWidthRatio * 100)}%`;
 };
 
 /**
@@ -74,16 +76,14 @@ const render = (settings: ChatDisplaySettings): void => {
  */
 const save = (): void => {
   const settings = chatDisplaySection.normalize({
+    ...current,
     fontSizePx: Number(fontSizeInput.value),
-    panelWidthRatio: Number(panelWidthInput.value),
   });
   render(settings);
   void applyToTargetTab(chatDisplaySection, settings);
 };
 
-for (const input of [fontSizeInput, panelWidthInput]) {
-  input.addEventListener("input", save);
-}
+fontSizeInput.addEventListener("input", save);
 
 followTargetTab(chatDisplaySection, render);
 

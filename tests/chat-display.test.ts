@@ -4,12 +4,14 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import {
+  CHAT_COLUMN_SELECTOR,
   CHAT_DISPLAY_CSS,
   CHAT_DISPLAY_STYLE_ID,
   CHAT_EMPTY_AVATAR_SELECTOR,
+  CHAT_LAYOUT_SELECTOR,
   CHAT_MESSAGE_SELECTOR,
-  CHAT_PANEL_SELECTOR,
   applyChatDisplay,
+  applyPanelWidth,
   chatDisplayVariables,
   startChatDisplay,
   type StyleHost,
@@ -123,14 +125,33 @@ describe("chatDisplayVariables", () => {
 /**
  * 適用先のセレクタ。
  *
- * 出所: 2026-08-01 に実ブラウザ（未ログイン）の配信中のライブの watch ページで確認した DOM。
- * パネル幅は watch ページの右の列（`#secondary`）、文字サイズはライブチャットの iframe
- * （`/live_chat`）の中の発言の要素で、当てる文書が違う。実 DOM に当たるかどうかは実ブラウザで
- * しか確かめられないので、ここでは確認した文字列を固定して、書き換えるなら再確認が要ることを示す。
+ * 出所: 2026-08-02 に実ブラウザ（未ログイン）の配信中のライブで確認した DOM。パネル幅は watch
+ * ページのレイアウト要素（`ytd-watch-flexy`）、文字サイズとアイコンの枠はライブチャットの iframe
+ * （`/live_chat`）の中で、当てる文書が違う。実 DOM に当たるかどうかは実ブラウザでしか確かめられ
+ * ないので、ここでは確認した文字列を固定して、書き換えるなら再確認が要ることを示す。
  */
 describe("適用先のセレクタ", () => {
-  test("パネル幅はライブチャットが入っている列だけを名指しする", () => {
-    expect(CHAT_PANEL_SELECTOR).toBe("#secondary:has(ytd-live-chat-frame)");
+  /**
+   * 幅は列を名指しせず、YouTube 自身が幅に使う変数を差し替える。名指しできる列が版によって
+   * 変わる（`#secondary` が列ではなく画面幅いっぱいの入れ物である版がある）ため。
+   */
+  test("パネル幅はライブチャットのある watch ページのレイアウトを名指しする", () => {
+    expect(CHAT_LAYOUT_SELECTOR).toBe("ytd-watch-flexy:has(ytd-live-chat-frame)");
+  });
+
+  test("パネル幅は YouTube 自身の列幅の変数を差し替える", () => {
+    expect(CHAT_DISPLAY_CSS).toContain("--ytd-watch-flexy-sidebar-width:");
+  });
+
+  // 列に幅を直接指定すると、列でない要素を掴んだ版でレイアウトが崩れる。指定しないことを固定する。
+  test("パネル幅は列の幅を直接指定しない", () => {
+    expect(CHAT_DISPLAY_CSS).not.toMatch(/^\s*width:/m);
+  });
+
+  test("幅の下限は列になり得る 2 つの要素から外す", () => {
+    expect(CHAT_COLUMN_SELECTOR).toBe(
+      "#secondary:has(ytd-live-chat-frame), #secondary-inner:has(ytd-live-chat-frame)",
+    );
   });
 
   test("文字サイズは発言の一覧の直下の子を名指しする", () => {
@@ -155,7 +176,8 @@ describe("適用先のセレクタ", () => {
   });
 
   test("規則はどのセレクタも持つ", () => {
-    expect(CHAT_DISPLAY_CSS).toContain(CHAT_PANEL_SELECTOR);
+    expect(CHAT_DISPLAY_CSS).toContain(CHAT_LAYOUT_SELECTOR);
+    expect(CHAT_DISPLAY_CSS).toContain(CHAT_COLUMN_SELECTOR);
     expect(CHAT_DISPLAY_CSS).toContain(CHAT_MESSAGE_SELECTOR);
     expect(CHAT_DISPLAY_CSS).toContain(CHAT_EMPTY_AVATAR_SELECTOR);
   });
@@ -260,24 +282,76 @@ describe("applyChatDisplay", () => {
   });
 });
 
+/**
+ * ドラッグ中は幅だけを当て直す。文字サイズを持ち回らずに幅を動かせること、当てる値が
+ * 設定の範囲を出ないことを、掴む側（chat-resize）から見た入口として固定する。
+ */
+describe("applyPanelWidth", () => {
+  const panelWidth = (variables: Map<string, string>): string | undefined =>
+    variables.get("--youtube-super-lite-chat-panel-width");
+
+  test("幅の比率を CSS カスタムプロパティとして与える", () => {
+    const { host, variables } = fakeHost();
+
+    applyPanelWidth(0.4, host);
+
+    expect(panelWidth(variables)).toBe("calc(0.4 * 100vw)");
+  });
+
+  test("文字サイズには触らない", () => {
+    const { host, variables } = fakeHost();
+    applyChatDisplay({ fontSizePx: 22, panelWidthRatio: 0.2 }, host);
+
+    applyPanelWidth(0.4, host);
+
+    expect(variables.get("--youtube-super-lite-chat-font-size")).toBe("22px");
+  });
+
+  test("範囲を超えた比率は範囲内へ収める", () => {
+    const { host, variables } = fakeHost();
+
+    applyPanelWidth(0.9, host);
+
+    expect(panelWidth(variables)).toBe("calc(0.6 * 100vw)");
+  });
+
+  test("差し込み先が無くても例外を投げず、効かなかったことを残す", () => {
+    const { host } = fakeHost({ rootMissing: true });
+
+    const { messages } = captureDebug(() => {
+      applyPanelWidth(0.4, host);
+    });
+
+    expect(messages.length).toBe(1);
+  });
+});
+
 describe("サイドパネルのチャット表示 UI", () => {
   const html = readFileSync(
     path.join(import.meta.dir, "../src/side-panel/side-panel.html"),
     "utf8",
   );
 
-  /**
-   * スライダーは HTML 側に置き、範囲と現在値だけをスクリプトが与える。
-   * 対応する要素が無ければスクリプトは動かないので、id の対応をここで固定する。
-   */
-  test("チャット表示の区画に 2 つのスライダーを持つ", () => {
-    const section = html.slice(
+  const chatDisplaySection = (): string =>
+    html.slice(
       html.indexOf('<section id="chat-display">'),
       html.indexOf("</section>", html.indexOf('<section id="chat-display">')),
     );
 
-    expect(section).toContain('id="chat-font-size"');
-    expect(section).toContain('id="chat-panel-width"');
+  /**
+   * スライダーは HTML 側に置き、範囲と現在値だけをスクリプトが与える。
+   * 対応する要素が無ければスクリプトは動かないので、id の対応をここで固定する。
+   */
+  test("チャット表示の区画に文字サイズのスライダーを持つ", () => {
+    expect(chatDisplaySection()).toContain('id="chat-font-size"');
+  });
+
+  /**
+   * 幅のつまみはサイドパネルに置かない（ユーザー決定 2026-08-02）。操作の場所は watch ページの
+   * ハンドル 1 つに絞る。両方に置くと、どちらが今の値かを合わせ続ける配線が要る。
+   */
+  test("チャット表示の区画に幅のスライダーを持たない", () => {
+    expect(chatDisplaySection()).not.toContain('id="chat-panel-width"');
   });
 });
 
