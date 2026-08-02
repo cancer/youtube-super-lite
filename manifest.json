@@ -41,7 +41,11 @@
         "enabled": true,
         "path": "rules/a-ads-tracking.json"
       },
-      { "id": "a-thumbnails", "enabled": true, "path": "rules/a-thumbnails.json" },
+      {
+        "id": "a-thumbnails",
+        "enabled": false,
+        "path": "rules/a-thumbnails.json"
+      },
       {
         "id": "exp-heartbeat",
         "enabled": false,
