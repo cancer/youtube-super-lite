@@ -8,6 +8,7 @@ import {
   clampToRange,
   readSection,
   repairSection,
+  seedSection,
   watchDeclutterSection,
   watchSection,
   writeSection,
@@ -346,6 +347,52 @@ describe("拡張コンテキストの失効", () => {
     await expect(
       writeSection(broken, chatDisplaySection, chatDisplaySection.defaults),
     ).rejects.toThrow("storage が壊れた");
+  });
+});
+
+describe("seedSection", () => {
+  test("保存が無い側を、もう一方の保存値で埋める", async () => {
+    const source = fakeStore({ chatDisplay: { fontSizePx: 20, panelWidthRatio: 0.4 } });
+    const target = fakeStore();
+
+    await seedSection(source.store, target.store, chatDisplaySection);
+
+    expect(target.stored.chatDisplay).toEqual({
+      fontSizePx: 20,
+      panelWidthRatio: 0.4,
+    });
+  });
+
+  test("既に保存されていれば触らない", async () => {
+    const source = fakeStore({ chatDisplay: { fontSizePx: 20, panelWidthRatio: 0.4 } });
+    const target = fakeStore({ chatDisplay: { fontSizePx: 12, panelWidthRatio: 0.2 } });
+
+    await seedSection(source.store, target.store, chatDisplaySection);
+
+    expect(target.stored.chatDisplay).toEqual({
+      fontSizePx: 12,
+      panelWidthRatio: 0.2,
+    });
+  });
+
+  /** 埋める側にも保存が無いときは、組み込みの既定値がそのまま埋まる（読み出しが既定値を作る）。 */
+  test("埋める元にも保存が無ければ既定値で埋める", async () => {
+    const source = fakeStore();
+    const target = fakeStore();
+
+    await seedSection(source.store, target.store, chatDisplaySection);
+
+    expect(target.stored.chatDisplay).toEqual(chatDisplaySection.defaults);
+  });
+
+  test("埋める先が失効していれば書きに行かない", async () => {
+    const source = fakeStore({ chatDisplay: { fontSizePx: 20, panelWidthRatio: 0.4 } });
+    const target = fakeStore();
+    target.invalidate();
+
+    await seedSection(source.store, target.store, chatDisplaySection);
+
+    expect(target.stored).toEqual({});
   });
 });
 
