@@ -2,8 +2,11 @@ import {
   chatDisplaySection,
   localSettingsStore,
   readSection,
+  watchDeclutterSection,
   watchSection,
+  writeSection,
   type ChatDisplaySettings,
+  type WatchDeclutterSettings,
 } from "../shared/settings";
 
 /**
@@ -26,3 +29,25 @@ const render = (settings: ChatDisplaySettings): void => {
 
 void readSection(localSettingsStore, chatDisplaySection).then(render);
 watchSection(localSettingsStore, chatDisplaySection, render);
+
+const removeCommentsInput = document.getElementById("remove-comments");
+if (!(removeCommentsInput instanceof HTMLInputElement)) {
+  throw new Error("side-panel.html に #remove-comments のチェックボックスが無い");
+}
+
+removeCommentsInput.addEventListener("change", () => {
+  void writeSection(localSettingsStore, watchDeclutterSection, {
+    removeComments: removeCommentsInput.checked,
+  });
+});
+
+// 表示は必ず保存値から作る。別のウィンドウのパネルで変えられても追従させるため、
+// 読み出しと変更購読の両方を同じ描画へ通す。
+const renderWatchDeclutter = (settings: WatchDeclutterSettings): void => {
+  removeCommentsInput.checked = settings.removeComments;
+};
+
+void readSection(localSettingsStore, watchDeclutterSection).then(
+  renderWatchDeclutter,
+);
+watchSection(localSettingsStore, watchDeclutterSection, renderWatchDeclutter);

@@ -7,6 +7,7 @@ import {
   clampToRange,
   readSection,
   repairSection,
+  watchDeclutterSection,
   watchSection,
   writeSection,
   type SettingsStore,
@@ -137,6 +138,41 @@ describe("readSection", () => {
     expect(await readSection(store, chatDisplaySection)).toEqual({
       fontSizePx: 12,
       panelWidthRatio: 0.28,
+    });
+  });
+});
+
+describe("readSection（watch ページの整理）", () => {
+  test("未保存ならコメント欄を消す設定で始まる", async () => {
+    const { store } = fakeStore();
+
+    expect(await readSection(store, watchDeclutterSection)).toEqual({
+      removeComments: true,
+    });
+  });
+
+  test("消さない設定を保存していれば、それを復元する", async () => {
+    const { store } = fakeStore();
+    await writeSection(store, watchDeclutterSection, { removeComments: false });
+
+    expect(await readSection(store, watchDeclutterSection)).toEqual({
+      removeComments: false,
+    });
+  });
+
+  test("真偽でない値が保存されていても既定値へ落とす", async () => {
+    const { store } = fakeStore({ watchDeclutter: { removeComments: "false" } });
+
+    expect(await readSection(store, watchDeclutterSection)).toEqual({
+      removeComments: true,
+    });
+  });
+
+  test("保存値が設定として壊れていても既定値で読み出せる", async () => {
+    const { store } = fakeStore({ watchDeclutter: "壊れた値" });
+
+    expect(await readSection(store, watchDeclutterSection)).toEqual({
+      removeComments: true,
     });
   });
 });
