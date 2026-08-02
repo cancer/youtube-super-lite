@@ -1,24 +1,25 @@
 // 機能ごとの操作 UI は自分のモジュールに閉じる。ここは読み込むだけ。
 import "./equalizer";
 import {
-  applySection,
   CHAT_FONT_SIZE_PX,
   CHAT_PANEL_WIDTH_RATIO,
   chatDisplaySection,
-  localSettingsStore,
   watchDeclutterSection,
-  watchSection,
-  writeSection,
   type ChatDisplaySettings,
   type NumericRange,
   type WatchDeclutterSettings,
 } from "../shared/settings";
+import {
+  applyToTargetTab,
+  followTargetTab,
+  startTargetTab,
+} from "./target-tab";
 
 /**
  * サイドパネルの操作面。
  *
- * 設定の読み出し・保存・変更購読の配線だけを持つ。保存すれば storage.onChanged 経由で
- * content script へ届くので、ここから直接配送しない。
+ * 表示と操作の配線だけを持つ。値の当て先（今見ているタブ）と保存は target-tab が引き受け、
+ * 当てた設定は storage.onChanged 経由で content script へ届くので、ここから直接配送しない。
  * 機能ごとの UI は side-panel.html の対応する section へ差し込む（R4 のイコライザは別）。
  */
 
@@ -77,15 +78,14 @@ const save = (): void => {
     panelWidthRatio: Number(panelWidthInput.value),
   });
   render(settings);
-  void writeSection(localSettingsStore, chatDisplaySection, settings);
+  void applyToTargetTab(chatDisplaySection, settings);
 };
 
 for (const input of [fontSizeInput, panelWidthInput]) {
   input.addEventListener("input", save);
 }
 
-void applySection(localSettingsStore, chatDisplaySection, render);
-watchSection(localSettingsStore, chatDisplaySection, render);
+followTargetTab(chatDisplaySection, render);
 
 const removeCommentsInput = document.getElementById("remove-comments");
 if (!(removeCommentsInput instanceof HTMLInputElement)) {
@@ -93,20 +93,18 @@ if (!(removeCommentsInput instanceof HTMLInputElement)) {
 }
 
 removeCommentsInput.addEventListener("change", () => {
-  void writeSection(localSettingsStore, watchDeclutterSection, {
+  void applyToTargetTab(watchDeclutterSection, {
     removeComments: removeCommentsInput.checked,
   });
 });
 
-// 表示は必ず保存値から作る。別のウィンドウのパネルで変えられても追従させるため、
-// 読み出しと変更購読の両方を同じ描画へ通す。
+// 表示は必ず相手のタブの値から作る。タブを切り替えたときも、そのタブで別のパネルから
+// 変えられたときも追従させるため、読み出しと変更購読の両方を同じ描画へ通す。
 const renderWatchDeclutter = (settings: WatchDeclutterSettings): void => {
   removeCommentsInput.checked = settings.removeComments;
 };
 
-void applySection(
-  localSettingsStore,
-  watchDeclutterSection,
-  renderWatchDeclutter,
-);
-watchSection(localSettingsStore, watchDeclutterSection, renderWatchDeclutter);
+followTargetTab(watchDeclutterSection, renderWatchDeclutter);
+
+// 操作 UI の登録がすべて済んでから相手を探す。探し当てた時点で、登録してあるぶんが一斉に描かれる。
+void startTargetTab();

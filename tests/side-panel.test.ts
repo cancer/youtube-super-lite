@@ -102,32 +102,7 @@ describe("watch ページの整理の操作 UI", () => {
   });
 });
 
-describe("service worker", () => {
-  /**
-   * 他のテストのように依存を引数で渡さず chrome ごと差し替えるのは、検査したいものが
-   * 「起動しただけで設定が行なわれる」という副作用そのものだから。sw は実物の chrome を
-   * 配線する場所（合成点）なので、そこを通さずに配線の有無は確かめられない。
-   */
-  test("ツールバーのアイコンのクリックでサイドパネルが開くよう設定する", async () => {
-    const behaviors: unknown[] = [];
-    const globals = globalThis as unknown as { chrome?: unknown };
-    const original = globals.chrome;
-    globals.chrome = {
-      runtime: { onInstalled: { addListener: () => {} } },
-      sidePanel: {
-        setPanelBehavior: (behavior: unknown): Promise<void> => {
-          behaviors.push(behavior);
-          return Promise.resolve();
-        },
-      },
-    };
-
-    try {
-      await import("../src/background/sw");
-    } finally {
-      globals.chrome = original;
-    }
-
-    expect(behaviors).toEqual([{ openPanelOnActionClick: true }]);
-  });
-});
+/**
+ * 3 つ目の宣言（アイコンのクリックへの紐づけ）は service worker にある。読み込みが 1 度しか
+ * 起きないので、sw の配線の検査は service-worker.test.ts へまとめてある。
+ */

@@ -6,18 +6,13 @@ import {
   VOICE_GAIN_DB,
   type EqualizerSettings,
 } from "../shared/equalizer";
-import {
-  applySection,
-  localSettingsStore,
-  watchSection,
-  writeSection,
-} from "../shared/settings";
+import { applyToTargetTab, followTargetTab } from "./target-tab";
 
 /**
  * イコライザの操作 UI（要件 R4 の 3 ノブ）。
  *
- * 保存するだけで、適用はしない。storage.onChanged が content script へ直接届くので、
- * ここから MAIN world へ配送する経路は持たない。
+ * 当てる相手は今見ているタブで、その決まりごとは target-tab が持つ。ここは値を組み立てて
+ * 渡すだけで、保存先も配送経路も知らない（storage.onChanged が content script へ直接届く）。
  */
 
 /** カットオフのオフを表す option の value。数値の段と混ざらない文字列にしてある。 */
@@ -75,7 +70,7 @@ const render = (settings: EqualizerSettings): void => {
 };
 
 const save = (): void => {
-  void writeSection(localSettingsStore, equalizerSection, {
+  void applyToTargetTab(equalizerSection, {
     voiceGainDb: Number(gainInput.value),
     lowpassHz: cutoffOf(lowpassSelect),
     highpassHz: cutoffOf(highpassSelect),
@@ -91,5 +86,4 @@ gainInput.addEventListener("change", save);
 lowpassSelect.addEventListener("change", save);
 highpassSelect.addEventListener("change", save);
 
-void applySection(localSettingsStore, equalizerSection, render);
-watchSection(localSettingsStore, equalizerSection, render);
+followTargetTab(equalizerSection, render);

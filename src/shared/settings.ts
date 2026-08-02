@@ -146,18 +146,17 @@ export type SettingsStore = {
 };
 
 /**
- * 実際の保存先。sync ではなく local を使う（端末間同期は要件に無く、クォータ制約だけが増える）。
+ * chrome.storage の 1 区域を保存先の形にする。
  *
  * chrome への参照を関数の中に閉じてあるのは、拡張 API が無い実行環境で本モジュールを
- * 読み込めるようにするため。
+ * 読み込めるようにするため。区域は呼び出しのたびに引き直す。
  */
-export const localSettingsStore: SettingsStore = {
-  get: (keys) => chrome.storage.local.get(keys),
-  set: (items) => chrome.storage.local.set(items),
+const areaStore = (area: () => chrome.storage.StorageArea): SettingsStore => ({
+  get: (keys) => area().get(keys),
+  set: (items) => area().set(items),
   onChanged: {
-    addListener: (listener) => chrome.storage.local.onChanged.addListener(listener),
-    removeListener: (listener) =>
-      chrome.storage.local.onChanged.removeListener(listener),
+    addListener: (listener) => area().onChanged.addListener(listener),
+    removeListener: (listener) => area().onChanged.removeListener(listener),
   },
   /**
    * 失効の判定に chrome.runtime.id の消滅を使う。
@@ -172,7 +171,28 @@ export const localSettingsStore: SettingsStore = {
    * ここだけを差し替えればよく、失効の扱い（反映を止める・再試行しない・報告は 1 度）は動かない。
    */
   isAlive: () => chrome?.runtime?.id !== undefined,
-};
+});
+
+/**
+ * 永続する保存先。sync ではなく local を使う（端末間同期は要件に無く、クォータ制約だけが増える）。
+ *
+ * ここに入るのは「次に開くタブが最初に使う値」であって、開いているタブが今使っている値ではない
+ * （そちらは sessionSettingsStore に タブごと 分かれて入る）。
+ */
+export const localSettingsStore: SettingsStore = areaStore(() => chrome.storage.local);
+
+/**
+ * タブが今使っている値の置き場所。
+ *
+ * ブラウザを閉じるまでしか残らない区域を選んである。タブ単位の値はそのタブが消えれば無用で、
+ * 消し忘れても次の起動には持ち越さないため（タブが閉じたぶんの後始末は service worker が行なう）。
+ *
+ * content script から読めるのは、service worker が session の公開範囲を広げている場合だけ。
+ * 広げる判断とその理由は service worker 側にある。
+ */
+export const sessionSettingsStore: SettingsStore = areaStore(
+  () => chrome.storage.session,
+);
 
 /** 失効を報告済みの保存先。同じ失効を何度も console へ出さないため。 */
 const reportedStores = new WeakSet<SettingsStore>();
@@ -255,6 +275,33 @@ export const writeSection = async <T>(
   value: T,
 ): Promise<void> =>
   unlessGoneAway(store, () => store.set({ [section.key]: value }), undefined);
+
+/**
+ * 保存が無い区画を、別の保存先の値で埋める。既に何か保存されていれば触らない。
+ *
+ * タブ単位の保存先を永続の保存値から起こすために使う。読み出しの既定値で済ませないのは、
+ * 「まだ何も設定していないタブ」が永続の保存値ではなく組み込みの既定値で動いてしまうため。
+ * 埋めたあとは、そのタブの値は永続の保存値と切り離されて動く。
+ *
+ * 保存の有無は正規化を通さない生の値で見る。normalize は未保存でも必ず値を作るので、
+ * それを通した後では「保存が無い」を見分けられない。
+ */
+export const seedSection = async <T>(
+  source: SettingsStore,
+  target: SettingsStore,
+  section: SettingsSection<T>,
+): Promise<void> => {
+  // 失効している保存先は「埋める必要が無い」側に倒す。書けない先へ書きに行っても何も起きない。
+  const stored = await unlessGoneAway<boolean>(
+    target,
+    async () => (await target.get([section.key]))[section.key] !== undefined,
+    true,
+  );
+  if (stored) return;
+  const value = await readSection(source, section);
+  if (value === undefined) return;
+  await writeSection(target, section, value);
+};
 
 /**
  * 区画の変更を購読する。
