@@ -9,11 +9,12 @@ import {
 } from "../shared/settings";
 
 /**
- * R5 のチャット表示（文字サイズ・パネル幅）を CSS で当てる。
+ * R5 のチャット表示（文字サイズ・パネル幅）と、アイコンを落とした跡の空白を CSS で当てる。
  *
- * 当てる先は 2 つの文書にまたがる。パネル幅は watch ページの列で、文字サイズはライブチャットの
- * iframe（`/live_chat`）の中にある。content script は `all_frames` で両方に注入されるので、
- * 規則は 1 枚にまとめて両方へ差し込む。片方でしか一致しない規則は、もう片方では単に効かない。
+ * 当てる先は 2 つの文書にまたがる。パネル幅は watch ページの列で、文字サイズとアイコンの枠は
+ * ライブチャットの iframe（`/live_chat`）の中にある。content script は `all_frames` で両方に
+ * 注入されるので、規則は 1 枚にまとめて両方へ差し込む。片方でしか一致しない規則は、もう片方では
+ * 単に効かない。
  *
  * 値は CSS カスタムプロパティで渡す。設定が変わったときに差し込んだ規則を書き換えず、
  * 変数の値だけを差し替えれば済むため。
@@ -37,6 +38,24 @@ const PANEL_WIDTH_VARIABLE = "--youtube-super-lite-chat-panel-width";
  * 一致せず既定のままになる。
  */
 export const CHAT_PANEL_SELECTOR = "#secondary:has(ytd-live-chat-frame)";
+
+/**
+ * 中身が入らなかった投稿者アイコンの枠（live_chat の文書側）。
+ *
+ * R3 が応答から `authorPhoto` を落とすと、枠だけが中身なしで残る。枠は 24px 幅・右 16px の
+ * 余白を持つため、アイコンがあった位置に 40px の空白が空く。畳んで詰める。
+ * 出所: 2026-08-02 に実ブラウザで、R3 と同じ判定で応答を書き換えて確認した DOM。
+ *
+ * 「誰のアイコンを出すか」はここでは決めない。見るのは画像が入っているかどうかだけなので、
+ * 残す側（モデレーター・チャンネル所有者）の枠はそのままで、落とした側だけが畳まれる。R3 の
+ * 判定を二重に持たないためで、表示対象が変わってもこの規則は書き換えずに追随する。
+ *
+ * 空の見分け方に 2 つ要るのは、枠の作られ方が 2 通りあるため。新しく作られた枠は `<img>` が
+ * `src` を持たず、いちど画像を載せた枠を作り直した場合は 1x1 の透明 GIF（`data:` URL）が入る。
+ * どちらも「画像 URL が入っていない」なので、`data:` でない `src` が無いことを条件にする。
+ */
+export const CHAT_EMPTY_AVATAR_SELECTOR =
+  'yt-live-chat-renderer #author-photo:not(:has(img[src]:not([src^="data:"])))';
 
 /**
  * 文字サイズを変える要素（live_chat の文書側）。
@@ -65,6 +84,10 @@ export const CHAT_DISPLAY_CSS = `${CHAT_PANEL_SELECTOR} {
 
 ${CHAT_MESSAGE_SELECTOR} {
   font-size: var(${FONT_SIZE_VARIABLE}) !important;
+}
+
+${CHAT_EMPTY_AVATAR_SELECTOR} {
+  display: none !important;
 }
 `;
 

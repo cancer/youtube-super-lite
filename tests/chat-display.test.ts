@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CHAT_DISPLAY_CSS,
   CHAT_DISPLAY_STYLE_ID,
+  CHAT_EMPTY_AVATAR_SELECTOR,
   CHAT_MESSAGE_SELECTOR,
   CHAT_PANEL_SELECTOR,
   applyChatDisplay,
@@ -138,9 +139,34 @@ describe("適用先のセレクタ", () => {
     );
   });
 
-  test("規則はどちらのセレクタも持つ", () => {
+  /**
+   * アイコンの枠は「画像が入っていない」ことだけで選ぶ。誰のアイコンを残すかは R3（chat-images）の
+   * 判定が持つので、こちらへ書き写さない。`data:` を除くのは、いちど画像を載せた枠を作り直したとき
+   * 1x1 の透明 GIF が入るため（どちらも中身が無い）。
+   */
+  test("空のアイコンの枠は画像 URL の有無だけで選ぶ", () => {
+    expect(CHAT_EMPTY_AVATAR_SELECTOR).toBe(
+      'yt-live-chat-renderer #author-photo:not(:has(img[src]:not([src^="data:"])))',
+    );
+  });
+
+  test("空のアイコンの枠は投稿者の種類を見ない", () => {
+    expect(CHAT_EMPTY_AVATAR_SELECTOR).not.toContain("author-type");
+  });
+
+  test("規則はどのセレクタも持つ", () => {
     expect(CHAT_DISPLAY_CSS).toContain(CHAT_PANEL_SELECTOR);
     expect(CHAT_DISPLAY_CSS).toContain(CHAT_MESSAGE_SELECTOR);
+    expect(CHAT_DISPLAY_CSS).toContain(CHAT_EMPTY_AVATAR_SELECTOR);
+  });
+
+  // 空白を詰めるには枠を畳む（display: none）必要がある。透明にするだけでは場所が残る。
+  test("空のアイコンの枠は畳んで場所を残さない", () => {
+    const rule = CHAT_DISPLAY_CSS.slice(
+      CHAT_DISPLAY_CSS.indexOf(CHAT_EMPTY_AVATAR_SELECTOR),
+    );
+
+    expect(rule).toContain("display: none !important");
   });
 });
 
