@@ -7,8 +7,8 @@ import {
   type EqualizerSettings,
 } from "../shared/equalizer";
 import {
+  applySection,
   localSettingsStore,
-  readSection,
   watchSection,
   writeSection,
 } from "../shared/settings";
@@ -91,5 +91,5 @@ gainInput.addEventListener("change", save);
 lowpassSelect.addEventListener("change", save);
 highpassSelect.addEventListener("change", save);
 
-void readSection(localSettingsStore, equalizerSection).then(render);
+void applySection(localSettingsStore, equalizerSection, render);
 watchSection(localSettingsStore, equalizerSection, render);

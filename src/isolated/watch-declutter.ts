@@ -1,7 +1,7 @@
 import { onNavigated } from "../shared/navigation";
 import {
+  applySection,
   localSettingsStore,
-  readSection,
   watchDeclutterSection,
   watchSection,
   type SettingsStore,
@@ -99,7 +99,8 @@ export const installWatchDeclutter = ({
   // 既定は「消す」なので、保存値が届く前に当てると「残す」を選んでいる人のコメント欄まで
   // 消してしまう（消したノードは戻せない）。最初の適用は必ず読み出しの後。
   // 適用の契機（遷移・DOM への追加・腐食の報告）もすべてここより後に張る。
-  void readSection(store, watchDeclutterSection).then((stored) => {
+  // 失効して保存値が読めないときも同じ理由で何も消さない（契機ごと張らない）。
+  void applySection(store, watchDeclutterSection, (stored) => {
     settings = stored;
     navigate(apply);
     watchAdditions(apply);

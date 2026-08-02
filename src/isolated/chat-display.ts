@@ -1,8 +1,8 @@
 import { onNavigated } from "../shared/navigation";
 import {
+  applySection,
   chatDisplaySection,
   localSettingsStore,
-  readSection,
   watchSection,
   type ChatDisplaySettings,
   type SettingsStore,
@@ -169,9 +169,10 @@ export const startChatDisplay = ({
   host = document,
   navigate = onNavigated,
 }: ChatDisplayOptions = {}): void => {
-  const applyFromStore = async (): Promise<void> => {
-    applyChatDisplay(await readSection(store, chatDisplaySection), host);
-  };
+  const applyFromStore = (): Promise<void> =>
+    applySection(store, chatDisplaySection, (settings) =>
+      applyChatDisplay(settings, host),
+    );
 
   // document_start では onNavigated が DOMContentLoaded まで初回を遅らせるので、そこを待たずに当てる。
   void applyFromStore();

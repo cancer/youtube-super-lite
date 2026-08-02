@@ -1,11 +1,11 @@
 // 機能ごとの操作 UI は自分のモジュールに閉じる。ここは読み込むだけ。
 import "./equalizer";
 import {
+  applySection,
   CHAT_FONT_SIZE_PX,
   CHAT_PANEL_WIDTH_RATIO,
   chatDisplaySection,
   localSettingsStore,
-  readSection,
   watchDeclutterSection,
   watchSection,
   writeSection,
@@ -84,7 +84,7 @@ for (const input of [fontSizeInput, panelWidthInput]) {
   input.addEventListener("input", save);
 }
 
-void readSection(localSettingsStore, chatDisplaySection).then(render);
+void applySection(localSettingsStore, chatDisplaySection, render);
 watchSection(localSettingsStore, chatDisplaySection, render);
 
 const removeCommentsInput = document.getElementById("remove-comments");
@@ -104,7 +104,9 @@ const renderWatchDeclutter = (settings: WatchDeclutterSettings): void => {
   removeCommentsInput.checked = settings.removeComments;
 };
 
-void readSection(localSettingsStore, watchDeclutterSection).then(
+void applySection(
+  localSettingsStore,
+  watchDeclutterSection,
   renderWatchDeclutter,
 );
 watchSection(localSettingsStore, watchDeclutterSection, renderWatchDeclutter);
