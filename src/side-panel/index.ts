@@ -1,13 +1,17 @@
+// 機能ごとの操作 UI は自分のモジュールに閉じる。ここは読み込むだけ。
+import "./equalizer";
 import {
   CHAT_FONT_SIZE_PX,
   CHAT_PANEL_WIDTH_RATIO,
   chatDisplaySection,
   localSettingsStore,
   readSection,
+  watchDeclutterSection,
   watchSection,
   writeSection,
   type ChatDisplaySettings,
   type NumericRange,
+  type WatchDeclutterSettings,
 } from "../shared/settings";
 
 /**
@@ -82,3 +86,25 @@ for (const input of [fontSizeInput, panelWidthInput]) {
 
 void readSection(localSettingsStore, chatDisplaySection).then(render);
 watchSection(localSettingsStore, chatDisplaySection, render);
+
+const removeCommentsInput = document.getElementById("remove-comments");
+if (!(removeCommentsInput instanceof HTMLInputElement)) {
+  throw new Error("side-panel.html に #remove-comments のチェックボックスが無い");
+}
+
+removeCommentsInput.addEventListener("change", () => {
+  void writeSection(localSettingsStore, watchDeclutterSection, {
+    removeComments: removeCommentsInput.checked,
+  });
+});
+
+// 表示は必ず保存値から作る。別のウィンドウのパネルで変えられても追従させるため、
+// 読み出しと変更購読の両方を同じ描画へ通す。
+const renderWatchDeclutter = (settings: WatchDeclutterSettings): void => {
+  removeCommentsInput.checked = settings.removeComments;
+};
+
+void readSection(localSettingsStore, watchDeclutterSection).then(
+  renderWatchDeclutter,
+);
+watchSection(localSettingsStore, watchDeclutterSection, renderWatchDeclutter);

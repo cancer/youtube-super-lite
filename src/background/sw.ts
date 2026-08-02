@@ -1,7 +1,9 @@
+import { equalizerSection } from "../shared/equalizer";
 import {
   chatDisplaySection,
   localSettingsStore,
   repairSection,
+  watchDeclutterSection,
   type SettingsSection,
 } from "../shared/settings";
 
@@ -20,6 +22,8 @@ import {
  */
 const persistedSections: readonly SettingsSection<unknown>[] = [
   chatDisplaySection,
+  watchDeclutterSection,
+  equalizerSection,
 ];
 
 /**

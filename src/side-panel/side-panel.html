@@ -12,6 +12,23 @@
     -->
     <section id="equalizer">
       <h2>イコライザ</h2>
+      <!--
+        3 ノブの値域（ゲインの端・カットオフの段）は shared/equalizer が唯一の出所なので、
+        ここには書かない。range の min/max と select の選択肢は側パネルの JS が組み立てる。
+      -->
+      <p>
+        <label for="eq-voice-gain">声の強調</label>
+        <input id="eq-voice-gain" type="range" step="0.5" />
+        <output id="eq-voice-gain-value" for="eq-voice-gain"></output>
+      </p>
+      <p>
+        <label for="eq-lowpass">高域カット</label>
+        <select id="eq-lowpass"></select>
+      </p>
+      <p>
+        <label for="eq-highpass">低域カット</label>
+        <select id="eq-highpass"></select>
+      </p>
     </section>
     <section id="chat-display">
       <h2>チャット表示</h2>
@@ -29,6 +46,21 @@
         <input id="chat-panel-width" type="range" />
         <output id="chat-panel-width-value" for="chat-panel-width"></output>
       </p>
+    </section>
+    <section id="watch-declutter">
+      <h2>watch ページの整理</h2>
+      <p>
+        <label>
+          <input type="checkbox" id="remove-comments" />
+          コメント欄を消す
+        </label>
+      </p>
+      <!--
+        消したノードは戻せないので、チェックを外した効果が現れるのは次に開いた watch ページから。
+        「外したのに戻らない」と見えるのを避けるため、UI の側で先に伝える。
+      -->
+      <p>チェックを外したときは、ページを開き直すとコメント欄が戻る。</p>
+      <p>右側の「次の動画」の列は常に消す。</p>
     </section>
     <!-- MV3 の CSP でインラインスクリプトは動かないので、必ず外部ファイルとして読む。 -->
     <script src="side-panel.js"></script>

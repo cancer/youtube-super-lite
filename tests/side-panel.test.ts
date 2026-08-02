@@ -87,6 +87,21 @@ describe("サイドパネルの HTML", () => {
   });
 });
 
+/**
+ * 操作 UI の要素は側パネルの配線（side-panel/index.ts）が id で引く。HTML 側から消えると
+ * パネルを開いた瞬間に配線が落ちるので、対になる id があることをここで押さえる。
+ */
+describe("watch ページの整理の操作 UI", () => {
+  const checkboxIds = (): string[] =>
+    [
+      ...readSidePanelHtml().matchAll(/<input\b[^>]*type\s*=\s*["']checkbox["'][^>]*>/gi),
+    ].flatMap((tag) => [...tag[0].matchAll(/\bid\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1]));
+
+  test("コメント欄を消すかどうかのチェックボックスがある", () => {
+    expect(checkboxIds()).toContain("remove-comments");
+  });
+});
+
 describe("service worker", () => {
   /**
    * 他のテストのように依存を引数で渡さず chrome ごと差し替えるのは、検査したいものが
