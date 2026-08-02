@@ -7,7 +7,12 @@ import {
   writeSection,
   type SettingsStore,
 } from "../shared/settings";
-import { applyPanelWidth, type StyleHost } from "./chat-display";
+import {
+  applyPanelWidth,
+  notifyLayoutChanged,
+  type LayoutView,
+  type StyleHost,
+} from "./chat-display";
 
 /**
  * チャットの幅を、watch ページの上で掴んで変える（要件 R5 の操作面）。
@@ -30,16 +35,18 @@ export const CHAT_RESIZE_HANDLE_ID = "youtube-super-lite-chat-resize";
 /**
  * ハンドルを差し込む先。
  *
- * 出所: 2026-08-02 に実ブラウザ（未ログイン）の配信中のライブの watch ページで確認した DOM。
- * `#chat-container` はライブチャットの枠を包む入れ物で、幅は列と同じ、高さはチャットと同じ。
- * 列そのもの（版によって `#secondary` か `#secondary-inner`）ではなくこちらを選ぶのは、
- * チャットのある場所と高さにハンドルを一致させられるため。チャットを閉じると高さが 0 になるので、
- * 閉じている間はハンドルも消える。
+ * チャットの枠そのものを選ぶ。掴んだ時点の幅をこの要素から測り、ハンドルもこの要素の左端へ
+ * 重ねるので、置き先は「画面に見えているチャットの箱」でなければならない。
  *
- * watch ページで開くチャットだけを指す（`ytd-watch-flexy` の中）。この content script は
+ * 出所: 2026-08-02〜03 に実ブラウザ 2 台（別レイアウト・シアター表示と既定表示の両方）で確認。
+ * 包んでいる `#chat-container` は選べない。シアター表示ではチャットが固定配置で浮き、
+ * `#chat-container` は幅 0 の目印だけになるため（実測 clientWidth 0）、そちらへ付けるとハンドルが
+ * チャットの外へ出て、掴んだ幅も 0 になる。枠自体はどの表示でも幅を持つ（実測 255〜720px）。
+ *
+ * watch ページのチャットだけを指す（`ytd-watch-flexy` の中）。この content script は
  * ライブチャットの iframe にも入るが、そちらの文書には一致する要素が無い。
  */
-export const CHAT_RESIZE_HOST_SELECTOR = "ytd-watch-flexy #chat-container";
+export const CHAT_RESIZE_HOST_SELECTOR = "ytd-watch-flexy ytd-live-chat-frame";
 
 /**
  * 差し込み先を引き直す間隔（ミリ秒）。
@@ -53,12 +60,13 @@ export const CHAT_RESIZE_RETRY_INTERVAL_MS = 1000;
 /**
  * ハンドルの見た目と当たり判定。
  *
- * 列の左端の「内側」へ重ねる。外（列と動画の隙間）へ出すと `#secondary-inner` の
- * `overflow: auto` に切り取られて掴めない（2026-08-02 実測）。内側でもチャットの発言は
- * 左に余白を持つので、文字の上には乗らない。
+ * チャットの左端の「内側」へ重ねる。外（チャットと動画の隙間）へ出すと、列の `overflow: auto` に
+ * 切り取られて掴めない（2026-08-02 実測）。内側でもチャットの発言は左に余白を持つので、文字の上に
+ * は乗らない。
  *
- * `z-index` はチャットの枠が持つ値（実測 600）より前に出す。前に出さないと、重なっている
- * ぶんの当たり判定をチャットの枠に取られて掴めない。
+ * `z-index` はチャットの中身（iframe）より前に出す。前に出さないと、重なっているぶんの当たり判定を
+ * 中身に取られて掴めない。`pointer-events` を自分で宣言するのは、親から切られている面（列全体を
+ * `pointer-events: none` にしている版がある）でも掴めるようにするため。
  */
 const HANDLE_STYLE: Readonly<Record<string, string>> = {
   position: "absolute",
@@ -68,6 +76,7 @@ const HANDLE_STYLE: Readonly<Record<string, string>> = {
   width: "6px",
   cursor: "col-resize",
   "z-index": "900",
+  "pointer-events": "auto",
   // 明るい配色でも暗い配色でも見える灰色。掴める場所が見えないと、ハンドルは無いのと同じ。
   background: "rgba(128, 128, 128, 0.35)",
   // ドラッグをページのスクロールへ流さない（触操作で掴めるようにする）。
@@ -107,14 +116,18 @@ export type Handle = {
 type InsertableElement = { id: string };
 
 /**
- * ハンドルを差し込む先。実体は watch ページの `#chat-container`。
+ * ハンドルを差し込む先。実体は watch ページのライブチャットの枠。
  *
  * 幅の現在値（clientWidth）を訊くのは、掴んだ時点の幅を基準にするため。差し込み済みかを
  * `querySelector` で訊くのは、YouTube 側の作り直しでハンドルごと消えることがあるため。
+ *
+ * 相手の style は書き換えない。ハンドルは絶対配置なので位置の基準になる祖先が要るが、チャットの枠は
+ * どの表示でも配置済み（実測: 既定表示で relative、シアター表示で fixed）で、指定を足す必要が無い。
+ * それどころか `position` を上書きすると、固定配置で浮いているシアター表示のチャットが元の場所へ
+ * 落ちてレイアウトが崩れる（実測）。
  */
 export type HandleHost = {
   readonly clientWidth: number;
-  readonly style: { setProperty(property: string, value: string): void };
   querySelector(selectors: string): unknown;
   insertAdjacentElement(position: "beforeend", element: InsertableElement): unknown;
 };
@@ -152,6 +165,8 @@ export type ChatResizeOptions = {
   readonly createHandle?: () => Handle;
   /** 幅を当てる先の文書。 */
   readonly styleHost?: StyleHost;
+  /** 幅が変わったことを知らせる先。 */
+  readonly view?: LayoutView;
   /** 画面幅（スクロールバーを含む）。 */
   readonly viewportWidth?: () => number;
   /** 差し込みを引き直す周期。実体は setInterval。 */
@@ -170,6 +185,7 @@ export const startChatResize = ({
   findHost = () => document.querySelector<HTMLElement>(CHAT_RESIZE_HOST_SELECTOR),
   createHandle = () => document.createElement("div"),
   styleHost = document,
+  view = window,
   viewportWidth = () => window.innerWidth,
   schedule = setInterval,
 }: ChatResizeOptions = {}): void => {
@@ -222,6 +238,10 @@ export const startChatResize = ({
    *
    * 中断（pointercancel）でも同じ扱いにする。中断された時点の幅は既に当たっているので、
    * 保存しないと次に開いたときだけ戻る、という食い違いになる。
+   *
+   * プレーヤーに測り直させるのは離したときだけにする。動かしている間に毎回知らせると、
+   * その都度 YouTube の再レイアウトが走って手の動きが重くなる。掴んでいる間に追随するのは
+   * チャットの幅で、映像の大きさは手を離してから揃う。
    */
   const release = (): void => {
     if (grip === undefined) return;
@@ -229,6 +249,7 @@ export const startChatResize = ({
     if (dragged === undefined) return;
     void save(dragged);
     dragged = undefined;
+    notifyLayoutChanged(view);
   };
 
   handle.addEventListener("pointerup", release);
@@ -239,9 +260,6 @@ export const startChatResize = ({
     if (host === null || host.querySelector(`#${CHAT_RESIZE_HANDLE_ID}`) !== null) {
       return;
     }
-    // ハンドルは列の左端へ重ねるので、位置の基準がこの要素であることを指定でも確かめておく
-    // （2026-08-02 の観測では既に relative で、指定しても見た目は変わらない）。
-    host.style.setProperty("position", "relative");
     host.insertAdjacentElement("beforeend", handle);
   };
 

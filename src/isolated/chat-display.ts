@@ -63,6 +63,35 @@ export const CHAT_COLUMN_SELECTOR =
   "#secondary:has(ytd-live-chat-frame), #secondary-inner:has(ytd-live-chat-frame)";
 
 /**
+ * 下限を外すプレーヤーの列。
+ *
+ * 2 カラム表示では、YouTube がプレーヤーの列にも下限を持つため、チャットは指定した比率へ届く前に
+ * 止まる。窓が狭いほど強く効き、実測では幅 1061px の窓で 0.45 の指定が 358px（0.34 相当）で止まった。
+ * シアター表示ではプレーヤーが全幅に出てこの下限が効かないため、「シアターのときだけ幅が変わる」
+ * ように見える。設定の範囲を窓の広さによらず使えるよう、こちらの下限も外す。
+ *
+ * 指定した比率のぶんだけプレーヤーが狭くなるのは、幅を決めたのが人だから受け入れる（比率の上限
+ * 0.6 が最後の歯止め）。
+ */
+export const PLAYER_COLUMN_SELECTOR =
+  "ytd-watch-flexy:has(ytd-live-chat-frame) #primary";
+
+/**
+ * 幅を確保しないレイアウト（チャットを閉じているとき）。
+ *
+ * チャットを閉じても YouTube は列の幅をそのまま確保し続ける。本拡張は「次の動画」の列を消して
+ * あるので、閉じたあとの列には何も残らず、空白だけがプレーヤーの隣に居座る（実測: 271px の列が
+ * 残り、プレーヤーの幅は変わらない）。閉じている間は幅を 0 にして、空いた分をプレーヤーへ渡す。
+ *
+ * ただし列にはエンゲージメントパネル（説明・文字起こしなど）も入る。開いているパネルがあるときは
+ * 0 にしない。0 にすると開いたパネルが潰れて読めなくなる。
+ *
+ * この規則は前の規則より詳しい（`:not()` の中に id を含む）ので、順序によらず幅 0 が優先される。
+ */
+export const CHAT_CLOSED_LAYOUT_SELECTOR =
+  'ytd-watch-flexy:has(ytd-live-chat-frame[collapsed]):not(:has(#secondary-inner ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]))';
+
+/**
  * 中身が入らなかった投稿者アイコンの枠（live_chat の文書側）。
  *
  * R3 が応答から `authorPhoto` を落とすと、枠だけが中身なしで残る。枠は 24px 幅・右 16px の
@@ -103,7 +132,11 @@ export const CHAT_DISPLAY_CSS = `${CHAT_LAYOUT_SELECTOR} {
   ${SIDEBAR_WIDTH_VARIABLE}: var(${PANEL_WIDTH_VARIABLE}) !important;
 }
 
-${CHAT_COLUMN_SELECTOR} {
+${CHAT_CLOSED_LAYOUT_SELECTOR} {
+  ${SIDEBAR_WIDTH_VARIABLE}: 0px !important;
+}
+
+${CHAT_COLUMN_SELECTOR}, ${PLAYER_COLUMN_SELECTOR} {
   min-width: 0 !important;
 }
 
@@ -172,6 +205,29 @@ const debug = (...message: unknown[]): void => {
   console.debug("[youtube-super-lite] チャット表示:", ...message);
 };
 
+/** 大きさの変化を知らせる先。実体は window で、テストではフェイクを渡す。 */
+export type LayoutView = {
+  dispatchEvent(event: Event): unknown;
+};
+
+/**
+ * 幅が変わったことをページへ知らせる。
+ *
+ * プレーヤーは自分の大きさを JS で測って持つので、CSS で列の幅を変えても中の映像は前の大きさの
+ * ままになる（実測: 569px の枠に 762px の映像が残り、はみ出したまま再生が続いた）。`resize` を
+ * 投げると測り直して収まる。
+ *
+ * 知らせるのはページ自身が既に聞いているイベントだけで、YouTube 側の関数は呼ばない。聞いていない
+ * 版では何も起きず、幅だけが変わる。
+ */
+export const notifyLayoutChanged = (view: LayoutView = window): void => {
+  try {
+    view.dispatchEvent(new Event("resize"));
+  } catch (error) {
+    debug("測り直しの通知に失敗した", error);
+  }
+};
+
 /**
  * 設定を今の文書へ当てる。何度呼んでも結果は同じ（SPA 遷移ごとに呼ぶ）。
  *
@@ -232,6 +288,7 @@ export const applyPanelWidth = (
 export type ChatDisplayOptions = {
   readonly store?: SettingsStore;
   readonly host?: StyleHost;
+  readonly view?: LayoutView;
   readonly navigate?: (apply: () => void) => void;
 };
 
@@ -248,19 +305,27 @@ export type ChatDisplayOptions = {
 export const startChatDisplay = ({
   store = localSettingsStore,
   host = document,
+  view = window,
   navigate = onNavigated,
 }: ChatDisplayOptions = {}): void => {
+  /**
+   * 当てて、幅が変わったことを知らせる。
+   *
+   * 知らせるのは当てるたびで、幅が変わっていない呼び出し（遷移後の当て直しなど）も含む。変わった
+   * かどうかを覚えて省くより、毎回投げて余分な測り直しを 1 回させるほうが取りこぼしが無い。
+   */
+  const apply = (settings: ChatDisplaySettings): void => {
+    applyChatDisplay(settings, host);
+    notifyLayoutChanged(view);
+  };
+
   const applyFromStore = (): Promise<void> =>
-    applySection(store, chatDisplaySection, (settings) =>
-      applyChatDisplay(settings, host),
-    );
+    applySection(store, chatDisplaySection, apply);
 
   // document_start では onNavigated が DOMContentLoaded まで初回を遅らせるので、そこを待たずに当てる。
   void applyFromStore();
 
-  watchSection(store, chatDisplaySection, (settings) =>
-    applyChatDisplay(settings, host),
-  );
+  watchSection(store, chatDisplaySection, apply);
 
   // 遷移では文書が作り直されないので、当てた CSS が残っているとは限らない。当て直す。
   navigate(() => {

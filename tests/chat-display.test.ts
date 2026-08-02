@@ -4,12 +4,14 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import {
+  CHAT_CLOSED_LAYOUT_SELECTOR,
   CHAT_COLUMN_SELECTOR,
   CHAT_DISPLAY_CSS,
   CHAT_DISPLAY_STYLE_ID,
   CHAT_EMPTY_AVATAR_SELECTOR,
   CHAT_LAYOUT_SELECTOR,
   CHAT_MESSAGE_SELECTOR,
+  PLAYER_COLUMN_SELECTOR,
   applyChatDisplay,
   applyPanelWidth,
   chatDisplayVariables,
@@ -152,6 +154,35 @@ describe("適用先のセレクタ", () => {
     expect(CHAT_COLUMN_SELECTOR).toBe(
       "#secondary:has(ytd-live-chat-frame), #secondary-inner:has(ytd-live-chat-frame)",
     );
+  });
+
+  /**
+   * プレーヤーの列の下限も外す。外さないと 2 カラム表示でチャットが指定の比率へ届かず
+   * （実測: 幅 1061px の窓で 0.45 の指定が 358px で止まる）、「シアター表示のときだけ
+   * 幅が変わる」ように見える。
+   */
+  test("幅の下限はプレーヤーの列からも外す", () => {
+    expect(PLAYER_COLUMN_SELECTOR).toBe(
+      "ytd-watch-flexy:has(ytd-live-chat-frame) #primary",
+    );
+
+    const rule = CHAT_DISPLAY_CSS.slice(CHAT_DISPLAY_CSS.indexOf(PLAYER_COLUMN_SELECTOR));
+    expect(rule).toContain("min-width: 0 !important");
+  });
+
+  /**
+   * チャットを閉じている間は列に幅を持たせない。持たせたままだと、「次の動画」を消してある本拡張
+   * では空白だけが残り、プレーヤーも広がらない。開いているパネルがあるときは畳まない。
+   */
+  test("閉じているチャットの列は幅を 0 にする", () => {
+    expect(CHAT_CLOSED_LAYOUT_SELECTOR).toBe(
+      'ytd-watch-flexy:has(ytd-live-chat-frame[collapsed]):not(:has(#secondary-inner ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]))',
+    );
+
+    const rule = CHAT_DISPLAY_CSS.slice(
+      CHAT_DISPLAY_CSS.indexOf(CHAT_CLOSED_LAYOUT_SELECTOR),
+    );
+    expect(rule).toContain("--ytd-watch-flexy-sidebar-width: 0px !important");
   });
 
   test("文字サイズは発言の一覧の直下の子を名指しする", () => {
@@ -362,9 +393,17 @@ describe("startChatDisplay", () => {
     // 登録時には呼ばない。document_start では onNavigated が初回を DOMContentLoaded まで
     // 遅らせるので、そこを待たずに当てることを起動時の適用として検査するため。
     const navigated: (() => void)[] = [];
+    // 幅が変わったことをページへ知らせたかを覗く。実体は window。
+    const notified: string[] = [];
     startChatDisplay({
       store,
       host: dom.host,
+      view: {
+        dispatchEvent: (event: Event) => {
+          notified.push(event.type);
+          return true;
+        },
+      },
       navigate: (apply) => {
         navigated.push(apply);
       },
@@ -372,6 +411,7 @@ describe("startChatDisplay", () => {
     return {
       store,
       dom,
+      notified,
       navigate: () => {
         for (const apply of navigated) apply();
       },
@@ -395,6 +435,18 @@ describe("startChatDisplay", () => {
     await flush();
 
     expect(fontSize(dom.variables)).toBe("16px");
+  });
+
+  /**
+   * 幅を当てただけではプレーヤーの中の映像は前の大きさのままなので、当てたことを知らせる。
+   * 保存値が届いた初回にも要る（保存された幅で開いた watch ページがはみ出したままになる）。
+   */
+  test("当てたらプレーヤーへ測り直させる", async () => {
+    const { notified } = start({ chatDisplay: { fontSizePx: 22, panelWidthRatio: 0.4 } });
+
+    await flush();
+
+    expect(notified).toEqual(["resize"]);
   });
 
   test("設定が変わったら当て直す", async () => {

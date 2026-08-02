@@ -63,30 +63,35 @@ const fakeHandle = (): {
   };
 };
 
-/** 差し込み先のフェイク。差し込まれたつまみと、指定した位置の基準を覗ける。 */
+/**
+ * 差し込み先のフェイク。差し込まれたつまみを覗ける。
+ *
+ * `style` は型（HandleHost）に無いが、フェイクには持たせてある。実装が相手の指定を書き換えたら
+ * テストで気付けるようにするため。書き換えてはいけない理由は chat-resize の HandleHost にある。
+ */
 const fakeHost = (
   clientWidth: number,
-): { host: HandleHost; inserted: { id: string }[]; styles: Map<string, string> } => {
+): { host: HandleHost; inserted: { id: string }[]; styleWrites: string[] } => {
   const inserted: { id: string }[] = [];
-  const styles = new Map<string, string>();
-  return {
-    host: {
-      clientWidth,
-      style: {
-        setProperty: (property, value) => {
-          styles.set(property, value);
-        },
-      },
-      querySelector: (selectors) =>
-        inserted.find((element) => selectors === `#${element.id}`) ?? null,
-      insertAdjacentElement: (_position, element) => {
-        inserted.push(element);
-        return element;
+  const styleWrites: string[] = [];
+  const host = {
+    clientWidth,
+    style: {
+      setProperty: (property: string, value: string): void => {
+        styleWrites.push(`${property}: ${value}`);
       },
     },
-    inserted,
-    styles,
+    querySelector: (selectors: string): unknown =>
+      inserted.find((element) => selectors === `#${element.id}`) ?? null,
+    insertAdjacentElement: (
+      _position: "beforeend",
+      element: { id: string },
+    ): unknown => {
+      inserted.push(element);
+      return element;
+    },
   };
+  return { host: host as HandleHost, inserted, styleWrites };
 };
 
 const pointer = (clientX: number, pointerId = 1): DragPointer & {
@@ -140,12 +145,20 @@ const start = (
   const host = fakeHost(options.clientWidth ?? 400);
   const style = fakeStyleHost();
   const scheduled: (() => void)[] = [];
+  // 幅が変わったことをページへ知らせたかを覗く。実体は window。
+  const notified: string[] = [];
   startChatResize({
     store,
     persistent: persistentStore.store,
     findHost: () => (options.hostMissing === true ? null : host.host),
     createHandle: () => handle.handle,
     styleHost: style.styleHost,
+    view: {
+      dispatchEvent: (event: Event) => {
+        notified.push(event.type);
+        return true;
+      },
+    },
     viewportWidth: () => options.viewportWidth ?? 1000,
     schedule: (task) => {
       scheduled.push(task);
@@ -157,6 +170,7 @@ const start = (
     stored,
     persisted: persistentStore.stored,
     variables: style.variables,
+    notified,
     tick: () => {
       for (const task of scheduled) task();
     },
@@ -212,21 +226,37 @@ describe("ハンドルの差し込み", () => {
   });
 
   /** 掴める場所が見えなければハンドルは無いのと同じ。太さ・カーソル・重なり順を固定する。 */
-  test("列の左端に重なる見た目を持つ", () => {
+  test("チャットの左端に重なる見た目を持つ", () => {
     const { handle } = start();
 
     expect(handle.styles.get("position")).toBe("absolute");
     expect(handle.styles.get("left")).toBe("0");
     expect(handle.styles.get("cursor")).toBe("col-resize");
     expect(Number(handle.styles.get("width")?.replace("px", ""))).toBeGreaterThan(0);
-    // チャットの枠が持つ z-index（実測 600）より前に出ていないと掴めない。
+    // チャットの中身（iframe、実測 z-index 600）より前に出ていないと掴めない。
     expect(Number(handle.styles.get("z-index"))).toBeGreaterThan(600);
   });
 
-  test("重ねる位置の基準を差し込み先に持たせる", () => {
-    const { host } = start();
+  /**
+   * 当たり判定を親に頼らない。列全体を `pointer-events: none` にしている版があり、
+   * 継承したままだと掴めない。
+   */
+  test("当たり判定を自分で宣言する", () => {
+    const { handle } = start();
 
-    expect(host.styles.get("position")).toBe("relative");
+    expect(handle.styles.get("pointer-events")).toBe("auto");
+  });
+
+  /**
+   * 差し込み先の指定は書き換えない。シアター表示のチャットは固定配置で浮いているので、
+   * position を上書きすると元の場所へ落ちてレイアウトが崩れる（実測）。
+   */
+  test("差し込み先の指定を書き換えない", () => {
+    const { host, tick } = start();
+
+    tick();
+
+    expect(host.styleWrites).toEqual([]);
   });
 
   // 差し込み先は遷移で作り直される。周期で引き直しても二重に入れないこと。
@@ -357,6 +387,31 @@ describe("ドラッグの保存", () => {
     expect(stored.chatDisplay).toBeUndefined();
   });
 
+  /**
+   * プレーヤーは自分の大きさを JS で測って持つので、幅を変えただけでは映像がはみ出したまま残る。
+   * 離した時点で測り直させる。
+   */
+  test("離したときにプレーヤーへ測り直させる", () => {
+    const { handle, notified } = start({ clientWidth: 300 });
+
+    handle.fire("pointerdown", pointer(700));
+    handle.fire("pointermove", pointer(600));
+    handle.fire("pointerup", pointer(600));
+
+    expect(notified).toEqual(["resize"]);
+  });
+
+  // 動かすたびに知らせると、その都度 YouTube の再レイアウトが走って手の動きが重くなる。
+  test("動かしている間は測り直させない", () => {
+    const { handle, notified } = start({ clientWidth: 300 });
+
+    handle.fire("pointerdown", pointer(700));
+    handle.fire("pointermove", pointer(650));
+    handle.fire("pointermove", pointer(600));
+
+    expect(notified).toEqual([]);
+  });
+
   test("掴んだだけで動かしていなければ保存しない", async () => {
     const { handle, stored } = start();
 
@@ -391,8 +446,12 @@ describe("ドラッグの保存", () => {
  * 書き換えるなら再確認が要ることを示す。
  */
 describe("差し込み先", () => {
-  test("watch ページのチャットの入れ物を名指しする", () => {
-    expect(CHAT_RESIZE_HOST_SELECTOR).toBe("ytd-watch-flexy #chat-container");
+  /**
+   * 包んでいる入れ物（`#chat-container`）ではなくチャットの枠そのものを指す。シアター表示では
+   * 入れ物が幅 0 の目印だけになり、そちらへ付けるとハンドルがチャットの外へ出る（実測）。
+   */
+  test("watch ページのチャットの枠を名指しする", () => {
+    expect(CHAT_RESIZE_HOST_SELECTOR).toBe("ytd-watch-flexy ytd-live-chat-frame");
   });
 
   test("引き直しの周期を持つ", () => {
