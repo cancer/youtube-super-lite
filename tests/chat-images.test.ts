@@ -361,7 +361,11 @@ describe("アバターの選択的除去", () => {
     ).toBeUndefined();
   });
 
-  test("スーパーチャットに付く creatorThumbnail から画像 URL が落ちる", () => {
+  /**
+   * ❤ のアイコンはチャンネル所有者のもので、1 配信に 1 種類しか出てこない。
+   * 落とす基準は視聴者ごとに増えるかどうかなので、これは残る側に入る。
+   */
+  test("スーパーチャットに付く creatorThumbnail は残る", () => {
     const paid = {
       liveChatPaidMessageRenderer: {
         purchaseAmountText: { simpleText: "￥500" },
@@ -389,15 +393,15 @@ describe("アバターの選択的除去", () => {
         "creatorThumbnail",
         "sources",
       ),
-    ).toBeUndefined();
+    ).toHaveLength(1);
   });
 
   /**
    * メンバーバッジの画像（`customThumbnail`、16/32px）は落とさない。
    *
-   * ユーザーの決定（2026-08-01）で「残す」。要件が落とすと定めた 3 カテゴリ（絵文字・スタンプ・
-   * スーパーチャット装飾）に入らず、メンバーの見分けに使われるため。落ちる・落ちないのどちらとも
-   * 決まっていない状態にしないよう、残ることを明示的に固定する。
+   * ユーザーの決定（2026-08-01）で「残す」。バッジの絵柄は配信ごとに数種類しか無く、
+   * 視聴者が増えても種類が増えないうえ、メンバーの見分けに使われるため。落ちる・落ちないの
+   * どちらとも決まっていない状態にしないよう、残ることを明示的に固定する。
    */
   test("メンバーバッジの画像は残る", () => {
     const result = stripChatImages(liveEnvelope(textMessage(memberBadge())));
@@ -472,7 +476,14 @@ describe("アバターの選択的除去", () => {
   });
 });
 
-describe("装飾画像の除去", () => {
+/**
+ * 種類が増えない画像は残す（ユーザー決定 2026-08-02）。
+ *
+ * 絵文字・メンバースタンプ・有料スタンプ・ギフト画像は、配信ごとに決まった枚数を使い回すので、
+ * 視聴時間が延びても取得する URL の種類が増えない。落とす基準は「視聴者ごとに増えるか」なので、
+ * これらは残る側に入る。以前は装飾として落としていたため、落ちない側へ移った決定を固定する。
+ */
+describe("有限個の画像は残す", () => {
   const emojiRun = (): unknown => ({
     emoji: {
       emojiId: "😂",
@@ -495,10 +506,58 @@ describe("装飾画像の除去", () => {
 
   const EMOJI = [...LIVE_ITEM, MESSAGE, "message", "runs", 1, "emoji"] as const;
 
-  test("絵文字の画像 URL が落ちる", () => {
+  test("絵文字の画像 URL が残る", () => {
     const result = stripChatImages(liveEnvelope(emojiMessage()));
 
-    expect(at(result, ...EMOJI, "image", "thumbnails")).toBeUndefined();
+    expect(at(result, ...EMOJI, "image", "thumbnails")).toHaveLength(1);
+  });
+
+  /**
+   * メンバーシップ専用スタンプ。Unicode 絵文字と同じ `emoji` の下に来るが、画像は
+   * `yt3.ggpht.com` のチャンネル固有のもので `isCustomEmoji: true` が付く。
+   * 報告された不具合そのものなので、外形を写して個別に固定する。
+   */
+  const memberEmojiMessage = (): unknown => ({
+    liveChatTextMessageRenderer: {
+      message: {
+        runs: [
+          { text: "おつ" },
+          {
+            emoji: {
+              emojiId: "UCkszU2WH9gy1mb0dV-11UJg/hFOwR8-kEo-3",
+              shortcuts: [":_おつ:", ":おつ:"],
+              searchTerms: ["おつ"],
+              image: {
+                thumbnails: [
+                  { url: "https://yt3.ggpht.com/hFOwR8=w24-h24-c-k-nd", width: 24, height: 24 },
+                  { url: "https://yt3.ggpht.com/hFOwR8=w48-h48-c-k-nd", width: 48, height: 48 },
+                ],
+                accessibility: { accessibilityData: { label: ":_おつ:" } },
+              },
+              isCustomEmoji: true,
+            },
+          },
+        ],
+      },
+      authorName: { simpleText: "@member" },
+      authorPhoto: authorPhoto(),
+      authorBadges: [memberBadge()],
+    },
+  });
+
+  test("メンバーシップ専用スタンプの画像 URL が残る", () => {
+    const result = stripChatImages(liveEnvelope(memberEmojiMessage()));
+
+    expect(
+      at(result, ...LIVE_ITEM, MESSAGE, "message", "runs", 1, "emoji", "image", "thumbnails"),
+    ).toHaveLength(2);
+  });
+
+  // スタンプが残っても、その投稿者のアイコンは落ちたまま。基準が別なので同時に固定する。
+  test("メンバーの投稿はスタンプが残っても authorPhoto は落ちる", () => {
+    const result = stripChatImages(liveEnvelope(memberEmojiMessage()));
+
+    expect(at(result, ...LIVE_ITEM, MESSAGE, "authorPhoto")).toBeUndefined();
   });
 
   test("絵文字の shortcuts と代替テキストは残る", () => {
@@ -539,10 +598,17 @@ describe("装飾画像の除去", () => {
 
   const STICKER = [...LIVE_ITEM, "liveChatPaidStickerRenderer"] as const;
 
-  test("スタンプの画像 URL が落ちる", () => {
+  test("スタンプの画像 URL が残る", () => {
     const result = stripChatImages(liveEnvelope(paidSticker()));
 
-    expect(at(result, ...STICKER, "sticker", "thumbnails")).toBeUndefined();
+    expect(at(result, ...STICKER, "sticker", "thumbnails")).toHaveLength(2);
+  });
+
+  // 有料スタンプの投稿者アイコンは視聴者ごとに違うので、スタンプが残っても落ちる。
+  test("スタンプの投稿者の authorPhoto は落ちる", () => {
+    const result = stripChatImages(liveEnvelope(paidSticker()));
+
+    expect(at(result, ...STICKER, "authorPhoto")).toBeUndefined();
   });
 
   test("スタンプの代替テキストは残る", () => {
@@ -553,7 +619,7 @@ describe("装飾画像の除去", () => {
     ).toBe("スタンプの名前");
   });
 
-  // 装飾のうち画像でないもの（金額・色）は表示の手掛かりなので触らない。
+  // 画像でないもの（金額・色）はそもそも除去の対象外。
   test("スーパーチャットの金額と色は残る", () => {
     const result = stripChatImages(liveEnvelope(paidSticker()));
 
@@ -576,10 +642,10 @@ describe("装飾画像の除去", () => {
 
   const GIFT = [...LIVE_ITEM, "giftMessageViewModel"] as const;
 
-  test("ギフト画像の URL が落ちる", () => {
+  test("ギフト画像の URL が残る", () => {
     const result = stripChatImages(liveEnvelope(gift()));
 
-    expect(at(result, ...GIFT, "giftImage", "sources")).toBeUndefined();
+    expect(at(result, ...GIFT, "giftImage", "sources")).toHaveLength(2);
   });
 
   test("ギフトの説明テキストは残る", () => {
@@ -628,45 +694,20 @@ describe("装飾画像の除去", () => {
 
     const result = stripChatImages(ticker);
 
-    expect(at(result, ...nested, "sticker", "thumbnails")).toBeUndefined();
     expect(at(result, ...nested, "authorPhoto")).toBeUndefined();
+    expect(at(result, ...nested, "sticker", "thumbnails")).toHaveLength(2);
   });
 });
 
 /**
  * バッジによる例外がどこまで効くか。
  *
- * 例外が掛かるのは `authorPhoto` だけで、`authorAvatar`・`sponsorPhoto`・`creatorThumbnail` は
- * 投稿者がモデレーターやオーナーでも落ちる。要件は「表示対象外の投稿者の authorPhoto を落とす」と
- * 鍵を名指しで定めており、ギフト・ティッカー・❤ の画像は残す対象ではなく、落とす側の
- * 「スーパーチャット装飾」に属するため。実装の取りこぼしと読み違えられないよう、経路ごとに固定する。
+ * 例外が掛かるのは `authorPhoto` だけで、`authorAvatar`・`sponsorPhoto` は投稿者が
+ * モデレーターやオーナーでも落ちる。どちらも視聴者ごとに違うアイコンなので落とす側に居るが、
+ * バッジを見る例外は `authorPhoto` の鍵名を指して定めたものであり、別の鍵へは広げていない。
+ * 実装の取りこぼしと読み違えられないよう、経路ごとに固定する。
  */
 describe("バッジの例外が掛からない画像", () => {
-  test("モデレーターのスーパーチャットでも creatorThumbnail は落ちる", () => {
-    const paid = {
-      liveChatPaidMessageRenderer: {
-        purchaseAmountText: { simpleText: "￥500" },
-        authorPhoto: authorPhoto(),
-        authorBadges: [iconBadge("MODERATOR")],
-        creatorHeartButton: {
-          creatorHeartViewModel: {
-            creatorThumbnail: {
-              sources: [{ url: "https://yt3.ggpht.com/c=s48-c-k-c0x00ffffff-no-rj" }],
-            },
-          },
-        },
-      },
-    };
-    const renderer = [...LIVE_ITEM, "liveChatPaidMessageRenderer"] as const;
-
-    const result = stripChatImages(liveEnvelope(paid));
-
-    expect(at(result, ...renderer, "authorPhoto", "thumbnails")).toHaveLength(2);
-    expect(
-      at(result, ...renderer, "creatorHeartButton", "creatorHeartViewModel", "creatorThumbnail", "sources"),
-    ).toBeUndefined();
-  });
-
   test("モデレーターのティッカー項目でも sponsorPhoto は落ちる", () => {
     const ticker = {
       liveChatTickerSponsorItemRenderer: {
@@ -760,12 +801,13 @@ describe("混在バッチ", () => {
     expect(at(result, ...liveItem(2), MESSAGE, "authorPhoto")).toBeUndefined();
   });
 
-  test("同じバッチのギフトは、隣にモデレーターが居ても画像が落ちる", () => {
+  test("アバターを落とす発言と同じバッチでもギフト画像は残る", () => {
     const result = stripChatImages(
       liveEnvelope(textMessage(iconBadge("MODERATOR")), textMessage(), giftItem()),
     );
 
-    expect(at(result, ...liveItem(2), "giftMessageViewModel", "giftImage", "sources")).toBeUndefined();
+    expect(at(result, ...liveItem(1), MESSAGE, "authorPhoto")).toBeUndefined();
+    expect(at(result, ...liveItem(2), "giftMessageViewModel", "giftImage", "sources")).toHaveLength(1);
     expect(at(result, ...liveItem(2), "giftMessageViewModel", "giftImageA11yLabel")).toBe(
       "@… さんから かき氷 のギフトが送られました",
     );
@@ -864,6 +906,10 @@ describe("変換の冪等性", () => {
     const result = stripChatImages(payload);
 
     expect(at(result, ...liveItem(0), MESSAGE, "authorPhoto", "thumbnails")).toHaveLength(2);
+    expect(
+      at(result, ...liveItem(2), "liveChatPaidStickerRenderer", "sticker", "thumbnails"),
+    ).toHaveLength(1);
+    expect(at(result, ...liveItem(3), "giftMessageViewModel", "giftImage", "sources")).toHaveLength(1);
     expect(at(result, ...liveItem(3), "giftMessageViewModel", "giftImageA11yLabel")).toBe(
       "ギフト",
     );
