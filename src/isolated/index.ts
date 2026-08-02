@@ -1,4 +1,5 @@
 import { publishSection } from "../shared/bridge";
+import { equalizerSection } from "../shared/equalizer";
 import { onNavigated } from "../shared/navigation";
 import {
   chatDisplaySection,
@@ -27,7 +28,10 @@ import { applyDeclutter, unmatchedGroupNames } from "./declutter";
  * 保存されている全区画（service worker 側の一覧）とは別物で、こちらは MAIN world で必要な分だけに
  * 絞る。配送経路はページの JS から観測できるので、載せる情報を最小限に保つため。
  */
-const deliveredSections: readonly SettingsSection<unknown>[] = [chatDisplaySection];
+const deliveredSections: readonly SettingsSection<unknown>[] = [
+  chatDisplaySection,
+  equalizerSection,
+];
 
 const deliverAll = async (): Promise<void> => {
   for (const section of deliveredSections) {

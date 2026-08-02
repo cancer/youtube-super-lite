@@ -12,6 +12,23 @@
     -->
     <section id="equalizer">
       <h2>イコライザ</h2>
+      <!--
+        3 ノブの値域（ゲインの端・カットオフの段）は shared/equalizer が唯一の出所なので、
+        ここには書かない。range の min/max と select の選択肢は側パネルの JS が組み立てる。
+      -->
+      <p>
+        <label for="eq-voice-gain">声の強調</label>
+        <input id="eq-voice-gain" type="range" step="0.5" />
+        <output id="eq-voice-gain-value" for="eq-voice-gain"></output>
+      </p>
+      <p>
+        <label for="eq-lowpass">高域カット</label>
+        <select id="eq-lowpass"></select>
+      </p>
+      <p>
+        <label for="eq-highpass">低域カット</label>
+        <select id="eq-highpass"></select>
+      </p>
     </section>
     <section id="chat-display">
       <h2>チャット表示</h2>
