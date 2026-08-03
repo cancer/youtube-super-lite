@@ -6,6 +6,7 @@ import {
   applySection,
   chatDisplaySection,
   clampToRange,
+  patchSection,
   readSection,
   repairSection,
   seedSection,
@@ -347,6 +348,62 @@ describe("拡張コンテキストの失効", () => {
     await expect(
       writeSection(broken, chatDisplaySection, chatDisplaySection.defaults),
     ).rejects.toThrow("storage が壊れた");
+  });
+});
+
+/**
+ * フィールド単位の書き換え。
+ *
+ * 1 つの区画を複数の操作面が分担して持つ（R5 の幅はページ内のハンドル、文字サイズはサイドパネル）
+ * ので、片方の操作が相手のフィールドを巻き込まないことをここで固定する。
+ */
+describe("patchSection", () => {
+  test("渡したフィールドだけを書き換える", async () => {
+    const { store, stored } = fakeStore({
+      chatDisplay: { fontSizePx: 11, panelWidthRatio: 0.2 },
+    });
+
+    await patchSection(store, chatDisplaySection, { panelWidthRatio: 0.4 });
+
+    expect(stored.chatDisplay).toEqual({ fontSizePx: 11, panelWidthRatio: 0.4 });
+  });
+
+  /**
+   * 保存が無い区画では、渡したフィールドだけが保存される。既定値で埋めてしまうと、その後に別の面が
+   * 自分のフィールドを保存したときに「既定値が保存されている」と見分けられなくなる。
+   */
+  test("保存が無ければ渡したフィールドだけを保存する", async () => {
+    const { store, stored } = fakeStore();
+
+    await patchSection(store, chatDisplaySection, { panelWidthRatio: 0.4 });
+
+    expect(stored.chatDisplay).toEqual({ panelWidthRatio: 0.4 });
+  });
+
+  // 残す側の値は生のまま持ち越す（範囲は読み出しの normalize が保証する）。
+  test("残すフィールドは保存値のまま持ち越す", async () => {
+    const { store, stored } = fakeStore({ chatDisplay: { fontSizePx: 400 } });
+
+    await patchSection(store, chatDisplaySection, { panelWidthRatio: 0.4 });
+
+    expect(stored.chatDisplay).toEqual({ fontSizePx: 400, panelWidthRatio: 0.4 });
+  });
+
+  test("型違いの保存値でも例外を投げず、渡したフィールドを保存する", async () => {
+    const { store, stored } = fakeStore({ chatDisplay: "壊れた値" });
+
+    await patchSection(store, chatDisplaySection, { panelWidthRatio: 0.4 });
+
+    expect(stored.chatDisplay).toEqual({ panelWidthRatio: 0.4 });
+  });
+
+  test("失効していれば保存しない", async () => {
+    const { store, stored, invalidate } = fakeStore();
+    invalidate();
+
+    await patchSection(store, chatDisplaySection, { panelWidthRatio: 0.4 });
+
+    expect(stored.chatDisplay).toBeUndefined();
   });
 });
 

@@ -3,8 +3,7 @@ import {
   chatDisplaySection,
   clampToRange,
   localSettingsStore,
-  readSection,
-  writeSection,
+  patchSection,
   type SettingsStore,
 } from "../shared/settings";
 import {
@@ -206,16 +205,16 @@ export const startChatResize = ({
   /**
    * 幅を保存する。
    *
-   * 読んでから書くのは、区画の他の設定（文字サイズ）を保ったまま幅だけを差し替えるため。
-   * 失効していれば読み出しが undefined を返すので、そのまま何も書かない。
+   * 書き換えるのは幅のフィールドだけにする。区画ごと書き戻すと、同じ区画にある文字サイズ
+   * （操作するのはサイドパネル）を巻き込む。保存がまだ無い保存先では読み出しが既定値を返すので、
+   * 幅を動かしただけで文字サイズが既定値に戻ってしまう。
    */
   const save = async (panelWidthRatio: number): Promise<void> => {
-    const settings = await readSection(store, chatDisplaySection);
-    if (settings === undefined) return;
-    const next = { ...settings, panelWidthRatio };
     // 今見ているタブへ先に当てる。次に開くタブの初期値は、このタブの見た目には関係しないので後。
-    if (store !== persistent) await writeSection(store, chatDisplaySection, next);
-    await writeSection(persistent, chatDisplaySection, next);
+    if (store !== persistent) {
+      await patchSection(store, chatDisplaySection, { panelWidthRatio });
+    }
+    await patchSection(persistent, chatDisplaySection, { panelWidthRatio });
   };
 
   handle.addEventListener("pointerdown", (event) => {

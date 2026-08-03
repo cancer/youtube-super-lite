@@ -360,6 +360,37 @@ describe("ドラッグの保存", () => {
     expect(savedRatio(persisted)).toBe(0.4);
   });
 
+  /**
+   * 実際に起きた壊れ方の再現。保存がまだ無い保存先で幅を動かすと、区画ごと読んで書き戻す実装では
+   * 読み出しが既定値を返すため、文字サイズが既定値で保存される。別の面（サイドパネル）で決めた値を
+   * 幅の操作が消してしまうので、書くのは幅のフィールドだけにする。
+   */
+  test("保存が無い保存先では文字サイズを書かない", async () => {
+    const { handle, stored } = start({ clientWidth: 300 });
+
+    handle.fire("pointerdown", pointer(700));
+    handle.fire("pointermove", pointer(600));
+    handle.fire("pointerup", pointer(600));
+    await flush();
+
+    expect(stored.chatDisplay).toEqual({ panelWidthRatio: 0.4 });
+  });
+
+  // 幅だけが未保存の区画でも、既にある文字サイズは触らない。
+  test("幅が未保存でも文字サイズはそのまま残る", async () => {
+    const { handle, stored } = start({
+      clientWidth: 300,
+      stored: { chatDisplay: { fontSizePx: 11 } },
+    });
+
+    handle.fire("pointerdown", pointer(700));
+    handle.fire("pointermove", pointer(600));
+    handle.fire("pointerup", pointer(600));
+    await flush();
+
+    expect(stored.chatDisplay).toEqual({ fontSizePx: 11, panelWidthRatio: 0.4 });
+  });
+
   // 区画ごと書き換わるので、幅だけを差し替えて他の設定を保つこと。
   test("同じ区画の文字サイズは保つ", async () => {
     const { handle, stored } = start({

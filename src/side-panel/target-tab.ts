@@ -2,6 +2,7 @@ import { PERSISTED_SECTIONS } from "../shared/sections";
 import {
   applySection,
   localSettingsStore,
+  patchSection,
   seedSection,
   sessionSettingsStore,
   watchSection,
@@ -59,6 +60,16 @@ export type TargetTab = {
   ) => void;
   /** 区画の値を相手のタブへ当て、次に開くタブの初期値としても残す。 */
   readonly apply: <T>(section: SettingsSection<T>, value: T) => Promise<void>;
+  /**
+   * 区画のうち渡したフィールドだけを相手のタブへ当て、次に開くタブの初期値としても残す。
+   *
+   * 区画を複数の操作面で分担しているとき（R5 の幅はページ内のハンドルが持つ）はこちらを使う。
+   * apply だと、パネルが持たないフィールドまで自分の手元の値で上書きしてしまう。
+   */
+  readonly patch: <T>(
+    section: SettingsSection<T>,
+    patch: Partial<T>,
+  ) => Promise<void>;
   /** 相手を探し始める。操作 UI の登録がすべて済んでから呼ぶ。 */
   readonly start: () => Promise<void>;
 };
@@ -121,6 +132,14 @@ export const createTargetTab = ({
       await writeSection(persistent, section, value);
     },
 
+    patch: async (section, patch) => {
+      // 当てる順序と相手は apply と同じ。違いは「区画ごと」か「フィールドだけ」かだけ。
+      if (store !== undefined && store !== persistent) {
+        await patchSection(store, section, patch);
+      }
+      await patchSection(persistent, section, patch);
+    },
+
     start: async () => {
       const tab = await activeTab();
       if (tab === undefined) {
@@ -168,6 +187,9 @@ export const followTargetTab = targetTab.follow;
 
 /** 相手のタブへ当てる。詳細は TargetTab.apply。 */
 export const applyToTargetTab = targetTab.apply;
+
+/** 相手のタブへフィールド単位で当てる。詳細は TargetTab.patch。 */
+export const patchTargetTab = targetTab.patch;
 
 /** 相手を探し始める。パネルの入口が、操作 UI をすべて読み込んだ後で 1 度だけ呼ぶ。 */
 export const startTargetTab = targetTab.start;

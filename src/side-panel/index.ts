@@ -3,6 +3,7 @@ import "./equalizer";
 import {
   CHAT_FONT_SIZE_PX,
   chatDisplaySection,
+  clampToRange,
   watchDeclutterSection,
   type ChatDisplaySettings,
   type NumericRange,
@@ -11,6 +12,7 @@ import {
 import {
   applyToTargetTab,
   followTargetTab,
+  patchTargetTab,
   startTargetTab,
 } from "./target-tab";
 
@@ -54,16 +56,7 @@ const useRange = (
 // 刻みは範囲と違って保存値の仕様ではなく、つまみの操作粒度。文字サイズは 1px。
 useRange(fontSizeInput, CHAT_FONT_SIZE_PX, 1);
 
-/**
- * 相手のタブの今の値。
- *
- * 保存は区画ごと書き換わるので、ここで操作しない設定（パネル幅。ページ内のハンドルが持つ）も
- * 一緒に持っておく必要がある。持たずに書くと、文字サイズを動かすたびに幅が既定値へ戻る。
- */
-let current: ChatDisplaySettings = chatDisplaySection.defaults;
-
 const render = (settings: ChatDisplaySettings): void => {
-  current = settings;
   fontSizeInput.value = String(settings.fontSizePx);
   fontSizeValue.textContent = `${settings.fontSizePx}px`;
 };
@@ -71,16 +64,16 @@ const render = (settings: ChatDisplaySettings): void => {
 /**
  * つまみを動かすたびに保存する。
  *
+ * 書き換えるのは文字サイズのフィールドだけにする。同じ区画にある幅を操作するのはページ内の
+ * ハンドルなので、区画ごと書くとこちらの手元の値で相手の操作を打ち消してしまう。
+ *
  * 表示は保存の往復を待たずにその場で更新する。待つと数値の表示がつまみから遅れて見えるうえ、
  * 操作中に前後した変更通知が届いたときに古い値へ戻って見える。
  */
 const save = (): void => {
-  const settings = chatDisplaySection.normalize({
-    ...current,
-    fontSizePx: Number(fontSizeInput.value),
-  });
-  render(settings);
-  void applyToTargetTab(chatDisplaySection, settings);
+  const fontSizePx = clampToRange(CHAT_FONT_SIZE_PX, Number(fontSizeInput.value));
+  fontSizeValue.textContent = `${fontSizePx}px`;
+  void patchTargetTab(chatDisplaySection, { fontSizePx });
 };
 
 fontSizeInput.addEventListener("input", save);
