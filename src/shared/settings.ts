@@ -277,6 +277,32 @@ export const writeSection = async <T>(
   unlessGoneAway(store, () => store.set({ [section.key]: value }), undefined);
 
 /**
+ * 区画のうち渡したフィールドだけを書き換える。失効していれば書かない。
+ *
+ * 1 つの区画を複数の操作面が分担して持つときに要る（R5 のチャット表示は、幅がページ内のハンドル、
+ * 文字サイズがサイドパネル）。区画ごと書き換える writeSection でこれをやると、書く側は自分が
+ * 持たないフィールドを「読んで書き戻す」ことになり、読めなかった場合（保存が無い・まだ埋まって
+ * いない）に相手のフィールドを既定値で上書きしてしまう。
+ *
+ * 残す側の値は保存されている生の値をそのまま持ち越す。正規化を通さないのは、正規化が未保存の
+ * フィールドを既定値で埋めてしまい、「保存が無い」と「既定値が保存されている」の区別が消えるため。
+ * 範囲外の値が残り得るが、読み出しは必ず normalize を通るので効く値は範囲内に収まる。
+ */
+export const patchSection = async <T>(
+  store: SettingsStore,
+  section: SettingsSection<T>,
+  patch: Partial<T>,
+): Promise<void> =>
+  unlessGoneAway(
+    store,
+    async () => {
+      const stored = asUntrustedRecord((await store.get([section.key]))[section.key]);
+      await store.set({ [section.key]: { ...stored, ...patch } });
+    },
+    undefined,
+  );
+
+/**
  * 保存が無い区画を、別の保存先の値で埋める。既に何か保存されていれば触らない。
  *
  * タブ単位の保存先を永続の保存値から起こすために使う。読み出しの既定値で済ませないのは、

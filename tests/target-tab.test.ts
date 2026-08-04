@@ -161,6 +161,22 @@ describe("相手のタブへ当てる", () => {
     expect(persistent.stored[chatDisplaySection.key]).toEqual(display(26));
   });
 
+  /**
+   * フィールド単位の当て方。区画を複数の操作面で分担しているとき（R5 の幅はページ内のハンドル）、
+   * パネル側の操作が相手のフィールドを巻き込まないこと。
+   */
+  test("フィールド単位で当てると、他のフィールドは残る", async () => {
+    const { target, session, persistent } = setup();
+    await target.start();
+
+    await target.patch(chatDisplaySection, { fontSizePx: 26 });
+
+    expect(session.stored[tabKey(1, chatDisplaySection.key)]).toEqual({
+      ...display(26),
+    });
+    expect(persistent.stored[chatDisplaySection.key]).toEqual({ ...display(26) });
+  });
+
   test("相手のタブで値が変わればパネルも描き直す", async () => {
     const { target, session, rendered } = setup();
     await target.start();

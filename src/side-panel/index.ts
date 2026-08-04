@@ -2,8 +2,8 @@
 import "./equalizer";
 import {
   CHAT_FONT_SIZE_PX,
-  CHAT_PANEL_WIDTH_RATIO,
   chatDisplaySection,
+  clampToRange,
   watchDeclutterSection,
   type ChatDisplaySettings,
   type NumericRange,
@@ -12,6 +12,7 @@ import {
 import {
   applyToTargetTab,
   followTargetTab,
+  patchTargetTab,
   startTargetTab,
 } from "./target-tab";
 
@@ -39,9 +40,7 @@ const requireElement = (id: string): HTMLElement => {
 };
 
 const fontSizeInput = requireInput("chat-font-size");
-const panelWidthInput = requireInput("chat-panel-width");
 const fontSizeValue = requireElement("chat-font-size-value");
-const panelWidthValue = requireElement("chat-panel-width-value");
 
 /** スライダーの可動域を設定の範囲に合わせる。範囲の出所は shared/settings だけにする。 */
 const useRange = (
@@ -54,36 +53,30 @@ const useRange = (
   input.step = String(step);
 };
 
-// 刻みは範囲と違って保存値の仕様ではなく、つまみの操作粒度。文字サイズは 1px、比率は 1%。
+// 刻みは範囲と違って保存値の仕様ではなく、つまみの操作粒度。文字サイズは 1px。
 useRange(fontSizeInput, CHAT_FONT_SIZE_PX, 1);
-useRange(panelWidthInput, CHAT_PANEL_WIDTH_RATIO, 0.01);
 
 const render = (settings: ChatDisplaySettings): void => {
   fontSizeInput.value = String(settings.fontSizePx);
-  panelWidthInput.value = String(settings.panelWidthRatio);
   fontSizeValue.textContent = `${settings.fontSizePx}px`;
-  // 比率はビューポート幅に対する割合なので、目で見て分かる百分率で出す。
-  panelWidthValue.textContent = `${Math.round(settings.panelWidthRatio * 100)}%`;
 };
 
 /**
  * つまみを動かすたびに保存する。
  *
+ * 書き換えるのは文字サイズのフィールドだけにする。同じ区画にある幅を操作するのはページ内の
+ * ハンドルなので、区画ごと書くとこちらの手元の値で相手の操作を打ち消してしまう。
+ *
  * 表示は保存の往復を待たずにその場で更新する。待つと数値の表示がつまみから遅れて見えるうえ、
  * 操作中に前後した変更通知が届いたときに古い値へ戻って見える。
  */
 const save = (): void => {
-  const settings = chatDisplaySection.normalize({
-    fontSizePx: Number(fontSizeInput.value),
-    panelWidthRatio: Number(panelWidthInput.value),
-  });
-  render(settings);
-  void applyToTargetTab(chatDisplaySection, settings);
+  const fontSizePx = clampToRange(CHAT_FONT_SIZE_PX, Number(fontSizeInput.value));
+  fontSizeValue.textContent = `${fontSizePx}px`;
+  void patchTargetTab(chatDisplaySection, { fontSizePx });
 };
 
-for (const input of [fontSizeInput, panelWidthInput]) {
-  input.addEventListener("input", save);
-}
+fontSizeInput.addEventListener("input", save);
 
 followTargetTab(chatDisplaySection, render);
 
