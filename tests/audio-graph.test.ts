@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 
 import {
+  amplitudeOf,
   connectChain,
   createEqualizer,
   createSourceCache,
@@ -39,6 +40,7 @@ const chainSpy = (): {
           Q: { value: 0 },
           gain: { value: 0 },
         })),
+        headroom: { gain: { value: 1 } },
         disconnect: () => {
           released = true;
         },
@@ -94,17 +96,17 @@ const graphSpy = (): {
 };
 
 describe("connectChain", () => {
-  test("source → フィルタ → destination の順に繋ぐ", () => {
+  test("source → 渡された段 → destination の順に繋ぐ", () => {
     const spy = graphSpy();
-    const filters = [spy.node(), spy.node()];
+    const stages = [spy.node(), spy.node()];
     const destination = spy.node();
 
-    connectChain(spy.node(), filters, destination);
+    connectChain(spy.node(), stages, destination);
 
-    expect(spy.wired).toEqual([...filters, destination]);
+    expect(spy.wired).toEqual([...stages, destination]);
   });
 
-  test("フィルタが 1 つも無ければ source を destination へ直結する", () => {
+  test("段が 1 つも無ければ source を destination へ直結する", () => {
     const spy = graphSpy();
     const destination = spy.node();
 
@@ -136,6 +138,20 @@ describe("connectChain", () => {
     expect(() => {
       connectChain(spy.node(), [spy.node(true)], spy.node());
     }).toThrow("繋げない");
+  });
+});
+
+describe("amplitudeOf", () => {
+  test("0dB は等倍", () => {
+    expect(amplitudeOf(0)).toBe(1);
+  });
+
+  test("-6dB はおよそ半分の振幅", () => {
+    expect(amplitudeOf(-6)).toBeCloseTo(0.501, 3);
+  });
+
+  test("-20dB は 1/10 の振幅", () => {
+    expect(amplitudeOf(-20)).toBeCloseTo(0.1, 10);
   });
 });
 
@@ -285,6 +301,70 @@ describe("createEqualizer", () => {
     expect(
       spy.chains[0].filters.map((filter) => filter.frequency.value),
     ).toEqual([10, 1800, 24000]);
+  });
+
+  /**
+   * ブーストした分は最終段で下げる。下げないと、ヘッドルームの無い音源で出力が振り切れて歪む。
+   */
+  test("ブーストした分だけ最終段で振幅を下げる", () => {
+    const spy = chainSpy();
+    const equalizer = createEqualizer(spy.create);
+    equalizer.setSettings({ ...active, voiceGainDb: 12 });
+
+    equalizer.attach({});
+
+    expect(spy.chains[0].headroom.gain.value).toBeCloseTo(0.2512, 4);
+  });
+
+  test("ブーストしていなければ最終段は等倍のまま", () => {
+    const spy = chainSpy();
+    const equalizer = createEqualizer(spy.create);
+    equalizer.setSettings({ ...active, voiceGainDb: 0, lowpassHz: 8000 });
+
+    equalizer.attach({});
+
+    expect(spy.chains[0].headroom.gain.value).toBe(1);
+  });
+
+  test("設定を更新すると最終段の振幅も追随する", () => {
+    const spy = chainSpy();
+    const equalizer = createEqualizer(spy.create);
+    equalizer.setSettings(active);
+    equalizer.attach({});
+
+    equalizer.setSettings({ ...active, voiceGainDb: 12 });
+
+    expect(spy.chains[0].headroom.gain.value).toBeCloseTo(0.2512, 4);
+  });
+
+  /**
+   * 最終段は 0dB でも繋いだままにする。ブーストの有無で着脱すると、その瞬間に音が途切れる。
+   */
+  test("ブーストを戻しても繋ぎ替えずに等倍へ戻すだけ", () => {
+    const spy = chainSpy();
+    const equalizer = createEqualizer(spy.create);
+    equalizer.setSettings({ ...active, voiceGainDb: 12 });
+    equalizer.attach({});
+
+    equalizer.setSettings({ ...active, voiceGainDb: 0, lowpassHz: 8000 });
+
+    expect(spy.chains).toHaveLength(1);
+    expect(spy.chains[0].headroom.gain.value).toBe(1);
+  });
+
+  /**
+   * <video> は SPA 遷移で差し替わり、そのたびにチェーンを張り直す。生まれたての GainNode は
+   * 等倍なので、差し替えの経路で値を書き忘れると遷移するたびに歪みが戻る。
+   */
+  test("差し替えた <video> のチェーンにも最終段の振幅を書く", () => {
+    const spy = chainSpy();
+    const equalizer = createEqualizer(spy.create);
+    equalizer.setSettings({ ...active, voiceGainDb: 12 });
+    equalizer.attach({});
+
+    equalizer.attach({});
+
+    expect(spy.chains[1].headroom.gain.value).toBeCloseTo(0.2512, 4);
   });
 
   test("グラフを作れなくても例外を投げない", () => {
