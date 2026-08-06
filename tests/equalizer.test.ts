@@ -6,6 +6,7 @@ import {
   CUTOFF_Q,
   equalizerSection,
   filterChainOf,
+  headroomGainDb,
   HIGHPASS_STEPS,
   isNeutral,
   LOWPASS_STEPS,
@@ -213,6 +214,40 @@ describe("filterChainOf", () => {
       q: 1.2,
       gainDb: 7.5,
     });
+  });
+});
+
+describe("headroomGainDb", () => {
+  test("ブーストしていなければ下げない", () => {
+    expect(headroomGainDb(settings({ voiceGainDb: 0 }))).toBe(0);
+  });
+
+  test("ブーストした分だけ下げる", () => {
+    expect(headroomGainDb(settings({ voiceGainDb: 12 }))).toBe(-12);
+    expect(headroomGainDb(settings({ voiceGainDb: 6 }))).toBe(-6);
+  });
+
+  test("カットは下げる理由が無いので 0dB", () => {
+    expect(headroomGainDb(settings({ voiceGainDb: -6 }))).toBe(0);
+  });
+
+  test("カットオフだけ効いていても下げない", () => {
+    expect(headroomGainDb(settings({ highpassHz: 150, lowpassHz: 6000 }))).toBe(
+      0,
+    );
+  });
+
+  /**
+   * 効き目はこの打ち消しの関係そのものなので、値の組ではなく関係として固定する。
+   *
+   * 打ち消せるのは peaking が指定どおり持ち上げる分だけ。カットオフを使うと、Web Audio の
+   * lowpass / highpass が Q を dB として解釈することによる通過域のレゾナンス（1 段あたり
+   * 約 +1.74dB）が残るので、チェーン全体の最大値まで相殺できるわけではない。
+   */
+  test("peaking の上げ幅をちょうど打ち消す", () => {
+    const boosted = settings({ voiceGainDb: 9 });
+
+    expect(filterChainOf(boosted)[1].gainDb + headroomGainDb(boosted)).toBe(0);
   });
 });
 
