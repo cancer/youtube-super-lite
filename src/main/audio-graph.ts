@@ -2,6 +2,7 @@ import { subscribeSection } from "../shared/bridge";
 import {
   equalizerSection,
   filterChainOf,
+  headroomGainDb,
   isNeutral,
   type EqualizerSettings,
 } from "../shared/equalizer";
@@ -19,7 +20,8 @@ import { onNavigated } from "../shared/navigation";
  *    「イコライザが効かないだけ」に落とす。
  * 2. AudioContext はページ内で 1 つだけ。遷移のたびに作ると再生スレッドとバッファが積み上がり、
  *    このプロジェクトの最優先の評価軸（長時間視聴での定常メモリ増加）を自分で壊す。
- * 3. 設定の更新でグラフを組み替えない。段の構成は常に 3 段固定で、変えるのは値だけ。
+ * 3. 設定の更新でグラフを組み替えない。段の構成はフィルタ 3 段 + ヘッドルームを空ける 1 段の
+ *    固定構成で、変えるのは値だけ。
  */
 
 /**
@@ -35,10 +37,20 @@ export type FilterNode = {
   readonly gain: { value: number };
 };
 
-/** <video> 1 つに張ったフィルタチェーン。 */
+/**
+ * GainNode のうち、イコライザが書き換える部分だけを表した形。
+ *
+ * 型名を GainNode にしないのは、同名だと本物の GainNode（DOM lib のグローバル型）と読み分けが
+ * つかなくなるため。宣言自体は shadow するだけでエラーにはならない。
+ */
+export type HeadroomNode = { readonly gain: { value: number } };
+
+/** <video> 1 つに張ったチェーン（フィルタ 3 段 + ヘッドルームを空ける 1 段）。 */
 export type MediaChain = {
   /** filterChainOf と同じ並び（highpass → peaking → lowpass）。 */
   readonly filters: readonly FilterNode[];
+  /** ブースト分を下げてヘッドルームを空ける段。フィルタ列の後段に置く。 */
+  readonly headroom: HeadroomNode;
   /** グラフから外す。<video> が差し替わったときに呼ぶ。 */
   readonly disconnect: () => void;
 };
@@ -58,21 +70,21 @@ export type GraphNode = {
 };
 
 /**
- * source → フィルタ列 → destination を直列に繋ぐ。
+ * source → 渡された段を並びのまま → destination と直列に繋ぐ。
  *
  * 途中で失敗したら、source を destination へ直結し直してから例外を投げ直す。source を
  * 作った時点で <video> の音は既にグラフ側へ移っており、繋ぎ終える前に諦めると出口の無い
  * source が残って無音になる。無音は利用者が原因を特定しにくい壊れ方なので、経路を保つ責任は
- * 「フィルタを張れたか」とは独立に果たす。呼び出し側はフィルタを諦めるために例外を受け取る。
+ * 「段を張れたか」とは独立に果たす。呼び出し側はイコライザを諦めるために例外を受け取る。
  */
 export const connectChain = (
   source: GraphNode,
-  filters: readonly GraphNode[],
+  stages: readonly GraphNode[],
   destination: GraphNode,
 ): void => {
   try {
-    filters
-      .reduce((upstream, filter) => upstream.connect(filter), source)
+    stages
+      .reduce((upstream, stage) => upstream.connect(stage), source)
       .connect(destination);
   } catch (error) {
     // 途中まで繋がった枝は行き止まりなので、まとめて外してから繋ぎ直す。
@@ -104,6 +116,15 @@ export const createSourceCache = <Media extends object, Source>(
   };
 };
 
+/**
+ * dB を振幅比へ直す。
+ *
+ * 設定とフィルタの値は dB で扱うのに対し、GainNode.gain は線形の振幅比を取る。この差は
+ * Web Audio のノード API の都合なので、換算は dB と Hz だけを外へ出す shared/equalizer では
+ * なくノードを扱うこちら側に置く。
+ */
+export const amplitudeOf = (db: number): number => 10 ** (db / 20);
+
 export type Equalizer<Media> = {
   /** 設定を差し替える。チェーンは作り直さず、ノードの値だけを書き換える。 */
   readonly setSettings: (settings: EqualizerSettings) => void;
@@ -130,8 +151,8 @@ export const createEqualizer = <Media>(
   let failed = false;
 
   const writeValues = (): void => {
-    const filters = chain?.filters;
-    if (filters === undefined) return;
+    if (chain === undefined) return;
+    const { filters, headroom } = chain;
     filterChainOf(settings).forEach((spec, index) => {
       const filter = filters[index];
       filter.type = spec.type;
@@ -139,6 +160,7 @@ export const createEqualizer = <Media>(
       filter.Q.value = spec.q;
       filter.gain.value = spec.gainDb;
     });
+    headroom.gain.value = amplitudeOf(headroomGainDb(settings));
   };
 
   const ensureChain = (): void => {
@@ -207,12 +229,22 @@ const webAudioChain: ChainFactory<HTMLMediaElement> = (media) => {
   const filters = filterChainOf(equalizerSection.defaults).map(() =>
     context.createBiquadFilter(),
   );
-  connectChain(source, filters, context.destination);
+  /**
+   * ヘッドルームを空ける段。ブーストが 0 のときも外さず、等倍で繋いだままにする（不変条件 3）。
+   *
+   * 最終段に置くのは規約であって数値上の必然ではない。線形フィルタとゲインは可換で、
+   * 内部は float32 なので中間でクリップすることもない。順序を固定するのは、読み手が
+   * 「出力直前の音量調整」として読めるようにするため。
+   */
+  const headroom = context.createGain();
+  connectChain(source, [...filters, headroom], context.destination);
   return {
     filters,
+    headroom,
     disconnect: () => {
       source.disconnect();
       for (const filter of filters) filter.disconnect();
+      headroom.disconnect();
     },
   };
 };
