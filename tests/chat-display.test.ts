@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import {
+  CHAT_APP_SELECTOR,
   CHAT_CLOSED_LAYOUT_SELECTOR,
   CHAT_COLUMN_SELECTOR,
   CHAT_DISPLAY_CSS,
@@ -185,6 +186,18 @@ describe("適用先のセレクタ", () => {
     expect(rule).toContain("--ytd-watch-flexy-sidebar-width: 0px !important");
   });
 
+  /**
+   * チャットの中身の幅の下限も外す。外さないと、狭くしたぶんは折り返しに反映されず枠の外へ出る。
+   * 実測（幅 255px の枠）: 中身は 298px のまま組まれ、はみ出した 43px が枠に切られて、行の右端が
+   * 消える。下限を外すと枠の幅で組み直され、160px まで折り返しが保たれた。
+   */
+  test("チャットの中身の幅の下限は live_chat の入れ物から外す", () => {
+    expect(CHAT_APP_SELECTOR).toBe("yt-live-chat-app");
+
+    const rule = CHAT_DISPLAY_CSS.slice(CHAT_DISPLAY_CSS.indexOf(CHAT_APP_SELECTOR));
+    expect(rule).toContain("min-width: 0 !important");
+  });
+
   test("文字サイズは発言の一覧の直下の子を名指しする", () => {
     expect(CHAT_MESSAGE_SELECTOR).toBe(
       "yt-live-chat-item-list-renderer #items > *",
@@ -209,6 +222,7 @@ describe("適用先のセレクタ", () => {
   test("規則はどのセレクタも持つ", () => {
     expect(CHAT_DISPLAY_CSS).toContain(CHAT_LAYOUT_SELECTOR);
     expect(CHAT_DISPLAY_CSS).toContain(CHAT_COLUMN_SELECTOR);
+    expect(CHAT_DISPLAY_CSS).toContain(CHAT_APP_SELECTOR);
     expect(CHAT_DISPLAY_CSS).toContain(CHAT_MESSAGE_SELECTOR);
     expect(CHAT_DISPLAY_CSS).toContain(CHAT_EMPTY_AVATAR_SELECTOR);
   });
