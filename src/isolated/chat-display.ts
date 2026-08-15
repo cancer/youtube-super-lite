@@ -92,6 +92,23 @@ export const CHAT_CLOSED_LAYOUT_SELECTOR =
   'ytd-watch-flexy:has(ytd-live-chat-frame[collapsed]):not(:has(#secondary-inner ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]))';
 
 /**
+ * チャットの中身を収める入れ物（live_chat の文書側）。
+ *
+ * YouTube 自身が `width: 100vw` と並べて `min-width: 298px` を持たせている
+ * （`ytmainappweb.live_chat_base` のスタイルシート）。枠がそれより狭いと中身は 298px のまま組まれ、
+ * 折り返す位置も 298px を基準にする。溢れたぶんは iframe に切られるので、狭くした幅では行の右端が
+ * 消え、「折り返さない」ように見える。
+ *
+ * 出所: 2026-08-15 に実ブラウザで、配信中のライブのチャットを幅 255px の iframe（実利用と同じ
+ * 埋め込みの形）に入れて確認。中身の幅は 298px、文書の scrollWidth も 298px だった。下限を外すと
+ * 枠の幅（255・200・160px）にそのまま追随して組み直され、横の溢れも消えた。
+ *
+ * 幅を広く取っているときは `width: 100vw` がそのまま効くので、下限を外しても見た目は変わらない。
+ * 幅の下限は設定側にもあるが（0.15）、窓が広いほど px では小さくなるため、そちらでは防げない。
+ */
+export const CHAT_APP_SELECTOR = "yt-live-chat-app";
+
+/**
  * 中身が入らなかった投稿者アイコンの枠（live_chat の文書側）。
  *
  * R3 が応答から `authorPhoto` を落とすと、枠だけが中身なしで残る。枠は 24px 幅・右 16px の
@@ -137,6 +154,10 @@ ${CHAT_CLOSED_LAYOUT_SELECTOR} {
 }
 
 ${CHAT_COLUMN_SELECTOR}, ${PLAYER_COLUMN_SELECTOR} {
+  min-width: 0 !important;
+}
+
+${CHAT_APP_SELECTOR} {
   min-width: 0 !important;
 }
 
