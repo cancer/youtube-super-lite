@@ -242,9 +242,11 @@ describe("createEqualizer", () => {
   });
 
   test("設定の値をフィルタへ filterChainOf の並びで書く", () => {
+    // 見るのは「列をそのままの並びでノードへ写すこと」。プリセットの数値そのものの固定は
+    // equalizer.test.ts の責務なので、ここでは期待値も filterChainOf から作る。
     const spy = chainSpy();
     const equalizer = createEqualizer(spy.create);
-    equalizer.setSettings({ preset: "clarity" });
+    equalizer.setSettings(active);
 
     equalizer.attach({});
 
@@ -255,19 +257,21 @@ describe("createEqualizer", () => {
         filter.Q.value,
         filter.gain.value,
       ]),
-    ).toEqual([
-      ["highpass", 200, Math.SQRT1_2, 0],
-      ["lowshelf", 300, 1, -6],
-      ["peaking", 3000, 1.0, 4],
-      ["lowpass", 8000, Math.SQRT1_2, 0],
-    ]);
+    ).toEqual(
+      filterChainOf(active).map((spec) => [
+        spec.type,
+        spec.frequencyHz,
+        spec.q,
+        spec.gainDb,
+      ]),
+    );
   });
 
   test("設定を更新すると既存のフィルタの種別と値が書き換わる", () => {
     // プリセットごとに段の種別が変わるので、値だけでなく type まで書き直さないと前の音が残る。
     const spy = chainSpy();
     const equalizer = createEqualizer(spy.create);
-    equalizer.setSettings({ preset: "clarity" });
+    equalizer.setSettings(active);
     equalizer.attach({});
     expect(spy.chains[0].filters[0].type).toBe("highpass");
 

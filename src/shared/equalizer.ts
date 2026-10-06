@@ -17,23 +17,26 @@ import { asUntrustedRecord, type SettingsSection } from "./settings";
  * dB と Hz とフィルタ種別だけにしてある。ノードの生成や接続は main/audio-graph が持つ。
  */
 
-export type EqualizerPreset = "off" | "clarity" | "music";
+/**
+ * プリセット名の一覧。型・UI の選択肢の検証・normalize の判定はすべてここから導く。
+ * 一覧と型を別々に書くと、片方だけ足したときに型は通るのに実行時に落ちる。
+ */
+export const EQUALIZER_PRESETS = ["off", "clarity", "music"] as const;
 
-/** プリセット名の一覧。UI の選択肢の検証と normalize の判定はどちらもここを唯一の出所とする。 */
-export const EQUALIZER_PRESETS: readonly EqualizerPreset[] = [
-  "off",
-  "clarity",
-  "music",
-];
+export type EqualizerPreset = (typeof EQUALIZER_PRESETS)[number];
 
 /** イコライザ設定。既定の off がニュートラル（フィルタ無し）。 */
 export type EqualizerSettings = {
   readonly preset: EqualizerPreset;
 };
 
-const isPreset = (value: unknown): value is EqualizerPreset =>
+/** 保存値や HTML の value のように外から来た値が、プリセット名のどれかであるか。 */
+export const isPreset = (value: unknown): value is EqualizerPreset =>
   typeof value === "string" &&
   (EQUALIZER_PRESETS as readonly string[]).includes(value);
+
+/** 音に触らない設定。既定値であり、読み出せない保存値の落とし先でもある。 */
+const NEUTRAL: EqualizerSettings = { preset: "off" };
 
 /**
  * イコライザ設定の区画。
@@ -48,27 +51,27 @@ const isPreset = (value: unknown): value is EqualizerPreset =>
  */
 export const equalizerSection: SettingsSection<EqualizerSettings> = {
   key: "equalizer",
-  defaults: { preset: "off" },
+  defaults: NEUTRAL,
   normalize: (stored) => {
     const raw = asUntrustedRecord(stored).preset;
-    return { preset: isPreset(raw) ? raw : "off" };
+    return { preset: isPreset(raw) ? raw : NEUTRAL.preset };
   },
 };
 
 /** 音に触らない状態か。 */
 export const isNeutral = (settings: EqualizerSettings): boolean =>
-  settings.preset === "off";
+  settings.preset === NEUTRAL.preset;
 
 /**
  * ローパス・ハイパスの Q。
  *
- * 値は移植元（ffmpeg の lowpass / highpass の既定 0.707 ≒ 1/√2）をそのまま引き継いだ。
- * ただし Web Audio の lowpass / highpass は Q を dB で読む（α = sin(ω0) / (2·10^(Q/20))）ので、
- * ffmpeg と違ってこの値は通過域を完全には平坦にせず、カットオフ付近に約 +1.7 dB の山が残る
- * （平坦になるのは Q ≈ -3 dB）。山も含めて今の音なので、値を変えるなら BYPASS_FILTER の doc
- * （同じ理由で素通しをカットオフの退避で表さない）と合わせて見直す。
+ * Web Audio の lowpass / highpass は Q を dB として解釈する（α = sin(ω0) / (2·10^(Q/20))）。
+ * 1/√2 ≒ 0.707 を渡すと通過域は完全には平坦にならず、カットオフ付近に約 +1.7 dB の山が残る
+ * （平坦になるのは Q ≈ -3.01 dB）。要件 R4 はこの山を承知のうえで 1/√2 と定めているので、
+ * その値をそのまま使う。値を変えるなら要件文書と BYPASS_FILTER の doc（同じ理由で素通しを
+ * カットオフの退避で表さない）も合わせて見直す。
  */
-export const CUTOFF_Q = Math.SQRT1_2;
+const CUTOFF_Q = Math.SQRT1_2;
 
 /**
  * フィルタ 1 段の値。Web Audio の BiquadFilterNode へそのまま写せる形にしてある。
