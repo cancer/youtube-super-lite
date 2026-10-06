@@ -33,7 +33,7 @@ let openSession: () => void = () => {};
 
 const sessionStored: Record<string, unknown> = {
   [tabKey(7, "chatDisplay")]: { fontSizePx: 20 },
-  [tabKey(7, "equalizer")]: { voiceGainDb: 3 },
+  [tabKey(7, "equalizer")]: { preset: "clarity" },
   [tabKey(9, "chatDisplay")]: { fontSizePx: 12 },
 };
 

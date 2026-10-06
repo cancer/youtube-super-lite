@@ -1,161 +1,139 @@
-import {
-  asUntrustedRecord,
-  clampToRange,
-  type NumericRange,
-  type SettingsSection,
-} from "./settings";
+import { asUntrustedRecord, type SettingsSection } from "./settings";
 
 /**
  * 要件 R4 のイコライザの値の仕様。
  *
- * バンド構成は多バンドではなく 3 ノブ（ボイス帯域の peaking・ローパス・ハイパス）で、
- * 定数はネイティブ実装の `EqParams` から値ごと引き継いだもの。**拡張側の都合で変えてはならない。**
+ * 設定は周波数やゲインを個別に触る形ではなく、用途で選ぶプリセットにしてある。利用者が
+ * 選びたいのは「何 Hz を何 dB」ではなく「聞き取りたい」「音楽を聴きたい」で、ノブを並べると
+ * 調整の責任を利用者に押し付けることになるため。プリセットの中身（各段の値）はこのモジュールが
+ * 唯一の出所で、UI は名前を選ばせるだけにする。
+ *
+ * - clarity … 聞き取り最優先。ゲーム配信の銃声・エンジン音など重低音を抑え、人の声の
+ *   明瞭帯域を立てる。
+ * - music … 音楽向け。低音の量感を少し足しつつ、300 Hz 付近の濁りを掘ってボーカルの
+ *   輪郭を残す。
  *
  * 音を出す側（Web Audio）の語彙はこのモジュールに閉じない代わりに、外へ出すのは
  * dB と Hz とフィルタ種別だけにしてある。ノードの生成や接続は main/audio-graph が持つ。
  */
 
-/** ボイス帯域 peaking の中心周波数。人声の明瞭度に効く 1〜3kHz の中心。 */
-export const VOICE_FREQ_HZ = 1800;
+export type EqualizerPreset = "off" | "clarity" | "music";
 
-/** ボイス帯域 peaking の Q。1.2 ≒ 1〜3kHz を緩やかに持ち上げる幅。 */
-export const VOICE_Q = 1.2;
-
-/** ボイス帯域ゲインの値域（±dB）。UI のスライダーの端もこの値を唯一の出所とする。 */
-export const VOICE_GAIN_MAX_DB = 12;
-
-/** ボイス帯域ゲインの範囲と既定値。既定の 0dB は「オフ」を表す。 */
-export const VOICE_GAIN_DB: NumericRange = {
-  min: -VOICE_GAIN_MAX_DB,
-  max: VOICE_GAIN_MAX_DB,
-  default: 0,
-};
-
-/** ローパスカットオフの段階。 */
-export const LOWPASS_STEPS: readonly number[] = [
-  1000, 1500, 2000, 3000, 4000, 6000, 8000, 12000, 16000,
+/** プリセット名の一覧。UI の選択肢の検証と normalize の判定はどちらもここを唯一の出所とする。 */
+export const EQUALIZER_PRESETS: readonly EqualizerPreset[] = [
+  "off",
+  "clarity",
+  "music",
 ];
 
-/** ハイパスカットオフの段階。 */
-export const HIGHPASS_STEPS: readonly number[] = [
-  40, 60, 80, 100, 150, 200, 300, 500, 1000,
-];
-
-/**
- * オフのハイパスを置く周波数。
- *
- * フィルタ段は常に 3 つ張ったままにして、オフはノードの取り外しではなく可聴域の外への
- * 退避で表す。設定を変えるたびにグラフを組み替えると、繋ぎ替えの瞬間に音が途切れるため。
- */
-export const BYPASS_HIGHPASS_HZ = 10;
-
-/** オフのローパスを置く周波数。理由は BYPASS_HIGHPASS_HZ と同じ。 */
-export const BYPASS_LOWPASS_HZ = 24000;
-
-/**
- * ローパス・ハイパスの Q。
- *
- * 移植元は Q を指定せず ffmpeg の lowpass / highpass の既定（0.707 ≒ 1/√2、
- * 通過域が最も平坦になる値）に委ねていた。Web Audio の BiquadFilterNode の既定は 1 で
- * カットオフ付近に山ができてしまうため、移植元の音を保つには明示的に置き直す必要がある。
- */
-export const CUTOFF_Q = Math.SQRT1_2;
-
-/**
- * イコライザ設定。全フィールド既定＝ニュートラル（フィルタ無し）。
- *
- * カットオフのオフを undefined ではなく null で表すのは、設定が chrome.storage を
- * 往復するため。undefined のフィールドは保存で消え、オフと「未保存」が区別できなくなる。
- */
+/** イコライザ設定。既定の off がニュートラル（フィルタ無し）。 */
 export type EqualizerSettings = {
-  /** ボイス帯域 peaking のゲイン dB。0 = オフ。 */
-  readonly voiceGainDb: number;
-  /** ローパスカットオフ Hz。null = オフ。 */
-  readonly lowpassHz: number | null;
-  /** ハイパスカットオフ Hz。null = オフ。 */
-  readonly highpassHz: number | null;
+  readonly preset: EqualizerPreset;
 };
 
-/**
- * カットオフをラダーの両端へ収める。数値でない値はオフとして扱う。
- *
- * 段への量子化はしない（移植元の `clamped()` と同じ）。段の間の値でも音は出せるので、
- * 手編集や別経路で入った値を勝手に動かす理由がない。UI での表示は nearestStep が担う。
- */
-const clampCutoff = (steps: readonly number[], value: unknown): number | null =>
-  typeof value === "number" && Number.isFinite(value)
-    ? Math.min(steps[steps.length - 1], Math.max(steps[0], value))
-    : null;
+const isPreset = (value: unknown): value is EqualizerPreset =>
+  typeof value === "string" &&
+  (EQUALIZER_PRESETS as readonly string[]).includes(value);
 
 /**
  * イコライザ設定の区画。
  *
- * normalize は移植元の `clamped()` にあたる。storage の手編集や旧版の残骸で範囲外の値が
- * 入り得るので、範囲は「保存時に守る規約」ではなく「読み出しで必ず通す関門」として扱う。
+ * storage の手編集や旧版の残骸（3 ノブ時代の `{ voiceGainDb, lowpassHz, highpassHz }`）が
+ * 入り得るので、プリセット名は「保存時に守る規約」ではなく「読み出しで必ず通す関門」として扱う。
+ * 旧形式からの移行はしない。旧 3 ノブの値はどのプリセットにも対応しないので、推測で音を
+ * 変えるより off で読み出して選び直してもらう方が利用者の意図に近い。
+ *
+ * 未保存でも必ず値を返す。shared/settings は normalize が undefined を返さないことを前提に
+ * 「未保存」と「拡張コンテキストの失効」を区別している。
  */
 export const equalizerSection: SettingsSection<EqualizerSettings> = {
   key: "equalizer",
-  defaults: { voiceGainDb: 0, lowpassHz: null, highpassHz: null },
+  defaults: { preset: "off" },
   normalize: (stored) => {
-    const raw = asUntrustedRecord(stored);
-    return {
-      voiceGainDb: clampToRange(VOICE_GAIN_DB, raw.voiceGainDb),
-      lowpassHz: clampCutoff(LOWPASS_STEPS, raw.lowpassHz),
-      highpassHz: clampCutoff(HIGHPASS_STEPS, raw.highpassHz),
-    };
+    const raw = asUntrustedRecord(stored).preset;
+    return { preset: isPreset(raw) ? raw : "off" };
   },
 };
 
-/** 3 ノブとも切れている（音に触らない）状態か。 */
+/** 音に触らない状態か。 */
 export const isNeutral = (settings: EqualizerSettings): boolean =>
-  settings.voiceGainDb === VOICE_GAIN_DB.default &&
-  settings.lowpassHz === null &&
-  settings.highpassHz === null;
+  settings.preset === "off";
 
-/** フィルタ 1 段の値。Web Audio の BiquadFilterNode へそのまま写せる形にしてある。 */
+/**
+ * ローパス・ハイパスの Q。
+ *
+ * 値は移植元（ffmpeg の lowpass / highpass の既定 0.707 ≒ 1/√2）をそのまま引き継いだ。
+ * ただし Web Audio の lowpass / highpass は Q を dB で読む（α = sin(ω0) / (2·10^(Q/20))）ので、
+ * ffmpeg と違ってこの値は通過域を完全には平坦にせず、カットオフ付近に約 +1.7 dB の山が残る
+ * （平坦になるのは Q ≈ -3 dB）。山も含めて今の音なので、値を変えるなら BYPASS_FILTER の doc
+ * （同じ理由で素通しをカットオフの退避で表さない）と合わせて見直す。
+ */
+export const CUTOFF_Q = Math.SQRT1_2;
+
+/**
+ * フィルタ 1 段の値。Web Audio の BiquadFilterNode へそのまま写せる形にしてある。
+ *
+ * 4 つの値は段の種別によらず必ず埋める。Web Audio は lowshelf / highshelf で Q を、
+ * lowpass / highpass で gain を無視するが、audio-graph の書き込みは種別を見ずに 4 値とも
+ * 書くので、使わない値にも書ける数値が要る。
+ */
 export type FilterSpec = {
-  readonly type: "highpass" | "peaking" | "lowpass";
+  readonly type: "highpass" | "lowshelf" | "peaking" | "highshelf" | "lowpass";
   readonly frequencyHz: number;
   readonly q: number;
   readonly gainDb: number;
 };
 
 /**
- * 設定をフィルタ列へ変換する。並びがそのまま適用順序（highpass → peaking → lowpass）になる。
+ * 素通しの段。
  *
- * オフのバンドも段としては残し、素通し相当の値を入れる（BYPASS_* を参照）。
- * 段数と並びが設定によらず一定なので、値の更新でグラフを組み替えずに済む。
+ * フィルタ段は常に張ったままにして、オフはノードの取り外しではなく値で表す。設定を変える
+ * たびにグラフを組み替えると、繋ぎ替えの瞬間に音が途切れるため。
+ *
+ * peaking のゲイン 0 dB は周波数・Q によらず完全に平坦になる。旧方式の「カットオフを
+ * 可聴域の外へ退避」は見かけ上オフでも平坦にならない（10 Hz の highpass は Q=1/√2 でも
+ * 通過域に約 +1.7 dB の山が残る）ので、素通しとしてはこちらが確実。
+ */
+const BYPASS_FILTER: FilterSpec = {
+  type: "peaking",
+  frequencyHz: 1000,
+  q: 1,
+  gainDb: 0,
+};
+
+/**
+ * プリセットごとのフィルタ列。段数は 4 で固定し、並びがそのまま適用順序になる。
+ *
+ * 段の種別はプリセットごとに変わる（clarity はカットオフで挟む、music は shelf で挟む）。
+ * 種別の違いは値の 1 つとしてノードに書くので、グラフの組み替えは起きない。
+ */
+const PRESET_CHAINS: Record<EqualizerPreset, readonly FilterSpec[]> = {
+  off: [BYPASS_FILTER, BYPASS_FILTER, BYPASS_FILTER, BYPASS_FILTER],
+  clarity: [
+    // 200 Hz 以下（銃声・エンジン音・足音の重低音）を切る。
+    { type: "highpass", frequencyHz: 200, q: CUTOFF_Q, gainDb: 0 },
+    // 残った低域の量感も落として声の土台を軽くする。
+    { type: "lowshelf", frequencyHz: 300, q: 1, gainDb: -6 },
+    // 子音の明瞭度が決まる 3 kHz を立てる。
+    { type: "peaking", frequencyHz: 3000, q: 1.0, gainDb: 4 },
+    // 8 kHz より上のシャリつき・環境音を落とす。
+    { type: "lowpass", frequencyHz: 8000, q: CUTOFF_Q, gainDb: 0 },
+  ],
+  music: [
+    { type: "lowshelf", frequencyHz: 100, q: 1, gainDb: 3 },
+    // 300 Hz 付近は低音の量感を足すと一緒に膨らんで濁る帯域。ここだけ掘ってボーカルの輪郭を残す。
+    { type: "peaking", frequencyHz: 300, q: 1.2, gainDb: -2 },
+    { type: "peaking", frequencyHz: 2500, q: 1.0, gainDb: 1.5 },
+    { type: "highshelf", frequencyHz: 8000, q: 1, gainDb: 2 },
+  ],
+};
+
+/**
+ * 設定をフィルタ列へ変換する。
+ *
+ * 返る列は設定によらず常に 4 段で、並びがそのまま適用順序。段数と並びが一定なので、
+ * 設定の更新でグラフを組み替えずに値の書き換えだけで済む（audio-graph の不変条件）。
  */
 export const filterChainOf = (
   settings: EqualizerSettings,
-): readonly FilterSpec[] => [
-  {
-    type: "highpass",
-    frequencyHz: settings.highpassHz ?? BYPASS_HIGHPASS_HZ,
-    q: CUTOFF_Q,
-    gainDb: 0,
-  },
-  {
-    type: "peaking",
-    frequencyHz: VOICE_FREQ_HZ,
-    q: VOICE_Q,
-    gainDb: settings.voiceGainDb,
-  },
-  {
-    type: "lowpass",
-    frequencyHz: settings.lowpassHz ?? BYPASS_LOWPASS_HZ,
-    q: CUTOFF_Q,
-    gainDb: 0,
-  },
-];
-
-/**
- * 値に最も近いラダーの段。
- *
- * 保存値は段の上にあるとは限らない（normalize は端へ寄せるだけ）ので、段を選ばせる UI は
- * これを通して表示位置を決める。設定そのものは書き換えない。
- */
-export const nearestStep = (steps: readonly number[], value: number): number =>
-  steps.reduce((best, step) =>
-    Math.abs(value - step) < Math.abs(value - best) ? step : best,
-  );
+): readonly FilterSpec[] => PRESET_CHAINS[settings.preset];

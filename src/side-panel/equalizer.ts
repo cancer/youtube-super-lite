@@ -1,89 +1,58 @@
 import {
+  EQUALIZER_PRESETS,
   equalizerSection,
-  HIGHPASS_STEPS,
-  LOWPASS_STEPS,
-  nearestStep,
-  VOICE_GAIN_DB,
+  type EqualizerPreset,
   type EqualizerSettings,
 } from "../shared/equalizer";
 import { applyToTargetTab, followTargetTab } from "./target-tab";
 
 /**
- * イコライザの操作 UI（要件 R4 の 3 ノブ）。
+ * イコライザの操作 UI（要件 R4）。プリセットを 1 つ選ぶラジオの列。
  *
- * 当てる相手は今見ているタブで、その決まりごとは target-tab が持つ。ここは値を組み立てて
- * 渡すだけで、保存先も配送経路も知らない（storage.onChanged が content script へ直接届く）。
+ * 周波数やゲインを個別に触らせない。利用者が選びたいのは用途（聞き取りたい・音楽を聴きたい）で、
+ * 数値の中身は shared/equalizer が持つ。ここはプリセット名を選ばせて渡すだけで、当てる相手
+ * （今見ているタブ）も保存先も配送経路も知らない（それらは target-tab が持つ）。
  */
 
-/** カットオフのオフを表す option の value。数値の段と混ざらない文字列にしてある。 */
-const OFF = "off";
-
-const requireElement = <T extends Element>(
-  id: string,
-  constructor: new () => T,
-): T => {
-  const element = document.getElementById(id);
-  if (!(element instanceof constructor)) {
-    throw new Error(`side-panel.html の #${id} が ${constructor.name} でない`);
-  }
-  return element;
-};
-
-const gainInput = requireElement("eq-voice-gain", HTMLInputElement);
-const gainOutput = requireElement("eq-voice-gain-value", HTMLOutputElement);
-const lowpassSelect = requireElement("eq-lowpass", HTMLSelectElement);
-const highpassSelect = requireElement("eq-highpass", HTMLSelectElement);
-
-gainInput.min = String(VOICE_GAIN_DB.min);
-gainInput.max = String(VOICE_GAIN_DB.max);
-
-const fillSteps = (
-  select: HTMLSelectElement,
-  steps: readonly number[],
-): void => {
-  select.append(new Option("オフ", OFF));
-  for (const hz of steps) select.append(new Option(`${hz} Hz`, String(hz)));
-};
-
-fillSteps(lowpassSelect, LOWPASS_STEPS);
-fillSteps(highpassSelect, HIGHPASS_STEPS);
-
-const gainLabel = (db: number): string => (db > 0 ? `+${db} dB` : `${db} dB`);
+const isPreset = (value: string): value is EqualizerPreset =>
+  (EQUALIZER_PRESETS as readonly string[]).includes(value);
 
 /**
- * 保存値を選択肢へ対応させる。
+ * ラジオを集め、value がプリセット一覧と過不足なく対応していることを確かめる。
  *
- * 保存値は段の上にあるとは限らない（読み出しの関門はラダーの端へ寄せるだけ）ので、
- * 最寄りの段を選ぶ。以後の保存は表示どおりの段になる。
+ * HTML はこの拡張のものなので、対応が崩れていれば直すべき不具合。黙って一部だけ動かすと
+ * 「選べないプリセットがある」「選んでも何も起きない」が実機で初めて見つかる。握り潰さず落とす。
  */
-const cutoffOption = (steps: readonly number[], hz: number | null): string =>
-  hz === null ? OFF : String(nearestStep(steps, hz));
+const mismatch = (): Error =>
+  new Error("side-panel.html の eq-preset が shared/equalizer のプリセットと対応していない");
 
-const cutoffOf = (select: HTMLSelectElement): number | null =>
-  select.value === OFF ? null : Number(select.value);
+const collectPresetRadios = (): ReadonlyMap<EqualizerPreset, HTMLInputElement> => {
+  const radios = new Map<EqualizerPreset, HTMLInputElement>();
+  for (const input of document.querySelectorAll<HTMLInputElement>(
+    'input[name="eq-preset"]',
+  )) {
+    // 知らない value と重複は、ここで見つけた時点で落とす。
+    if (!isPreset(input.value) || radios.has(input.value)) throw mismatch();
+    radios.set(input.value, input);
+  }
+  // 残るずれは不足だけ。value が全部一覧にあり重複も無いので、数が合えば過不足なし。
+  if (radios.size !== EQUALIZER_PRESETS.length) throw mismatch();
+  return radios;
+};
+
+const presetRadios = collectPresetRadios();
 
 const render = (settings: EqualizerSettings): void => {
-  gainInput.value = String(settings.voiceGainDb);
-  gainOutput.textContent = gainLabel(settings.voiceGainDb);
-  lowpassSelect.value = cutoffOption(LOWPASS_STEPS, settings.lowpassHz);
-  highpassSelect.value = cutoffOption(HIGHPASS_STEPS, settings.highpassHz);
+  for (const [preset, radio] of presetRadios) {
+    radio.checked = preset === settings.preset;
+  }
 };
 
-const save = (): void => {
-  void applyToTargetTab(equalizerSection, {
-    voiceGainDb: Number(gainInput.value),
-    lowpassHz: cutoffOf(lowpassSelect),
-    highpassHz: cutoffOf(highpassSelect),
+// 区画を持つのはこのパネルだけなので、フィールド単位の patch ではなく区画ごと当てる。
+for (const [preset, radio] of presetRadios) {
+  radio.addEventListener("change", () => {
+    void applyToTargetTab(equalizerSection, { preset });
   });
-};
-
-// つまみを動かしている間は表示だけを追随させ、保存は操作が終わる change まで待つ。
-// input のたびに保存すると、ドラッグ 1 回で storage への書き込みが数十回走る。
-gainInput.addEventListener("input", () => {
-  gainOutput.textContent = gainLabel(Number(gainInput.value));
-});
-gainInput.addEventListener("change", save);
-lowpassSelect.addEventListener("change", save);
-highpassSelect.addEventListener("change", save);
+}
 
 followTargetTab(equalizerSection, render);
