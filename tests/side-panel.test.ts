@@ -3,6 +3,8 @@ import path from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
+import { EQUALIZER_PRESETS } from "../src/shared/equalizer";
+
 /**
  * 操作面がサイドパネルとして成立する条件を、宣言と配線の側から固定する。
  *
@@ -99,6 +101,33 @@ describe("watch ページの整理の操作 UI", () => {
 
   test("コメント欄を消すかどうかのチェックボックスがある", () => {
     expect(checkboxIds()).toContain("remove-comments");
+  });
+});
+
+/**
+ * イコライザのラジオは side-panel/equalizer.ts が name で集め、value を shared/equalizer の
+ * プリセット一覧と突き合わせる。ずれていればパネルの読み込みで落ちる。モジュール自体は
+ * 読み込み時に DOM を触るので、ここでは HTML を静的に読んで対応を押さえる。
+ */
+describe("イコライザの操作 UI", () => {
+  const presetRadioValues = (): string[] =>
+    [
+      ...readSidePanelHtml().matchAll(
+        /<input\b[^>]*type\s*=\s*["']radio["'][^>]*name\s*=\s*["']eq-preset["'][^>]*>/gi,
+      ),
+    ].flatMap((tag) =>
+      [...tag[0].matchAll(/\bvalue\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1]),
+    );
+
+  test("プリセットのラジオの value が shared/equalizer の一覧と同じ順に並ぶ", () => {
+    expect(presetRadioValues()).toEqual([...EQUALIZER_PRESETS]);
+  });
+
+  test("旧 3 ノブの要素が残っていない", () => {
+    const html = readSidePanelHtml();
+    for (const id of ["eq-voice-gain", "eq-lowpass", "eq-highpass"]) {
+      expect(html).not.toContain(`id="${id}"`);
+    }
   });
 });
 

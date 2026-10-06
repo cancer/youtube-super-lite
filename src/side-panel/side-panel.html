@@ -19,22 +19,15 @@
     <section id="equalizer">
       <h2>イコライザ</h2>
       <!--
-        3 ノブの値域（ゲインの端・カットオフの段）は shared/equalizer が唯一の出所なので、
-        ここには書かない。range の min/max と select の選択肢は側パネルの JS が組み立てる。
+        プリセット ID の一覧は shared/equalizer が唯一の出所。ここの value はそれと 1 対 1 で
+        対応していなければならず、ずれていればパネルの読み込み（side-panel/equalizer.ts）で落ちる。
+        中身（各段の周波数やゲイン）はここには書かない。利用者が選ぶのは用途であって数値ではない。
       -->
-      <p>
-        <label for="eq-voice-gain">声の強調</label>
-        <input id="eq-voice-gain" type="range" step="0.5" />
-        <output id="eq-voice-gain-value" for="eq-voice-gain"></output>
-      </p>
-      <p>
-        <label for="eq-lowpass">高域カット</label>
-        <select id="eq-lowpass"></select>
-      </p>
-      <p>
-        <label for="eq-highpass">低域カット</label>
-        <select id="eq-highpass"></select>
-      </p>
+      <fieldset>
+        <p><label><input type="radio" name="eq-preset" value="off" />オフ</label></p>
+        <p><label><input type="radio" name="eq-preset" value="clarity" />聞き取り最優先</label></p>
+        <p><label><input type="radio" name="eq-preset" value="music" />音楽</label></p>
+      </fieldset>
     </section>
     <section id="chat-display">
       <h2>チャット表示</h2>
