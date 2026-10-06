@@ -7,7 +7,11 @@ import {
   type GraphNode,
   type MediaChain,
 } from "../src/main/audio-graph";
-import { equalizerSection, type EqualizerSettings } from "../src/shared/equalizer";
+import {
+  equalizerSection,
+  filterChainOf,
+  type EqualizerSettings,
+} from "../src/shared/equalizer";
 
 /**
  * Web Audio のグラフの取り回しを、実ブラウザ無しで確かめられる部分に絞って固定する。
@@ -33,7 +37,8 @@ const chainSpy = (): {
       let released = false;
       const chain: FakeChain = {
         media,
-        filters: [0, 1, 2].map(() => ({
+        // 段数は本物の webAudioChain と同じく既定のフィルタ列の長さに従う。
+        filters: filterChainOf(equalizerSection.defaults).map(() => ({
           type: "peaking",
           frequency: { value: 0 },
           Q: { value: 0 },
@@ -50,10 +55,7 @@ const chainSpy = (): {
   };
 };
 
-const active: EqualizerSettings = {
-  ...equalizerSection.defaults,
-  voiceGainDb: 6,
-};
+const active: EqualizerSettings = { preset: "clarity" };
 
 /**
  * 生成の失敗は運用中に原因を追えるよう警告として残る仕様なので、失敗経路のテストでは
@@ -234,19 +236,17 @@ describe("createEqualizer", () => {
     equalizer.setSettings(active);
     equalizer.attach({});
 
-    equalizer.setSettings({ ...active, voiceGainDb: -3, lowpassHz: 8000 });
+    equalizer.setSettings({ preset: "music" });
 
     expect(spy.chains).toHaveLength(1);
   });
 
-  test("設定の値をフィルタへ highpass → peaking → lowpass の順に書く", () => {
+  test("設定の値をフィルタへ filterChainOf の並びで書く", () => {
+    // 見るのは「列をそのままの並びでノードへ写すこと」。プリセットの数値そのものの固定は
+    // equalizer.test.ts の責務なので、ここでは期待値も filterChainOf から作る。
     const spy = chainSpy();
     const equalizer = createEqualizer(spy.create);
-    equalizer.setSettings({
-      voiceGainDb: -3,
-      lowpassHz: 8000,
-      highpassHz: 150,
-    });
+    equalizer.setSettings(active);
 
     equalizer.attach({});
 
@@ -254,37 +254,51 @@ describe("createEqualizer", () => {
       spy.chains[0].filters.map((filter) => [
         filter.type,
         filter.frequency.value,
+        filter.Q.value,
         filter.gain.value,
       ]),
-    ).toEqual([
-      ["highpass", 150, 0],
-      ["peaking", 1800, -3],
-      ["lowpass", 8000, 0],
-    ]);
+    ).toEqual(
+      filterChainOf(active).map((spec) => [
+        spec.type,
+        spec.frequencyHz,
+        spec.q,
+        spec.gainDb,
+      ]),
+    );
   });
 
-  test("設定を更新すると既存のフィルタの値が書き換わる", () => {
+  test("設定を更新すると既存のフィルタの種別と値が書き換わる", () => {
+    // プリセットごとに段の種別が変わるので、値だけでなく type まで書き直さないと前の音が残る。
+    const spy = chainSpy();
+    const equalizer = createEqualizer(spy.create);
+    equalizer.setSettings(active);
+    equalizer.attach({});
+    expect(spy.chains[0].filters[0].type).toBe("highpass");
+
+    equalizer.setSettings({ preset: "music" });
+
+    expect(spy.chains).toHaveLength(1);
+    expect(spy.chains[0].filters[0].type).toBe("lowshelf");
+    expect(spy.chains[0].filters[0].frequency.value).toBe(100);
+  });
+
+  test("off に戻すと全段がゲイン 0 の peaking（素通し）になる", () => {
+    // ゲイン 0 でも highpass / lowpass のままでは音が変わる。種別まで戻って初めて素通し。
     const spy = chainSpy();
     const equalizer = createEqualizer(spy.create);
     equalizer.setSettings(active);
     equalizer.attach({});
 
-    equalizer.setSettings({ ...active, highpassHz: 300 });
-
-    expect(spy.chains[0].filters[0].frequency.value).toBe(300);
-  });
-
-  test("フィルタを全部オフに戻すと素通し相当の値が書かれる", () => {
-    const spy = chainSpy();
-    const equalizer = createEqualizer(spy.create);
-    equalizer.setSettings(active);
-    equalizer.attach({});
-
-    equalizer.setSettings(equalizerSection.defaults);
+    equalizer.setSettings({ preset: "off" });
 
     expect(
-      spy.chains[0].filters.map((filter) => filter.frequency.value),
-    ).toEqual([10, 1800, 24000]);
+      spy.chains[0].filters.map((filter) => [filter.type, filter.gain.value]),
+    ).toEqual([
+      ["peaking", 0],
+      ["peaking", 0],
+      ["peaking", 0],
+      ["peaking", 0],
+    ]);
   });
 
   test("グラフを作れなくても例外を投げない", () => {
@@ -310,7 +324,7 @@ describe("createEqualizer", () => {
     equalizer.setSettings(active);
     equalizer.attach({});
 
-    equalizer.setSettings({ ...active, voiceGainDb: 9 });
+    equalizer.setSettings({ preset: "music" });
 
     expect(attempts).toBe(1);
   });

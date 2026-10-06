@@ -19,14 +19,15 @@ import { onNavigated } from "../shared/navigation";
  *    「イコライザが効かないだけ」に落とす。
  * 2. AudioContext はページ内で 1 つだけ。遷移のたびに作ると再生スレッドとバッファが積み上がり、
  *    このプロジェクトの最優先の評価軸（長時間視聴での定常メモリ増加）を自分で壊す。
- * 3. 設定の更新でグラフを組み替えない。段の構成は常に 3 段固定で、変えるのは値だけ。
+ * 3. 設定の更新でグラフを組み替えない。段の構成は常に 4 段固定で、変えるのは値だけ
+ *    （プリセットごとに段の種別は変わるが、種別もノードに書く値の 1 つとして扱う）。
  */
 
 /**
  * BiquadFilterNode のうち、イコライザが書き換える部分だけを表した形。
  *
  * type は実ノードと同じ広さ（BiquadFilterType）で持つ。実ノードを代入できる必要があるため
- * 使う 3 種類へは狭められない。値の側は FilterSpec が 3 種類に限っている。
+ * 使う 5 種類へは狭められない。値の側は FilterSpec が 5 種類に限っている。
  */
 export type FilterNode = {
   type: BiquadFilterType;
@@ -37,7 +38,7 @@ export type FilterNode = {
 
 /** <video> 1 つに張ったフィルタチェーン。 */
 export type MediaChain = {
-  /** filterChainOf と同じ並び（highpass → peaking → lowpass）。 */
+  /** filterChainOf と同じ並び。段数は固定だが、段の種別はプリセットごとに変わる。 */
   readonly filters: readonly FilterNode[];
   /** グラフから外す。<video> が差し替わったときに呼ぶ。 */
   readonly disconnect: () => void;

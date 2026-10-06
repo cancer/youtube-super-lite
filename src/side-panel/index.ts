@@ -21,7 +21,7 @@ import {
  *
  * 表示と操作の配線だけを持つ。値の当て先（今見ているタブ）と保存は target-tab が引き受け、
  * 当てた設定は storage.onChanged 経由で content script へ届くので、ここから直接配送しない。
- * 機能ごとの UI は side-panel.html の対応する section へ差し込む（R4 のイコライザは別）。
+ * ここで配線するのはチャット表示と watch ページの整理。イコライザは ./equalizer が自分で配線する。
  */
 
 const requireInput = (id: string): HTMLInputElement => {

@@ -13,28 +13,24 @@
     <p>設定は今見ているタブに効く。他に開いているタブは変わらない。</p>
     <p>変えた値は、次に開くタブが最初に使う値になる。</p>
     <!--
-      各機能の UI はこの枠の中身として後から入る（R4 のイコライザ / R5 のチャット表示）。
-      枠だけを先に置いてあるので、機能ごとの追加は section の中身に閉じる。
+      機能ごとの UI は section 1 つに閉じる。機能の追加や変更が他の section の中身に
+      及ばないようにするため。
     -->
     <section id="equalizer">
-      <h2>イコライザ</h2>
+      <h2 id="equalizer-heading">イコライザ</h2>
       <!--
-        3 ノブの値域（ゲインの端・カットオフの段）は shared/equalizer が唯一の出所なので、
-        ここには書かない。range の min/max と select の選択肢は側パネルの JS が組み立てる。
+        プリセット ID の一覧は shared/equalizer が唯一の出所。ここの value はそれと 1 対 1 で
+        対応していなければならず、ずれていればパネルの読み込み（side-panel/equalizer.ts）で落ちる。
+        中身（各段の周波数やゲイン）はここには書かない。利用者が選ぶのは用途であって数値ではない。
+
+        ラジオの群れの名前は section の見出しをそのまま借りる。fieldset / legend にすると
+        見出しと同じ文言を二重に出すか、群れだけ別の名前を持つかになる。
       -->
-      <p>
-        <label for="eq-voice-gain">声の強調</label>
-        <input id="eq-voice-gain" type="range" step="0.5" />
-        <output id="eq-voice-gain-value" for="eq-voice-gain"></output>
-      </p>
-      <p>
-        <label for="eq-lowpass">高域カット</label>
-        <select id="eq-lowpass"></select>
-      </p>
-      <p>
-        <label for="eq-highpass">低域カット</label>
-        <select id="eq-highpass"></select>
-      </p>
+      <div role="radiogroup" aria-labelledby="equalizer-heading">
+        <p><label><input type="radio" name="eq-preset" value="off" />オフ</label></p>
+        <p><label><input type="radio" name="eq-preset" value="clarity" />聞き取り最優先</label></p>
+        <p><label><input type="radio" name="eq-preset" value="music" />音楽</label></p>
+      </div>
     </section>
     <section id="chat-display">
       <h2>チャット表示</h2>
