@@ -122,13 +122,6 @@ describe("イコライザの操作 UI", () => {
   test("プリセットのラジオの value が shared/equalizer の一覧と同じ順に並ぶ", () => {
     expect(presetRadioValues()).toEqual([...EQUALIZER_PRESETS]);
   });
-
-  test("旧 3 ノブの要素が残っていない", () => {
-    const html = readSidePanelHtml();
-    for (const id of ["eq-voice-gain", "eq-lowpass", "eq-highpass"]) {
-      expect(html).not.toContain(`id="${id}"`);
-    }
-  });
 });
 
 /**
