@@ -1,6 +1,7 @@
 import {
   EQUALIZER_PRESETS,
   equalizerSection,
+  isPreset,
   type EqualizerPreset,
   type EqualizerSettings,
 } from "../shared/equalizer";
@@ -13,9 +14,6 @@ import { applyToTargetTab, followTargetTab } from "./target-tab";
  * 数値の中身は shared/equalizer が持つ。ここはプリセット名を選ばせて渡すだけで、当てる相手
  * （今見ているタブ）も保存先も配送経路も知らない（それらは target-tab が持つ）。
  */
-
-const isPreset = (value: string): value is EqualizerPreset =>
-  (EQUALIZER_PRESETS as readonly string[]).includes(value);
 
 /**
  * ラジオを集め、value がプリセット一覧と過不足なく対応していることを確かめる。

@@ -242,7 +242,9 @@ Web Audio API でページの `<video>` 要素にフィルタチェーンを挿�
   - `off`「オフ」: 素通し
   - `clarity`「聞き取り最優先」: ゲーム配信などで銃声・エンジン音の重低音を抑え、人の声の明瞭帯域を
     立てる。highpass 200 Hz (Q 1/√2) → lowshelf 300 Hz -6 dB → peaking 3000 Hz Q 1.0 +4 dB →
-    lowpass 8000 Hz (Q 1/√2)
+    lowpass 8000 Hz (Q 1/√2)。Web Audio の lowpass / highpass は Q を dB として読むため、
+    1/√2 は通過域を完全に平坦にはせずカットオフ付近に約 +1.7 dB の山を残す（平坦になるのは
+    Q ≈ -3.01 dB）。この山を承知のうえで 1/√2 を採る
   - `music`「音楽」: 低音の量感を少し足しつつ 300 Hz の濁りを掘ってボーカルの輪郭を残す。
     lowshelf 100 Hz +3 dB → peaking 300 Hz Q 1.2 -2 dB → peaking 2500 Hz Q 1.0 +1.5 dB →
     highshelf 8000 Hz +2 dB
